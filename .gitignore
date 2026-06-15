@@ -1,0 +1,23 @@
+node_modules
+.pnpm-store
+.turbo
+.env
+.env.*
+!.env.example
+
+# Next
+.next
+out
+
+# Build
+build
+dist
+
+# Prisma
+**/generated
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

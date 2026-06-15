@@ -1,0 +1,72 @@
+import { dash } from "@better-auth/infra";
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+
+import { prisma } from "@tripeseats/database";
+
+import { allowedWebOrigins } from "./origins";
+import { escapeHtml, getResend, resendFromEmail } from "./mail";
+
+const resend = getResend();
+
+const authEmail =
+  resend != null
+    ? {
+        emailVerification: {
+          sendVerificationEmail: async ({
+            user,
+            url
+          }: {
+            user: { email: string; name?: string | null };
+            url: string;
+          }) => {
+            const greeting = user.name ? `Hi ${escapeHtml(user.name)}` : "Hi";
+            await resend.emails.send({
+              from: resendFromEmail(),
+              to: user.email,
+              subject: "Verify your Tripeseats email",
+              html: `<p>${greeting},</p><p>Confirm your email to finish setting up your account.</p><p><a href="${escapeHtml(url)}">Verify email</a></p><p>If you did not sign up, you can ignore this message.</p>`
+            });
+          }
+        },
+        emailAndPassword: {
+          sendResetPassword: async ({
+            user,
+            url
+          }: {
+            user: { email: string; name?: string | null };
+            url: string;
+          }) => {
+            const greeting = user.name ? `Hi ${escapeHtml(user.name)}` : "Hi";
+            await resend.emails.send({
+              from: resendFromEmail(),
+              to: user.email,
+              subject: "Reset your Tripeseats password",
+              html: `<p>${greeting},</p><p>We received a request to reset your password. Use the link below (it expires soon).</p><p><a href="${escapeHtml(url)}">Reset password</a></p><p>If you did not ask for this, you can ignore this email.</p>`
+            });
+          }
+        }
+      }
+    : {};
+
+export const auth = betterAuth({
+  // Public URL where `/api/auth` is reached (Next rewrites to this API). Use your
+  // tunnel URL when testing outside localhost (same value as `WEB_ORIGIN`).
+  baseURL: process.env.BETTER_AUTH_URL,
+  database: prismaAdapter(prisma, {
+    provider: "postgresql"
+  }),
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: false,
+    ...(authEmail.emailAndPassword ?? {})
+  },
+  ...(authEmail.emailVerification ? { emailVerification: authEmail.emailVerification } : {}),
+  trustedOrigins: allowedWebOrigins(),
+  secret: process.env.BETTER_AUTH_SECRET,
+  plugins: [
+    dash({
+      apiKey: process.env.BETTER_AUTH_API_KEY
+    })
+  ]
+});

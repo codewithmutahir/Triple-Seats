@@ -1,0 +1,106 @@
+import type { Prisma } from "@tripeseats/database";
+
+import { calculateQuoteTotals } from "./quote-totals";
+
+export const quoteInclude = {
+  lineItems: { orderBy: { createdAt: "asc" as const } },
+  event: { include: { primaryGuest: true } }
+} satisfies Prisma.QuoteInclude;
+
+export type QuoteWithRelations = Prisma.QuoteGetPayload<{ include: typeof quoteInclude }>;
+type QuoteLineItem = QuoteWithRelations["lineItems"][number];
+type QuoteStatus = QuoteWithRelations["status"];
+type ItemCategory = QuoteLineItem["category"];
+type QuoteUnit = QuoteLineItem["unitType"];
+
+export function serializeLineItem(item: QuoteLineItem) {
+  return {
+    id: item.id,
+    quoteId: item.quoteId,
+    category: item.category,
+    name: item.name,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+    unitType: item.unitType,
+    notes: item.notes
+  };
+}
+
+export function serializeQuote(quote: QuoteWithRelations) {
+  const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const totals = calculateQuoteTotals(
+    quote.lineItems,
+    quote.taxRate,
+    quote.depositPct,
+    guestCount
+  );
+
+  const g = quote.event?.primaryGuest;
+  const guestName = g ? [g.firstName, g.lastName].filter(Boolean).join(" ") : null;
+
+  return {
+    id: quote.id,
+    catererId: quote.catererId,
+    eventId: quote.eventId,
+    status: quote.status,
+    notes: quote.notes,
+    taxRate: quote.taxRate,
+    depositPct: quote.depositPct,
+    dueDate: quote.dueDate?.toISOString() ?? null,
+    totalAmount: quote.totalAmount,
+    createdAt: quote.createdAt.toISOString(),
+    updatedAt: quote.updatedAt.toISOString(),
+    lineItems: quote.lineItems.map(serializeLineItem),
+    totals,
+    event: quote.event
+      ? {
+          id: quote.event.id,
+          title: quote.event.title,
+          eventDate: quote.event.eventDate.toISOString(),
+          guestCountEstimate: quote.event.guestCountEstimate,
+          venueAddress: quote.event.venueAddress,
+          venueName: quote.event.venueName,
+          guestName,
+          primaryGuest: g
+            ? {
+                id: g.id,
+                firstName: g.firstName,
+                lastName: g.lastName,
+                email: g.email,
+                phone: g.phone
+              }
+            : null
+        }
+      : undefined
+  };
+}
+
+export function parseQuoteStatus(value: unknown): QuoteStatus | null {
+  if (value === "draft" || value === "sent" || value === "accepted" || value === "declined") {
+    return value;
+  }
+  return null;
+}
+
+export function parseItemCategory(value: unknown): ItemCategory | null {
+  const allowed = [
+    "appetizer",
+    "main_course",
+    "bbq",
+    "dessert",
+    "equipment",
+    "delivery",
+    "other"
+  ] as const;
+  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) {
+    return value as ItemCategory;
+  }
+  return null;
+}
+
+export function parseQuoteUnit(value: unknown): QuoteUnit | null {
+  if (value === "per_head" || value === "by_tray" || value === "flat") {
+    return value;
+  }
+  return null;
+}

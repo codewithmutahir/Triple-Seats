@@ -1,0 +1,363 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum EventStatus {
+  lead
+  discussion
+  booked
+  completed
+}
+
+enum UnitType {
+  per_head
+  by_tray
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+  internal
+}
+
+enum TaskStatus {
+  todo
+  in_progress
+  blocked
+  done
+}
+
+enum ReminderStatus {
+  pending
+  sent
+  acknowledged
+  paid
+}
+
+enum QuoteStatus {
+  draft
+  sent
+  accepted
+  declined
+}
+
+enum ItemCategory {
+  appetizer
+  main_course
+  bbq
+  dessert
+  equipment
+  delivery
+  other
+}
+
+enum QuoteUnit {
+  per_head
+  by_tray
+  flat
+}
+
+model Caterer {
+  id                String            @id @default(cuid())
+  userId            String?           @unique
+  name              String
+  email             String            @unique
+  phone             String?
+  timezone          String?           @default("UTC")
+  currencyCode      String            @default("USD")
+  websiteUrl        String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guests            Guest[]
+  leads             Lead[]
+  events            Event[]
+  quotes            Quote[]
+  menuItems         MenuItem[]
+  tasks             Task[]
+  messages          Message[]
+  paymentReminders  PaymentReminder[]
+
+  @@map("caterers")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  caterer       Caterer?
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id           String    @id @default(cuid())
+  accountId    String
+  providerId   String
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken  String?
+  refreshToken String?
+  idToken      String?
+  expiresAt    DateTime?
+  password     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Guest {
+  id             String    @id @default(cuid())
+  catererId      String
+  firstName      String
+  lastName       String?
+  email          String?
+  phone          String?
+  company        String?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  caterer        Caterer   @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  leads          Lead[]
+  eventsAsPrimaryGuest Event[] @relation("PrimaryGuestEvents")
+  messages       Message[]
+
+  @@unique([catererId, email])
+  @@index([catererId])
+  @@index([catererId, email])
+  @@index([catererId, createdAt])
+  @@index([catererId, phone])
+  @@map("guests")
+}
+
+model Lead {
+  id               String     @id @default(cuid())
+  catererId        String
+  guestId          String?
+  /// Form / inquiry email; used to claim intake rows when guestId is missing or guests were removed.
+  contactEmail     String?
+  source           String?
+  title            String
+  notes            String?
+  estimatedBudget  Decimal?   @db.Decimal(12, 2)
+  estimatedGuests  Int?
+  expectedEventAt  DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  caterer          Caterer    @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  guest            Guest?     @relation(fields: [guestId], references: [id], onDelete: SetNull)
+  events           Event[]
+  messages         Message[]
+
+  @@index([catererId])
+  @@index([catererId, createdAt])
+  @@index([catererId, expectedEventAt])
+  @@index([catererId, contactEmail])
+  @@index([contactEmail])
+  @@index([guestId])
+  @@map("leads")
+}
+
+model Event {
+  id                 String            @id @default(cuid())
+  catererId          String
+  leadId             String?
+  primaryGuestId     String?
+  title              String
+  status             EventStatus       @default(lead)
+  eventDate          DateTime
+  startTime          DateTime?
+  endTime            DateTime?
+  venueName          String?
+  venueAddress       String?
+  guestCountEstimate Int?
+  notes              String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  caterer            Caterer           @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  lead               Lead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  primaryGuest       Guest?            @relation("PrimaryGuestEvents", fields: [primaryGuestId], references: [id], onDelete: SetNull)
+  quotes             Quote[]
+  tasks              Task[]
+  messages           Message[]
+  paymentReminders   PaymentReminder[]
+
+  @@index([catererId])
+  @@index([catererId, status])
+  @@index([catererId, eventDate])
+  @@index([catererId, status, eventDate])
+  @@index([createdAt])
+  @@index([leadId])
+  @@index([primaryGuestId])
+  @@map("events")
+}
+
+model Quote {
+  id          String          @id @default(cuid())
+  catererId   String
+  eventId     String
+  status      QuoteStatus     @default(draft)
+  notes       String?
+  taxRate     Float           @default(0.085)
+  depositPct  Float           @default(0.5)
+  dueDate     DateTime?
+  totalAmount Float           @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  caterer     Caterer         @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  event       Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  lineItems   QuoteLineItem[]
+  reminders   PaymentReminder[]
+
+  @@index([catererId])
+  @@index([eventId])
+  @@index([catererId, createdAt])
+  @@map("quotes")
+}
+
+model QuoteLineItem {
+  id         String       @id @default(cuid())
+  quoteId    String
+  menuItemId String?
+  category   ItemCategory
+  name       String
+  quantity   Float        @default(1)
+  unitPrice  Float
+  unitType   QuoteUnit
+  notes      String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  quote      Quote        @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem?    @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@map("quote_line_items")
+}
+
+model MenuItem {
+  id            String          @id @default(cuid())
+  catererId     String
+  category      String
+  name          String
+  description   String?
+  defaultPrice  Decimal         @db.Decimal(12, 2)
+  defaultUnitType UnitType
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  caterer       Caterer         @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  quoteLineItems QuoteLineItem[]
+
+  @@unique([catererId, name])
+  @@index([catererId, category, isActive])
+  @@map("menu_items")
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  catererId   String
+  eventId     String?
+  title       String
+  description String?
+  status      TaskStatus @default(todo)
+  dueAt       DateTime?
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  caterer     Caterer    @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  event       Event?     @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@index([catererId, status, dueAt])
+  @@index([eventId])
+  @@map("tasks")
+}
+
+model Message {
+  id          String           @id @default(cuid())
+  catererId   String
+  leadId      String?
+  eventId     String?
+  guestId     String?
+  direction   MessageDirection
+  channel     String
+  subject     String?
+  body        String
+  sentAt      DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  caterer     Caterer          @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  lead        Lead?            @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  event       Event?           @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  guest       Guest?           @relation(fields: [guestId], references: [id], onDelete: SetNull)
+
+  @@index([catererId, createdAt])
+  @@index([leadId])
+  @@index([eventId])
+  @@index([guestId])
+  @@map("messages")
+}
+
+model PaymentReminder {
+  id            String         @id @default(cuid())
+  catererId     String
+  eventId       String
+  quoteId       String?
+  status        ReminderStatus @default(pending)
+  dueDate       DateTime
+  amountDue     Decimal        @db.Decimal(12, 2)
+  reminderDate  DateTime?
+  sentAt        DateTime?
+  note          String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  caterer       Caterer        @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  event         Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  quote         Quote?         @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  @@index([catererId, dueDate, status])
+  @@index([eventId])
+  @@index([quoteId])
+  @@map("payment_reminders")
+}
