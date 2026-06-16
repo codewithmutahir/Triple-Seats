@@ -34,12 +34,47 @@ export function requestToHeaders(req: Request): Headers {
 
 type AuthUser = { id: string; email: string | null; name: string | null };
 
+function normalizeEmail(email: string | null | undefined) {
+  return email?.trim().toLowerCase() ?? "";
+}
+
+/**
+ * Public lead form writes to `LEAD_INTAKE_CATERER_ID`. When that caterer matches the
+ * signed-in user's email, always use it so the dashboard shows submitted leads.
+ */
+async function linkIntakeCatererForUser(user: AuthUser): Promise<Caterer | null> {
+  const intakeId = process.env.LEAD_INTAKE_CATERER_ID?.trim();
+  if (!intakeId) return null;
+
+  const intake = await prisma.caterer.findUnique({ where: { id: intakeId } });
+  if (!intake) return null;
+
+  if (intake.userId === user.id) return intake;
+
+  const userEmail = normalizeEmail(user.email);
+  const intakeEmail = normalizeEmail(intake.email);
+  if (!userEmail || userEmail !== intakeEmail) return null;
+
+  if (intake.userId && intake.userId !== user.id) {
+    throw new SessionError(
+      "This email is already linked to another caterer account. Contact support if you need access.",
+      409
+    );
+  }
+
+  return prisma.caterer.update({
+    where: { id: intakeId },
+    data: { userId: user.id }
+  });
+}
+
 /**
  * Ensures every signed-in user has a caterer row:
- * 1. Already linked by `userId` → return
- * 2. Row exists with same email and `userId` is null → link
- * 3. Row exists with same email and different `userId` → conflict
- * 4. Otherwise → create a new caterer (onboarding)
+ * 1. Configured intake caterer (same email) → link and return
+ * 2. Already linked by `userId` → return
+ * 3. Row exists with same email and `userId` is null → link
+ * 4. Row exists with same email and different `userId` → conflict
+ * 5. Otherwise → create a new caterer (onboarding)
  */
 export async function ensureCatererForAuthUser(user: AuthUser) {
   const cached = catererCache.get(user.id);
@@ -47,9 +82,30 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
     return cached.caterer;
   }
 
+  const intakeCaterer = await linkIntakeCatererForUser(user);
+  if (intakeCaterer) {
+    catererCache.set(user.id, { caterer: intakeCaterer, ts: Date.now() });
+    return intakeCaterer;
+  }
+
   let caterer = await prisma.caterer.findFirst({
     where: { userId: user.id }
   });
+
+  if (caterer) {
+    const intakeId = process.env.LEAD_INTAKE_CATERER_ID?.trim();
+    if (intakeId && caterer.id !== intakeId) {
+      const intake = await prisma.caterer.findUnique({ where: { id: intakeId } });
+      const userEmail = normalizeEmail(user.email);
+      if (
+        intake &&
+        normalizeEmail(intake.email) === userEmail &&
+        intake.userId === user.id
+      ) {
+        caterer = intake;
+      }
+    }
+  }
 
   if (!caterer) {
     if (!user.email?.trim()) {

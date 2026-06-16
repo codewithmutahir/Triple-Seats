@@ -42,6 +42,7 @@ type ListResponse = {
   page: number;
   pageSize: number;
   totalPages: number;
+  intakeMismatchWarning?: string;
 };
 
 function statusVariant(
@@ -88,6 +89,7 @@ export default function LeadsPage() {
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [intakeWarning, setIntakeWarning] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
@@ -111,12 +113,14 @@ export default function LeadsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setIntakeWarning(null);
     const result = await fetchLeads(queryParams);
     if ("error" in result) {
       setError(result.error);
       setData(null);
     } else {
       setData(result);
+      setIntakeWarning(result.intakeMismatchWarning ?? null);
     }
     setLoading(false);
   }, [queryParams]);
@@ -287,6 +291,9 @@ export default function LeadsPage() {
               <p className="mt-1 max-w-sm text-sm text-muted-foreground">
                 When clients submit your public form, inquiries will appear here.
               </p>
+              {intakeWarning ? (
+                <p className="mt-3 max-w-md text-sm text-amber-800">{intakeWarning}</p>
+              ) : null}
             </div>
             <Button type="button" onClick={copyLeadFormLink}>
               <Share2 className="mr-2 h-4 w-4" />
