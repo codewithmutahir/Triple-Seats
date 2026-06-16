@@ -216,10 +216,11 @@ const eventListInclude = {
 } satisfies Prisma.EventInclude;
 
 /** Authenticated: paginated events (lead pipeline) for dashboard */
-router.get("/", async (req: Request, res: Response) => {0
+router.get("/", async (req: Request, res: Response) => {
   try {
     const { caterer } = await getSession(req);
     const catererId = caterer.id;
+    const intakeCatererId = process.env.LEAD_INTAKE_CATERER_ID?.trim();
 
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const pageSize = 20;
@@ -308,12 +309,29 @@ router.get("/", async (req: Request, res: Response) => {0
 
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+    let intakeMismatchWarning: string | undefined;
+    if (
+      total === 0 &&
+      intakeCatererId &&
+      intakeCatererId !== catererId
+    ) {
+      const intakeLeadCount = await prisma.lead.count({
+        where: { catererId: intakeCatererId }
+      });
+      if (intakeLeadCount > 0) {
+        intakeMismatchWarning =
+          "Public form submissions are saved under a different caterer account than the one linked to your login. " +
+          "Sign in with the email that owns your lead intake account, or set LEAD_INTAKE_CATERER_ID to your caterer id in apps/api/.env.";
+      }
+    }
+
     return res.json({
       items,
       total,
       page,
       pageSize,
-      totalPages
+      totalPages,
+      ...(intakeMismatchWarning ? { intakeMismatchWarning } : {})
     });
   } catch (e) {
     return handleSessionError(res, e);
