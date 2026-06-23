@@ -23,34 +23,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { RefreshingBadge } from "@/components/refreshing-badge";
+import { useAppStore, type Conversation, type DiscussionThread } from "@/lib/stores/app-store";
+import { loadWithCache } from "@/lib/stores/cache-helpers";
 
-type Conversation = {
-  eventId: string;
-  guestName: string;
-  eventType: string;
-  lastMessage: string;
-  lastMessageAt: string;
-  unreadCount: number;
-};
-
-type Message = {
-  id: string;
-  eventId: string | null;
-  direction: "inbound" | "outbound" | "internal";
-  channel: string;
-  body: string;
-  senderName: string | null;
-  senderEmail: string | null;
-  createdAt: string;
-};
-
-type EventThreadMeta = {
-  id: string;
-  title: string;
-  eventDate: string;
-  guestName: string;
-  guestEmail: string | null;
-};
+type EventThreadMeta = DiscussionThread["event"];
+type Message = DiscussionThread["messages"][number];
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -172,16 +150,32 @@ function DiscussionsInner() {
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(
+    () => useAppStore.getState().peekDiscussionsConversations() ?? []
+  );
   const [selectedEventId, setSelectedEventId] = useState<string | null>(urlEventId);
-  const [threadEvent, setThreadEvent] = useState<EventThreadMeta | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [threadEvent, setThreadEvent] = useState<EventThreadMeta | null>(() => {
+    const cached = urlEventId
+      ? useAppStore.getState().peekDiscussionsThread(urlEventId)
+      : null;
+    return cached?.event ?? null;
+  });
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const cached = urlEventId
+      ? useAppStore.getState().peekDiscussionsThread(urlEventId)
+      : null;
+    return cached?.messages ?? [];
+  });
   const [search, setSearch] = useState("");
   const [composerText, setComposerText] = useState("");
   const [sendAsEmail, setSendAsEmail] = useState(true);
   const [sending, setSending] = useState(false);
-  const [listLoading, setListLoading] = useState(true);
+  const [listLoading, setListLoading] = useState(
+    () => useAppStore.getState().peekDiscussionsConversations() == null
+  );
   const [threadLoading, setThreadLoading] = useState(false);
+  const [listRefreshing, setListRefreshing] = useState(false);
+  const [threadRefreshing, setThreadRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mobileShowThread, setMobileShowThread] = useState(Boolean(urlEventId));
 
@@ -189,30 +183,49 @@ function DiscussionsInner() {
   const threadScrollRef = useRef<HTMLDivElement>(null);
 
   const loadConversations = useCallback(async () => {
-    setListLoading(true);
-    const result = await fetchConversations();
-    if ("error" in result) {
-      setError(result.error);
+    const store = useAppStore.getState();
+    setError(null);
+    await loadWithCache({
+      peek: () => store.peekDiscussionsConversations(),
+      getFresh: () => store.getDiscussionsConversations(),
+      set: (data) => store.setDiscussionsConversations(data),
+      fetch: async () => {
+        const result = await fetchConversations();
+        if ("error" in result) throw new Error(result.error);
+        return result.conversations;
+      },
+      onData: setConversations,
+      setLoading: setListLoading,
+      setRefreshing: setListRefreshing
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
       setConversations([]);
-    } else {
-      setConversations(result.conversations);
-    }
-    setListLoading(false);
+    });
   }, []);
 
   const loadThread = useCallback(async (eventId: string) => {
-    setThreadLoading(true);
+    const store = useAppStore.getState();
     setError(null);
-    const result = await fetchThread(eventId);
-    if ("error" in result) {
-      setError(result.error);
+    await loadWithCache({
+      peek: () => store.peekDiscussionsThread(eventId),
+      getFresh: () => store.getDiscussionsThread(eventId),
+      set: (data) => store.setDiscussionsThread(eventId, data),
+      fetch: async () => {
+        const result = await fetchThread(eventId);
+        if ("error" in result) throw new Error(result.error);
+        return result;
+      },
+      onData: (result) => {
+        setThreadEvent(result.event);
+        setMessages(result.messages);
+      },
+      setLoading: setThreadLoading,
+      setRefreshing: setThreadRefreshing
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
       setThreadEvent(null);
       setMessages([]);
-    } else {
-      setThreadEvent(result.event);
-      setMessages(result.messages);
-    }
-    setThreadLoading(false);
+    });
   }, []);
 
   useEffect(() => {
@@ -341,6 +354,9 @@ function DiscussionsInner() {
           )}
         >
           <div className="border-b p-4">
+            <div className="mb-2 flex justify-end">
+              {listRefreshing ? <RefreshingBadge /> : null}
+            </div>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -353,7 +369,7 @@ function DiscussionsInner() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {listLoading ? (
+            {listLoading && conversations.length === 0 ? (
               <div className="space-y-2 p-4">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-16 w-full" />
@@ -417,31 +433,36 @@ function DiscussionsInner() {
           ) : (
             <>
               <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-6">
-                {threadLoading && !threadHeader ? (
-                  <Skeleton className="h-10 w-48" />
-                ) : threadHeader ? (
-                  <div className="min-w-0">
-                    <h2 className="truncate font-heading text-lg font-semibold text-[#1B2A4A]">
-                      {threadHeader.guestName}
-                    </h2>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="font-normal">
-                        {threadHeader.title}
-                      </Badge>
+                <div className="min-w-0 flex-1">
+                  {threadLoading && !threadHeader ? (
+                    <Skeleton className="h-10 w-48" />
+                  ) : threadHeader ? (
+                    <div className="min-w-0">
+                      <h2 className="truncate font-heading text-lg font-semibold text-[#1B2A4A]">
+                        {threadHeader.guestName}
+                      </h2>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="font-normal">
+                          {threadHeader.title}
+                        </Badge>
+                      </div>
                     </div>
-                  </div>
-                ) : null}
-                {selectedEventId ? (
-                  <Button variant="outline" size="sm" className="shrink-0" asChild>
-                    <Link href={`/dashboard/events?eventId=${encodeURIComponent(selectedEventId)}`}>
-                      View Event
-                    </Link>
-                  </Button>
-                ) : null}
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {threadRefreshing ? <RefreshingBadge /> : null}
+                  {selectedEventId ? (
+                    <Button variant="outline" size="sm" className="shrink-0" asChild>
+                      <Link href={`/dashboard/events?eventId=${encodeURIComponent(selectedEventId)}`}>
+                        View Event
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
               </div>
 
               <div ref={threadScrollRef} className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-                {threadLoading ? (
+                {threadLoading && messages.length === 0 ? (
                   <div className="space-y-4">
                     {Array.from({ length: 4 }).map((_, i) => (
                       <Skeleton key={i} className={cn("h-16", i % 2 === 0 ? "w-2/3" : "ml-auto w-2/3")} />

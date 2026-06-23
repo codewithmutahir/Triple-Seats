@@ -9,6 +9,7 @@ import { auth } from "./lib/auth";
 import { allowedWebOrigins } from "./lib/origins";
 import { getResend } from "./lib/mail";
 import { bookingsRouter } from "./routes/bookings";
+import { calendarRouter } from "./routes/calendar";
 import { dashboardRouter } from "./routes/dashboard";
 import { eventsRouter } from "./routes/events";
 import { leadsRouter } from "./routes/leads";
@@ -37,6 +38,7 @@ function createApp() {
   app.use("/api/auth", toNodeHandler(auth));
   app.use("/api/dashboard", dashboardRouter);
   app.use("/api/bookings", bookingsRouter);
+  app.use("/api/calendar", calendarRouter);
   app.use("/api/events", eventsRouter);
   app.use("/api/leads", leadsRouter);
   app.use("/api/messages", messagesRouter);

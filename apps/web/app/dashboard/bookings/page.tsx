@@ -19,34 +19,14 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { RefreshingBadge } from "@/components/refreshing-badge";
+import { useAppStore, type BookingsListResponse, type BookingsStats } from "@/lib/stores/app-store";
+import { loadWithCache } from "@/lib/stores/cache-helpers";
 
-type BookingRow = {
-  eventId: string;
-  guestName: string;
-  guestEmail: string | null;
-  eventType: string;
-  eventDate: string;
-  location: string;
-  guestCount: number | null;
-  status: string;
-  quoteTotal: number | null;
-  quoteId: string | null;
-  depositStatus: "pending" | "paid";
-};
+type ListResponse = BookingsListResponse;
+type StatsResponse = BookingsStats;
 
-type ListResponse = {
-  items: BookingRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
-
-type StatsResponse = {
-  confirmedThisMonth: number;
-  completedAllTime: number;
-  revenueThisMonth: number;
-};
+type BookingRow = ListResponse["items"][number];
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -143,10 +123,21 @@ export default function BookingsPage() {
   const [year, setYear] = useState("all");
   const [page, setPage] = useState(1);
 
-  const [data, setData] = useState<ListResponse | null>(null);
-  const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [statsLoading, setStatsLoading] = useState(true);
+  const cacheKey = JSON.stringify({ page, status, month, year, search: searchDebounced });
+
+  const [data, setData] = useState<ListResponse | null>(() =>
+    useAppStore.getState().peekBookingsCache(cacheKey)
+  );
+  const [stats, setStats] = useState<StatsResponse | null>(() =>
+    useAppStore.getState().peekBookingsStats()
+  );
+  const [loading, setLoading] = useState(
+    () => useAppStore.getState().peekBookingsCache(cacheKey) == null
+  );
+  const [statsLoading, setStatsLoading] = useState(
+    () => useAppStore.getState().peekBookingsStats() == null
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const years = useMemo(() => yearOptions(), []);
@@ -167,25 +158,43 @@ export default function BookingsPage() {
   }, [page, status, searchDebounced, month, year]);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const store = useAppStore.getState();
+    const key = cacheKey;
     setError(null);
-    const result = await fetchBookings(queryParams);
-    if ("error" in result) {
-      setError(result.error);
-      setData(null);
-    } else {
-      setData(result);
-    }
-    setLoading(false);
-  }, [queryParams]);
+
+    await loadWithCache({
+      peek: () => store.peekBookingsCache(key),
+      getFresh: () => store.getBookingsCache(key),
+      set: (result) => store.setBookingsCache(key, result),
+      fetch: async () => {
+        const result = await fetchBookings(queryParams);
+        if ("error" in result) throw new Error(result.error);
+        return result;
+      },
+      onData: setData,
+      setLoading,
+      setRefreshing
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
+    });
+  }, [cacheKey, queryParams]);
 
   const loadStats = useCallback(async () => {
-    setStatsLoading(true);
-    const result = await fetchStats();
-    if (!("error" in result)) {
-      setStats(result);
-    }
-    setStatsLoading(false);
+    const store = useAppStore.getState();
+    await loadWithCache({
+      peek: () => store.peekBookingsStats(),
+      getFresh: () => store.getBookingsStats(),
+      set: (result) => store.setBookingsStats(result),
+      fetch: async () => {
+        const result = await fetchStats();
+        if ("error" in result) throw new Error(result.error);
+        return result;
+      },
+      onData: setStats,
+      setLoading: setStatsLoading
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
+    });
   }, []);
 
   useEffect(() => {
@@ -244,9 +253,12 @@ export default function BookingsPage() {
 
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Bookings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Confirmed catering events</p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Bookings</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Confirmed catering events</p>
+        </div>
+        {refreshing ? <RefreshingBadge /> : null}
       </header>
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -402,7 +414,7 @@ export default function BookingsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading
+                  {loading && !(data?.items.length)
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 9 }).map((__, j) => (
