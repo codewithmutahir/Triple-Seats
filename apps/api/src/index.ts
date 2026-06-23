@@ -15,6 +15,7 @@ import { eventsRouter } from "./routes/events";
 import { leadsRouter } from "./routes/leads";
 import { messagesRouter } from "./routes/messages";
 import { quotesRouter } from "./routes/quotes";
+import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
 
 function createApp() {
@@ -43,6 +44,7 @@ function createApp() {
   app.use("/api/leads", leadsRouter);
   app.use("/api/messages", messagesRouter);
   app.use("/api/quotes", quotesRouter);
+  app.use("/api/reports", reportsRouter);
   app.use("/api/tasks", tasksRouter);
 
   /** Process is up — used by `apps/web/scripts/wait-for-api.mjs` (no DB). */

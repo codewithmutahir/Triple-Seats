@@ -5,6 +5,8 @@ export const DASHBOARD_TTL = 60 * 1000;
 export const BOOKINGS_TTL = 2 * 60 * 1000;
 export const EVENTS_TTL = 2 * 60 * 1000;
 export const DISCUSSIONS_TTL = 2 * 60 * 1000;
+export const TASKS_TTL = 60 * 1000;
+export const REPORTS_TTL = 5 * 60 * 1000;
 
 export interface CacheEntry<T> {
   data: T;
@@ -135,6 +137,73 @@ export type DiscussionThread = {
   }>;
 };
 
+export type TaskItem = {
+  id: string;
+  title: string;
+  status: "pending" | "completed";
+  createdAt: string;
+  event: {
+    id: string;
+    title: string;
+    eventDate: string;
+    venue: string;
+  } | null;
+};
+
+export type TasksListResponse = {
+  items: TaskItem[];
+};
+
+export type TasksStats = {
+  total: number;
+  pending: number;
+  completed: number;
+  dueSoon: number;
+};
+
+export type ReportsSummary = {
+  revenue: {
+    total: number;
+    thisMonth: number;
+    lastMonth: number;
+    growth: number;
+  };
+  events: {
+    total: number;
+    thisMonth: number;
+    lastMonth: number;
+    byStatus: { lead: number; discussion: number; booked: number; completed: number };
+    byType: { Wedding: number; Corporate: number; Birthday: number; Other: number };
+  };
+  leads: {
+    total: number;
+    thisMonth: number;
+    conversionRate: number;
+  };
+  topMonths: Array<{ month: string; revenue: number; events: number }>;
+  recentActivity: Array<{
+    guestName: string;
+    eventType: string;
+    eventDate: string;
+    revenue: number;
+    status: string;
+  }>;
+};
+
+export type ReportsTimeline = Array<{
+  month: string;
+  lead: number;
+  discussion: number;
+  booked: number;
+  completed: number;
+}>;
+
+export type ReportsData = {
+  filterKey: string;
+  summary: ReportsSummary;
+  timeline: ReportsTimeline;
+};
+
 function isFresh<T>(entry: CacheEntry<T> | null | undefined, ttl: number): boolean {
   if (!entry) return false;
   return Date.now() - entry.fetchedAt < ttl;
@@ -151,6 +220,9 @@ interface AppStore {
   eventsStats: CacheEntry<EventsStats> | null;
   discussionsConversations: CacheEntry<Conversation[]> | null;
   discussionsThreads: Record<string, CacheEntry<DiscussionThread>>;
+  tasksCache: Record<string, CacheEntry<TasksListResponse>>;
+  tasksStats: CacheEntry<TasksStats> | null;
+  reportsCache: CacheEntry<ReportsData> | null;
 
   setDashboardStats: (data: DashboardStats) => void;
   setRecentLeads: (data: DashboardRecentRow[]) => void;
@@ -162,6 +234,9 @@ interface AppStore {
   setEventsStats: (data: EventsStats) => void;
   setDiscussionsConversations: (data: Conversation[]) => void;
   setDiscussionsThread: (eventId: string, data: DiscussionThread) => void;
+  setTasksCache: (key: string, data: TasksListResponse | null) => void;
+  setTasksStats: (data: TasksStats | null) => void;
+  setReportsCache: (data: ReportsData | null) => void;
 
   getDashboardStats: () => DashboardStats | null;
   getRecentLeads: () => DashboardRecentRow[] | null;
@@ -173,6 +248,9 @@ interface AppStore {
   getEventsStats: () => EventsStats | null;
   getDiscussionsConversations: () => Conversation[] | null;
   getDiscussionsThread: (eventId: string) => DiscussionThread | null;
+  getTasksCache: (key: string) => TasksListResponse | null;
+  getTasksStats: () => TasksStats | null;
+  getReportsCache: () => ReportsData | null;
 
   peekDashboardStats: () => DashboardStats | null;
   peekRecentLeads: () => DashboardRecentRow[] | null;
@@ -184,6 +262,9 @@ interface AppStore {
   peekEventsStats: () => EventsStats | null;
   peekDiscussionsConversations: () => Conversation[] | null;
   peekDiscussionsThread: (eventId: string) => DiscussionThread | null;
+  peekTasksCache: (key: string) => TasksListResponse | null;
+  peekTasksStats: () => TasksStats | null;
+  peekReportsCache: () => ReportsData | null;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -197,6 +278,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   eventsStats: null,
   discussionsConversations: null,
   discussionsThreads: {},
+  tasksCache: {},
+  tasksStats: null,
+  reportsCache: null,
 
   setDashboardStats: (data) => set({ dashboardStats: { data, fetchedAt: Date.now() } }),
   setRecentLeads: (data) => set({ recentLeads: { data, fetchedAt: Date.now() } }),
@@ -224,6 +308,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
         [eventId]: { data, fetchedAt: Date.now() }
       }
     })),
+  setTasksCache: (key, data) =>
+    set((state) => {
+      if (data === null) {
+        const { [key]: _removed, ...rest } = state.tasksCache;
+        return { tasksCache: rest };
+      }
+      return {
+        tasksCache: { ...state.tasksCache, [key]: { data, fetchedAt: Date.now() } }
+      };
+    }),
+  setTasksStats: (data) =>
+    set({ tasksStats: data === null ? null : { data, fetchedAt: Date.now() } }),
+  setReportsCache: (data) =>
+    set({ reportsCache: data === null ? null : { data, fetchedAt: Date.now() } }),
 
   getDashboardStats: () => {
     const entry = get().dashboardStats;
@@ -265,6 +363,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const entry = get().discussionsThreads[eventId];
     return isFresh(entry, DISCUSSIONS_TTL) ? (entry?.data ?? null) : null;
   },
+  getTasksCache: (key) => {
+    const entry = get().tasksCache[key];
+    return isFresh(entry, TASKS_TTL) ? (entry?.data ?? null) : null;
+  },
+  getTasksStats: () => {
+    const entry = get().tasksStats;
+    return isFresh(entry, TASKS_TTL) ? (entry?.data ?? null) : null;
+  },
+  getReportsCache: () => {
+    const entry = get().reportsCache;
+    return isFresh(entry, REPORTS_TTL) ? (entry?.data ?? null) : null;
+  },
 
   peekDashboardStats: () => get().dashboardStats?.data ?? null,
   peekRecentLeads: () => get().recentLeads?.data ?? null,
@@ -275,5 +385,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   peekEventsCache: (key) => get().eventsCache[key]?.data ?? null,
   peekEventsStats: () => get().eventsStats?.data ?? null,
   peekDiscussionsConversations: () => get().discussionsConversations?.data ?? null,
-  peekDiscussionsThread: (eventId) => get().discussionsThreads[eventId]?.data ?? null
+  peekDiscussionsThread: (eventId) => get().discussionsThreads[eventId]?.data ?? null,
+  peekTasksCache: (key) => get().tasksCache[key]?.data ?? null,
+  peekTasksStats: () => get().tasksStats?.data ?? null,
+  peekReportsCache: () => get().reportsCache?.data ?? null
 }));
