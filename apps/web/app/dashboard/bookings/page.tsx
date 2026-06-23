@@ -176,7 +176,6 @@ export default function BookingsPage() {
       setRefreshing
     }).catch((e) => {
       setError(e instanceof Error ? e.message : "Request failed.");
-      setData(null);
     });
   }, [cacheKey, queryParams]);
 
@@ -193,6 +192,8 @@ export default function BookingsPage() {
       },
       onData: setStats,
       setLoading: setStatsLoading
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
     });
   }, []);
 

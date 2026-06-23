@@ -22,6 +22,15 @@ type CalendarEventItem = {
 
 const calCache = new Map<string, { data: CalendarEventItem[]; ts: number }>();
 const CAL_TTL = 60_000;
+const MAX_RANGE_MS = 93 * 24 * 60 * 60 * 1000;
+
+function getFreshCacheEntry(cacheKey: string) {
+  const cached = calCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.ts < CAL_TTL) return cached;
+  calCache.delete(cacheKey);
+  return null;
+}
 
 const STATUS_COLORS: Record<string, string> = {
   lead: "#F59E0B",
@@ -61,10 +70,16 @@ router.get("/events", async (req: Request, res: Response) => {
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       return res.status(400).json({ error: "Invalid start or end date." });
     }
+    if (start >= end) {
+      return res.status(400).json({ error: "start must be before end." });
+    }
+    if (end.getTime() - start.getTime() > MAX_RANGE_MS) {
+      return res.status(400).json({ error: "Date range exceeds the maximum allowed span." });
+    }
 
     const cacheKey = `${caterer.id}:${startRaw}:${endRaw}`;
-    const cached = calCache.get(cacheKey);
-    if (cached && Date.now() - cached.ts < CAL_TTL) {
+    const cached = getFreshCacheEntry(cacheKey);
+    if (cached) {
       return res.json(cached.data);
     }
 

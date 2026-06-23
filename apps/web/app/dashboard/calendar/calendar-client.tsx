@@ -120,7 +120,9 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
   const loadMonthEvents = useCallback(
     async (start: Date, end: Date, silent = false) => {
       const key = monthKey(start);
-      activeRangeRef.current = { start, end };
+      if (!silent) {
+        activeRangeRef.current = { start, end };
+      }
 
       if (isFresh(key)) {
         const cached = getMonthEvents(key);
