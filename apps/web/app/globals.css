@@ -33,3 +33,225 @@
 body {
   @apply bg-background font-sans text-foreground antialiased;
 }
+
+/* CaterPro FullCalendar overrides */
+.caterpro-calendar .fc {
+  --fc-border-color: hsl(var(--border));
+  --fc-today-bg-color: rgb(27 42 74 / 0.08);
+  --fc-page-bg-color: #ffffff;
+  --fc-neutral-bg-color: hsl(var(--muted));
+  --fc-button-bg-color: #1b2a4a;
+  --fc-button-border-color: #1b2a4a;
+  --fc-button-hover-bg-color: rgb(27 42 74 / 0.9);
+  --fc-button-hover-border-color: rgb(27 42 74 / 0.9);
+  --fc-button-active-bg-color: #152238;
+  --fc-button-active-border-color: #152238;
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+.caterpro-calendar .fc .fc-toolbar-title {
+  font-family: var(--font-playfair), ui-serif, Georgia, serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1b2a4a;
+}
+
+.caterpro-calendar .fc .fc-col-header-cell-cushion,
+.caterpro-calendar .fc .fc-daygrid-day-number {
+  color: #1b2a4a;
+  font-weight: 500;
+}
+
+.caterpro-calendar .fc .fc-day-today .fc-daygrid-day-number {
+  background-color: #1b2a4a;
+  color: #ffffff;
+  border-radius: 9999px;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.caterpro-calendar .fc .fc-event {
+  border-radius: 0.375rem;
+  border-width: 0;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.caterpro-calendar .fc .fc-daygrid-event {
+  margin-top: 1px;
+}
+
+.caterpro-calendar .fc .fc-timegrid-event {
+  border-radius: 0.375rem;
+}
+
+.caterpro-calendar .fc .fc-button {
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: capitalize;
+  box-shadow: none;
+}
+
+.caterpro-calendar .fc .fc-button-primary:not(:disabled).fc-button-active,
+.caterpro-calendar .fc .fc-button-primary:not(:disabled):active {
+  background-color: #152238;
+  border-color: #152238;
+}
+
+@media (max-width: 768px) {
+  .caterpro-calendar .fc .fc-toolbar {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .caterpro-calendar .fc .fc-toolbar-chunk {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .caterpro-calendar .fc .fc-event {
+    font-size: 0.625rem;
+    padding: 0.0625rem 0.25rem;
+  }
+
+  .caterpro-calendar .fc .fc-toolbar-title {
+    font-size: 1.125rem;
+  }
+}
+
+/* Instant calendar shell (no JS) */
+.calendar-root:has(.fc) .calendar-shell {
+  visibility: hidden;
+}
+
+.calendar-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+  background: #ffffff;
+  border-radius: 0.375rem;
+}
+
+.calendar-shell-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0 0.25rem;
+}
+
+.calendar-shell-toolbar-chunk {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.25rem;
+}
+
+.calendar-shell-toolbar-chunk--end {
+  justify-content: flex-end;
+}
+
+.calendar-shell-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1b2a4a;
+  text-align: center;
+}
+
+.calendar-shell-btn-placeholder {
+  display: inline-block;
+  height: 2.25rem;
+  width: 2.25rem;
+  border-radius: 0.375rem;
+  background: rgb(27 42 74 / 0.12);
+}
+
+.calendar-shell-btn-placeholder--wide {
+  width: 4.5rem;
+}
+
+.calendar-shell-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  flex: 1;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.calendar-shell-day-head {
+  padding: 0.5rem 0.25rem;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #1b2a4a;
+  background: hsl(var(--muted) / 0.35);
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.calendar-shell-cell {
+  min-height: 5.5rem;
+  padding: 0.375rem;
+  border-right: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--border));
+  background: #ffffff;
+}
+
+.calendar-shell-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.calendar-shell-cell--other .calendar-shell-day-num {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.55;
+}
+
+.calendar-shell-day-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #1b2a4a;
+}
+
+.calendar-shell-day-num--today {
+  background-color: #1b2a4a;
+  color: #ffffff;
+  border-radius: 9999px;
+}
+
+.caterpro-calendar-events {
+  will-change: opacity;
+}
+
+@media (max-width: 768px) {
+  .calendar-shell-toolbar {
+    flex-direction: column;
+  }
+
+  .calendar-shell-toolbar-chunk,
+  .calendar-shell-toolbar-chunk--end {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .calendar-shell-cell {
+    min-height: 3.5rem;
+  }
+
+  .calendar-shell-title {
+    font-size: 1.125rem;
+  }
+}

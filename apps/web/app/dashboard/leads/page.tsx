@@ -22,28 +22,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { RefreshingBadge } from "@/components/refreshing-badge";
+import { useAppStore, type LeadsListResponse } from "@/lib/stores/app-store";
+import { loadWithCache } from "@/lib/stores/cache-helpers";
 
-type LeadRow = {
-  id: string;
-  leadId: string | null;
-  guestName: string;
-  guestEmail: string | null;
-  contactNumber: string | null;
-  eventType: string;
-  eventDate: string;
-  location: string;
-  guestCount: number | null;
-  status: string;
-};
-
-type ListResponse = {
-  items: LeadRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  intakeMismatchWarning?: string;
-};
+type ListResponse = LeadsListResponse;
 
 function statusVariant(
   status: string
@@ -86,10 +69,26 @@ export default function LeadsPage() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [dateOpen, setDateOpen] = useState(false);
 
-  const [data, setData] = useState<ListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const dateFrom = dateRange?.from ? format(dateRange.from, "yyyy-MM-dd") : undefined;
+  const dateTo = dateRange?.to
+    ? format(dateRange.to, "yyyy-MM-dd")
+    : dateRange?.from
+      ? format(dateRange.from, "yyyy-MM-dd")
+      : undefined;
+
+  const cacheKey = JSON.stringify({ page, status, search: searchDebounced, dateFrom, dateTo });
+
+  const [data, setData] = useState<ListResponse | null>(() =>
+    useAppStore.getState().peekLeadsCache(cacheKey)
+  );
+  const [loading, setLoading] = useState(
+    () => useAppStore.getState().peekLeadsCache(cacheKey) == null
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [intakeWarning, setIntakeWarning] = useState<string | null>(null);
+  const [intakeWarning, setIntakeWarning] = useState<string | null>(
+    () => useAppStore.getState().peekLeadsCache(cacheKey)?.intakeMismatchWarning ?? null
+  );
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
@@ -101,29 +100,36 @@ export default function LeadsPage() {
     p.set("page", String(page));
     p.set("status", status);
     if (searchDebounced) p.set("search", searchDebounced);
-    if (dateRange?.from) p.set("dateFrom", format(dateRange.from, "yyyy-MM-dd"));
-    if (dateRange?.to) p.set("dateTo", format(dateRange.to, "yyyy-MM-dd"));
-    else if (dateRange?.from && !dateRange.to) {
-      p.set("dateFrom", format(dateRange.from, "yyyy-MM-dd"));
-      p.set("dateTo", format(dateRange.from, "yyyy-MM-dd"));
-    }
+    if (dateFrom) p.set("dateFrom", dateFrom);
+    if (dateTo) p.set("dateTo", dateTo);
     return p;
-  }, [page, status, searchDebounced, dateRange]);
+  }, [page, status, searchDebounced, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const store = useAppStore.getState();
+    const key = cacheKey;
     setError(null);
-    setIntakeWarning(null);
-    const result = await fetchLeads(queryParams);
-    if ("error" in result) {
-      setError(result.error);
+
+    await loadWithCache({
+      peek: () => store.peekLeadsCache(key),
+      getFresh: () => store.getLeadsCache(key),
+      set: (result) => store.setLeadsCache(key, result),
+      fetch: async () => {
+        const result = await fetchLeads(queryParams);
+        if ("error" in result) throw new Error(result.error);
+        return result;
+      },
+      onData: (result) => {
+        setData(result);
+        setIntakeWarning(result.intakeMismatchWarning ?? null);
+      },
+      setLoading,
+      setRefreshing
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
       setData(null);
-    } else {
-      setData(result);
-      setIntakeWarning(result.intakeMismatchWarning ?? null);
-    }
-    setLoading(false);
-  }, [queryParams]);
+    });
+  }, [cacheKey, queryParams]);
 
   useEffect(() => {
     void load();
@@ -191,9 +197,12 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Leads</h1>
-        <p className="mt-1 text-sm text-muted-foreground">All incoming catering inquiries</p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Leads</h1>
+          <p className="mt-1 text-sm text-muted-foreground">All incoming catering inquiries</p>
+        </div>
+        {refreshing ? <RefreshingBadge /> : null}
       </header>
 
       <Card>
@@ -319,7 +328,7 @@ export default function LeadsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading
+                  {loading && !(data?.items.length)
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 8 }).map((__, j) => (

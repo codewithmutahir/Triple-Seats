@@ -17,31 +17,18 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { RefreshingBadge } from "@/components/refreshing-badge";
+import {
+  useAppStore,
+  type DashboardRecentRow,
+  type DashboardStats,
+  type DashboardUpcomingRow
+} from "@/lib/stores/app-store";
+import { loadWithCache } from "@/lib/stores/cache-helpers";
 
-type StatsResponse = {
-  leads: { count: number; trend: string };
-  bookings: { count: number; trend: string };
-  upcomingEvents: { count: number; trend: string };
-  revenue: { amount: number; trend: string };
-};
-
-type RecentRow = {
-  id: string;
-  guestName: string;
-  eventType: string;
-  date: string;
-  location: string;
-  guestCount: number | null;
-  status: string;
-};
-
-type UpcomingRow = {
-  id: string;
-  title: string;
-  date: string;
-  venue: string;
-  guestCount: number | null;
-};
+type StatsResponse = DashboardStats;
+type RecentRow = DashboardRecentRow;
+type UpcomingRow = DashboardUpcomingRow;
 
 function statusVariant(status: string): "lead" | "booked" | "completed" | "discussion" | "outline" {
   if (status === "lead") return "lead";
@@ -90,39 +77,103 @@ async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok:
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [recent, setRecent] = useState<RecentRow[] | null>(null);
-  const [upcoming, setUpcoming] = useState<UpcomingRow[] | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<StatsResponse | null>(() =>
+    useAppStore.getState().peekDashboardStats()
+  );
+  const [recent, setRecent] = useState<RecentRow[] | null>(() =>
+    useAppStore.getState().peekRecentLeads()
+  );
+  const [upcoming, setUpcoming] = useState<UpcomingRow[] | null>(() =>
+    useAppStore.getState().peekUpcomingEvents()
+  );
+  const [statsLoading, setStatsLoading] = useState(
+    () => useAppStore.getState().peekDashboardStats() == null
+  );
+  const [recentLoading, setRecentLoading] = useState(
+    () => useAppStore.getState().peekRecentLeads() == null
+  );
+  const [upcomingLoading, setUpcomingLoading] = useState(
+    () => useAppStore.getState().peekUpcomingEvents() == null
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (force = false) => {
+    const store = useAppStore.getState();
     setError(null);
-    const [s, r, u] = await Promise.all([
-      fetchJson<StatsResponse>("/api/dashboard/stats"),
-      fetchJson<{ items: RecentRow[] }>("/api/dashboard/recent-leads"),
-      fetchJson<{ items: UpcomingRow[] }>("/api/dashboard/upcoming-events")
-    ]);
 
-    const firstErr = [s, r, u].find((x) => !x.ok) as
-      | { ok: false; status: number; message: string }
-      | undefined;
-    if (firstErr) {
-      setError(firstErr.message);
+    const run = async <T,>(
+      peek: () => T | null,
+      getFresh: () => T | null,
+      setCache: (data: T) => void,
+      fetchData: () => Promise<T>,
+      onData: (data: T) => void,
+      setLoading: (v: boolean) => void
+    ) => {
+      if (force) {
+        setLoading(true);
+        const data = await fetchData();
+        setCache(data);
+        onData(data);
+        setLoading(false);
+        return;
+      }
+      await loadWithCache({
+        peek,
+        getFresh,
+        set: setCache,
+        fetch: fetchData,
+        onData,
+        setLoading,
+        setRefreshing
+      });
+    };
+
+    try {
+      await Promise.all([
+        run(
+          () => store.peekDashboardStats(),
+          () => store.getDashboardStats(),
+          (d) => store.setDashboardStats(d),
+          async () => {
+            const res = await fetchJson<StatsResponse>("/api/dashboard/stats");
+            if (!res.ok) throw new Error(res.message);
+            return res.data;
+          },
+          setStats,
+          setStatsLoading
+        ),
+        run(
+          () => store.peekRecentLeads(),
+          () => store.getRecentLeads(),
+          (d) => store.setRecentLeads(d),
+          async () => {
+            const res = await fetchJson<{ items: RecentRow[] }>("/api/dashboard/recent-leads");
+            if (!res.ok) throw new Error(res.message);
+            return res.data.items;
+          },
+          setRecent,
+          setRecentLoading
+        ),
+        run(
+          () => store.peekUpcomingEvents(),
+          () => store.getUpcomingEvents(),
+          (d) => store.setUpcomingEvents(d),
+          async () => {
+            const res = await fetchJson<{ items: UpcomingRow[] }>("/api/dashboard/upcoming-events");
+            if (!res.ok) throw new Error(res.message);
+            return res.data.items;
+          },
+          setUpcoming,
+          setUpcomingLoading
+        )
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Request failed.");
       setStats(null);
       setRecent(null);
       setUpcoming(null);
-      setLoading(false);
-      return;
     }
-
-    if (s.ok && r.ok && u.ok) {
-      setStats(s.data);
-      setRecent(r.data.items);
-      setUpcoming(u.data.items);
-    }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -137,7 +188,7 @@ export default function DashboardPage() {
           <CardDescription>{error}</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button type="button" onClick={() => void load()}>
+          <Button type="button" onClick={() => void load(true)}>
             Try again
           </Button>
         </CardContent>
@@ -147,6 +198,11 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      {refreshing ? (
+        <div className="flex justify-end">
+          <RefreshingBadge />
+        </div>
+      ) : null}
       <section>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
@@ -154,7 +210,7 @@ export default function DashboardPage() {
             icon={UserPlus}
             value={stats?.leads.count}
             trend={stats?.leads.trend}
-            loading={loading}
+            loading={statsLoading && stats == null}
           />
           <StatCard
             title="Confirmed bookings"
@@ -162,7 +218,7 @@ export default function DashboardPage() {
             icon={BookCheck}
             value={stats?.bookings.count}
             trend={stats?.bookings.trend}
-            loading={loading}
+            loading={statsLoading && stats == null}
           />
           <StatCard
             title="Upcoming events"
@@ -170,7 +226,7 @@ export default function DashboardPage() {
             icon={CalendarDays}
             value={stats?.upcomingEvents.count}
             trend={stats?.upcomingEvents.trend}
-            loading={loading}
+            loading={statsLoading && stats == null}
           />
           <StatCard
             title="Revenue this month"
@@ -178,7 +234,7 @@ export default function DashboardPage() {
             icon={BarChart3}
             value={stats != null ? money.format(stats.revenue.amount) : undefined}
             trend={stats?.revenue.trend}
-            loading={loading}
+            loading={statsLoading && stats == null}
             isTextValue
           />
         </div>
@@ -194,7 +250,7 @@ export default function DashboardPage() {
             <LayoutDashboard className="h-5 w-5 text-muted-foreground" aria-hidden />
           </CardHeader>
           <CardContent>
-            {loading ? (
+            {recentLoading && recent == null ? (
               <div className="space-y-2">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-10 w-full" />
@@ -264,7 +320,7 @@ export default function DashboardPage() {
             <CardDescription>Next 7 days</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {loading ? (
+            {upcomingLoading && upcoming == null ? (
               <div className="space-y-2">
                 {Array.from({ length: 4 }).map((_, i) => (
                   <Skeleton key={i} className="h-16 w-full" />

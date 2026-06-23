@@ -39,6 +39,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { RefreshingBadge } from "@/components/refreshing-badge";
+import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
+import { loadWithCache } from "@/lib/stores/cache-helpers";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -48,31 +51,7 @@ const STATUS_TABS = [
   { value: "completed", label: "Completed" }
 ] as const;
 
-type EventListRow = {
-  id: string;
-  guestName: string;
-  eventType: string;
-  eventDate: string;
-  location: string;
-  guestCount: number | null;
-  status: string;
-};
-
-type EventsListResponse = {
-  items: EventListRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
-
-type EventsStats = {
-  total: number;
-  lead: number;
-  discussion: number;
-  booked: number;
-  completed: number;
-};
+type EventListRow = EventsListResponse["items"][number];
 
 function formatTableDate(iso: string) {
   try {
@@ -206,9 +185,18 @@ function EventsListView() {
   const router = useRouter();
   const [status, setStatus] = useState<string>("all");
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<EventsListResponse | null>(null);
-  const [stats, setStats] = useState<EventsStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = JSON.stringify({ page, status });
+
+  const [data, setData] = useState<EventsListResponse | null>(() =>
+    useAppStore.getState().peekEventsCache(cacheKey)
+  );
+  const [stats, setStats] = useState<EventsStats | null>(() =>
+    useAppStore.getState().peekEventsStats()
+  );
+  const [loading, setLoading] = useState(
+    () => useAppStore.getState().peekEventsCache(cacheKey) == null
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const queryParams = useMemo(() => {
@@ -219,23 +207,41 @@ function EventsListView() {
   }, [page, status]);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const store = useAppStore.getState();
+    const key = cacheKey;
     setError(null);
-    const [listResult, statsResult] = await Promise.all([
-      fetchEventsList(queryParams),
-      fetchEventsStats()
-    ]);
-    if ("error" in listResult) {
-      setError(listResult.error);
+
+    await Promise.all([
+      loadWithCache({
+        peek: () => store.peekEventsCache(key),
+        getFresh: () => store.getEventsCache(key),
+        set: (result) => store.setEventsCache(key, result),
+        fetch: async () => {
+          const result = await fetchEventsList(queryParams);
+          if ("error" in result) throw new Error(result.error);
+          return result;
+        },
+        onData: setData,
+        setLoading,
+        setRefreshing
+      }),
+      loadWithCache({
+        peek: () => store.peekEventsStats(),
+        getFresh: () => store.getEventsStats(),
+        set: (result) => store.setEventsStats(result),
+        fetch: async () => {
+          const result = await fetchEventsStats();
+          if ("error" in result) throw new Error(result.error);
+          return result;
+        },
+        onData: setStats,
+        setLoading: () => {}
+      })
+    ]).catch((e) => {
+      setError(e instanceof Error ? e.message : "Request failed.");
       setData(null);
-    } else {
-      setData(listResult);
-    }
-    if (!("error" in statsResult)) {
-      setStats(statsResult);
-    }
-    setLoading(false);
-  }, [queryParams]);
+    });
+  }, [cacheKey, queryParams]);
 
   useEffect(() => {
     void load();
@@ -249,9 +255,12 @@ function EventsListView() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Events</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Manage inquiries and bookings through your pipeline</p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Events</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Manage inquiries and bookings through your pipeline</p>
+        </div>
+        {refreshing ? <RefreshingBadge /> : null}
       </header>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -322,7 +331,7 @@ function EventsListView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading
+                  {loading && !(data?.items.length)
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 7 }).map((__, j) => (
