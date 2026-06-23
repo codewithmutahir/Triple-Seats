@@ -936,7 +936,7 @@ function QuoteBuilderPage() {
                   a.href = url;
                   a.download = "quote.pdf";
                   a.click();
-                  URL.revokeObjectURL(url);
+                  setTimeout(() => URL.revokeObjectURL(url), 150);
                   setToast("PDF downloaded!");
                 } catch {
                   setToast("Failed to generate PDF.");

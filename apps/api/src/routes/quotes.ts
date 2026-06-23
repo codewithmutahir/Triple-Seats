@@ -373,7 +373,7 @@ router.post("/:id/send", async (req: Request, res: Response) => {
     const pdfBuffer = await generateQuotePdfBuffer(quoteData);
     const html = buildQuoteEmailHtml(quoteData, caterer);
 
-    await resend.emails.send({
+    const { error: sendError } = await resend.emails.send({
       from: resendFromEmail(),
       to: guestEmail,
       subject: "Your Catering Quote from CaterPro",
@@ -385,6 +385,10 @@ router.post("/:id/send", async (req: Request, res: Response) => {
         }
       ]
     });
+    if (sendError) {
+      console.error("Failed to send quote email:", sendError);
+      return res.status(502).json({ error: "Failed to send quote email." });
+    }
 
     const updated = await prisma.quote.update({
       where: { id: quoteId },

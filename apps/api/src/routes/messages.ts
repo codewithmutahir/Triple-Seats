@@ -158,7 +158,7 @@ router.post("/", async (req: Request, res: Response) => {
         return res.status(503).json({ error: "Email service is not configured." });
       }
 
-      await resend.emails.send({
+      const { error: sendError } = await resend.emails.send({
         from: resendFromEmail(),
         to: guestEmail,
         replyTo: caterer.email,
@@ -170,6 +170,10 @@ router.post("/", async (req: Request, res: Response) => {
           body: messageBody
         })
       });
+      if (sendError) {
+        console.error("Failed to send outbound message email:", sendError);
+        return res.status(502).json({ error: "Failed to send email." });
+      }
     }
 
     const message = await prisma.message.create({

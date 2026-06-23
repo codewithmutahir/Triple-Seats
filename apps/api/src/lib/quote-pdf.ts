@@ -189,7 +189,9 @@ function eventLocation(quote: QuoteWithRelations): string {
 }
 
 function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: number): string {
-  if (item.unitType === "per_head") return String(guestCount);
+  if (item.unitType === "per_head") {
+    return String(Math.max(0, guestCount) * item.quantity);
+  }
   return String(item.quantity);
 }
 

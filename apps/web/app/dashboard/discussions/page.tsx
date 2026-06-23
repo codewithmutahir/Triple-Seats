@@ -263,7 +263,6 @@ function DiscussionsInner() {
     router.replace(`/dashboard/discussions?eventId=${encodeURIComponent(eventId)}`, {
       scroll: false
     });
-    void loadThread(eventId);
   }
 
   function backToList() {
