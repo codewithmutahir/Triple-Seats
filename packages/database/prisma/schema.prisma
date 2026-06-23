@@ -321,9 +321,11 @@ model Message {
   eventId     String?
   guestId     String?
   direction   MessageDirection
-  channel     String
+  channel     String           @default("email")
   subject     String?
   body        String
+  senderName  String?
+  senderEmail String?
   sentAt      DateTime?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
@@ -333,6 +335,7 @@ model Message {
   guest       Guest?           @relation(fields: [guestId], references: [id], onDelete: SetNull)
 
   @@index([catererId, createdAt])
+  @@index([catererId])
   @@index([leadId])
   @@index([eventId])
   @@index([guestId])

@@ -76,6 +76,9 @@ type QuoteEvent = {
   venueAddress: string | null;
   venueName: string | null;
   guestName: string | null;
+  primaryGuest?: {
+    email: string | null;
+  } | null;
 };
 
 type Quote = {
@@ -204,6 +207,8 @@ function QuoteBuilderPage() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [sendLoading, setSendLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -911,13 +916,79 @@ function QuoteBuilderPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => setToast("PDF generation coming soon")}
+              disabled={busy || pdfLoading}
+              onClick={async () => {
+                if (!quote) return;
+                setPdfLoading(true);
+                try {
+                  const res = await fetch(
+                    `/api/quotes/${encodeURIComponent(quote.id)}/pdf`,
+                    { method: "POST", credentials: "include" }
+                  );
+                  if (!res.ok) {
+                    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+                    setToast(body?.error ?? "Failed to generate PDF.");
+                    return;
+                  }
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "quote.pdf";
+                  a.click();
+                  setTimeout(() => URL.revokeObjectURL(url), 150);
+                  setToast("PDF downloaded!");
+                } catch {
+                  setToast("Failed to generate PDF.");
+                } finally {
+                  setPdfLoading(false);
+                }
+              }}
             >
-              <FileText className="mr-2 h-4 w-4" />
+              {pdfLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <FileText className="mr-2 h-4 w-4" />
+              )}
               Generate PDF
             </Button>
-            <Button type="button" onClick={() => setToast("Email sending coming soon")}>
-              <Send className="mr-2 h-4 w-4" />
+            <Button
+              type="button"
+              disabled={busy || sendLoading}
+              onClick={async () => {
+                if (!quote) return;
+                setSendLoading(true);
+                try {
+                  const res = await fetch(
+                    `/api/quotes/${encodeURIComponent(quote.id)}/send`,
+                    { method: "POST", credentials: "include" }
+                  );
+                  const body = (await res.json().catch(() => null)) as {
+                    error?: string;
+                    quote?: Quote;
+                  } | null;
+                  if (!res.ok) {
+                    setToast(body?.error ?? "Failed to send quote.");
+                    return;
+                  }
+                  if (body?.quote) applyQuote(body.quote);
+                  const guestEmail =
+                    body?.quote?.event?.primaryGuest?.email ??
+                    quote.event?.primaryGuest?.email ??
+                    "guest";
+                  setToast(`Quote sent to ${guestEmail}!`);
+                } catch {
+                  setToast("Failed to send quote.");
+                } finally {
+                  setSendLoading(false);
+                }
+              }}
+            >
+              {sendLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="mr-2 h-4 w-4" />
+              )}
               Send to Guest
             </Button>
           </div>

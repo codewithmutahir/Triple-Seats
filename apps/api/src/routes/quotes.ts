@@ -3,6 +3,7 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { calculateQuoteTotals } from "../lib/quote-totals";
+import { buildQuoteEmailHtml, generateQuotePdfBuffer } from "../lib/quote-pdf";
 import {
   parseItemCategory,
   parseQuoteStatus,
@@ -11,6 +12,7 @@ import {
   serializeQuote,
   type QuoteWithRelations
 } from "../lib/quote-serialize";
+import { getResend, resendFromEmail } from "../lib/mail";
 import { getSession, SessionError } from "../lib/session";
 
 const router = Router();
@@ -325,6 +327,80 @@ router.delete("/:id/items/:itemId", async (req: Request, res: Response) => {
     await prisma.quoteLineItem.delete({ where: { id: itemId } });
     const updated = await persistQuoteTotals(quoteId);
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
+router.post("/:id/pdf", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const quoteId = paramId(req);
+    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
+    if (!quote) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    const buffer = await generateQuotePdfBuffer(quote as QuoteWithRelations);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="quote-${quoteId}.pdf"`);
+    return res.send(buffer);
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
+router.post("/:id/send", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const quoteId = paramId(req);
+    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
+    if (!quote) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    const guestEmail = quote.event?.primaryGuest?.email?.trim();
+    if (!guestEmail) {
+      return res.status(400).json({ error: "Guest email is required to send the quote." });
+    }
+
+    const resend = getResend();
+    if (!resend) {
+      return res.status(503).json({ error: "Email service is not configured." });
+    }
+
+    const quoteData = quote as QuoteWithRelations;
+    const pdfBuffer = await generateQuotePdfBuffer(quoteData);
+    const html = buildQuoteEmailHtml(quoteData, caterer);
+
+    const { error: sendError } = await resend.emails.send({
+      from: resendFromEmail(),
+      to: guestEmail,
+      subject: "Your Catering Quote from CaterPro",
+      html,
+      attachments: [
+        {
+          filename: `quote-${quoteId}.pdf`,
+          content: pdfBuffer.toString("base64")
+        }
+      ]
+    });
+    if (sendError) {
+      console.error("Failed to send quote email:", sendError);
+      return res.status(502).json({ error: "Failed to send quote email." });
+    }
+
+    const updated = await prisma.quote.update({
+      where: { id: quoteId },
+      data: { status: "sent" },
+      include: quoteInclude
+    });
+
+    return res.json({
+      ok: true,
+      emailSent: true,
+      quote: serializeQuote(updated as QuoteWithRelations)
+    });
   } catch (e) {
     return handleSessionError(res, e);
   }

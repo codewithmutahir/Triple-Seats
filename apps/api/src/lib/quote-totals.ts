@@ -33,3 +33,20 @@ export function calculateQuoteTotals(
 
   return { subtotal, tax, grandTotal, deposit, balance };
 }
+
+export function lineItemTotal(item: QuoteLineItemLike, guestCount: number): number {
+  if (item.unitType === "per_head") {
+    return item.unitPrice * Math.max(0, guestCount) * item.quantity;
+  }
+  return item.unitPrice * item.quantity;
+}
+
+/** USD with thousands separators (US locale). */
+export function formatUsd(amount: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount);
+}

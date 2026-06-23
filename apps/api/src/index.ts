@@ -12,6 +12,7 @@ import { bookingsRouter } from "./routes/bookings";
 import { dashboardRouter } from "./routes/dashboard";
 import { eventsRouter } from "./routes/events";
 import { leadsRouter } from "./routes/leads";
+import { messagesRouter } from "./routes/messages";
 import { quotesRouter } from "./routes/quotes";
 import { tasksRouter } from "./routes/tasks";
 
@@ -38,6 +39,7 @@ function createApp() {
   app.use("/api/bookings", bookingsRouter);
   app.use("/api/events", eventsRouter);
   app.use("/api/leads", leadsRouter);
+  app.use("/api/messages", messagesRouter);
   app.use("/api/quotes", quotesRouter);
   app.use("/api/tasks", tasksRouter);
 
