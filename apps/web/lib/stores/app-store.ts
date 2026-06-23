@@ -171,6 +171,7 @@ export type ReportsSummary = {
   events: {
     total: number;
     thisMonth: number;
+    lastMonth: number;
     byStatus: { lead: number; discussion: number; booked: number; completed: number };
     byType: { Wedding: number; Corporate: number; Birthday: number; Other: number };
   };

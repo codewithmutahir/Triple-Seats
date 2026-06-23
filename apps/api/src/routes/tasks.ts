@@ -97,9 +97,10 @@ router.get("/stats", async (req: Request, res: Response) => {
         where: {
           catererId,
           status: { in: ["todo", "in_progress", "blocked"] },
-          event: {
-            eventDate: { gte: dayStart, lte: dayEnd }
-          }
+          OR: [
+            { event: { eventDate: { gte: dayStart, lte: dayEnd } } },
+            { dueAt: { gte: dayStart, lte: dayEnd } }
+          ]
         }
       })
     ]);
@@ -151,8 +152,7 @@ router.get("/", async (req: Request, res: Response) => {
             venueAddress: true
           }
         }
-      },
-      orderBy: [{ status: "asc" }, { createdAt: "desc" }]
+      }
     });
 
     const items = tasks

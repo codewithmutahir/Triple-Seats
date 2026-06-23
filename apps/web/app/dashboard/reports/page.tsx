@@ -1,6 +1,6 @@
 "use client";
 
-import { format } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import {
   Bar,
   BarChart,
@@ -15,7 +15,7 @@ import {
   YAxis
 } from "recharts";
 import { CalendarCheck, DollarSign, Download, TrendingUp, Users } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +30,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
 import { useAppStore, type ReportsData } from "@/lib/stores/app-store";
 
 const NAVY = "#1B2A4A";
@@ -74,7 +73,7 @@ function yearOptions() {
 
 function formatDisplayDate(iso: string) {
   try {
-    return format(new Date(iso), "MMM d, yyyy");
+    return formatInTimeZone(iso, "UTC", "MMM d, yyyy");
   } catch {
     return iso;
   }
@@ -148,36 +147,47 @@ export default function ReportsPage() {
   });
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     const store = useAppStore.getState();
     setError(null);
 
     const cached = store.getReportsCache();
     if (cached?.filterKey === filterKey) {
-      setReports(cached);
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setReports(cached);
+        setLoading(false);
+      }
       return;
     }
 
     const stale = store.peekReportsCache();
     if (stale?.filterKey === filterKey) {
-      setReports(stale);
-      setLoading(false);
-    } else {
+      if (requestId === requestIdRef.current) {
+        setReports(stale);
+        setLoading(false);
+      }
+    } else if (requestId === requestIdRef.current) {
       setLoading(true);
     }
 
-    setRefreshing(stale?.filterKey === filterKey);
+    if (requestId === requestIdRef.current) {
+      setRefreshing(stale?.filterKey === filterKey);
+    }
     try {
       const result = await fetchReports(parseInt(year, 10), parseInt(month, 10));
+      if (requestId !== requestIdRef.current) return;
       if ("error" in result) throw new Error(result.error);
       store.setReportsCache(result);
       setReports(result);
     } catch (e) {
+      if (requestId !== requestIdRef.current) return;
       setError(e instanceof Error ? e.message : "Request failed.");
       if (stale?.filterKey !== filterKey) setReports(null);
     } finally {
+      if (requestId !== requestIdRef.current) return;
       setLoading(false);
       setRefreshing(false);
     }
@@ -195,6 +205,13 @@ export default function ReportsPage() {
     const count = summary.events.thisMonth;
     if (count === 0) return 0;
     return Math.round(summary.revenue.thisMonth / count);
+  }, [summary]);
+
+  const avgEventValueLastMonth = useMemo(() => {
+    if (!summary) return 0;
+    const count = summary.events.lastMonth;
+    if (count === 0) return 0;
+    return Math.round(summary.revenue.lastMonth / count);
   }, [summary]);
 
   const revenueChartData = useMemo(
@@ -298,7 +315,7 @@ export default function ReportsPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[
           {
-            label: "Total Revenue",
+            label: "Revenue This Month",
             value: summary ? money.format(summary.revenue.thisMonth) : null,
             trend: summary ? trendLabel(summary.revenue.growth) : null,
             icon: DollarSign
@@ -321,7 +338,7 @@ export default function ReportsPage() {
             label: "Avg Event Value",
             value: summary ? money.format(avgEventValue) : null,
             trend: summary
-              ? money.format(summary.revenue.lastMonth) + " last month"
+              ? `${money.format(avgEventValueLastMonth)} avg last month`
               : null,
             icon: TrendingUp
           }

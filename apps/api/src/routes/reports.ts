@@ -27,8 +27,9 @@ function monthRange(year: number, month: number) {
 }
 
 function pickBestQuote(quotes: QuotePick[]) {
-  if (!quotes.length) return null;
-  return [...quotes].sort((a, b) => {
+  const accepted = quotes.filter((q) => q.status === "accepted");
+  if (!accepted.length) return null;
+  return [...accepted].sort((a, b) => {
     const byStatus = QUOTE_STATUS_PRIORITY[b.status] - QUOTE_STATUS_PRIORITY[a.status];
     if (byStatus !== 0) return byStatus;
     return b.updatedAt.getTime() - a.updatedAt.getTime();
@@ -98,6 +99,7 @@ router.get("/summary", async (req: Request, res: Response) => {
     const [
       allEvents,
       eventsThisMonth,
+      eventsLastMonth,
       leadsTotal,
       leadsThisMonth,
       bookedCount,
@@ -110,11 +112,14 @@ router.get("/summary", async (req: Request, res: Response) => {
       prisma.event.count({
         where: { catererId, eventDate: { gte: thisStart, lte: thisEnd } }
       }),
+      prisma.event.count({
+        where: { catererId, eventDate: { gte: lastStart, lte: lastEnd } }
+      }),
       prisma.lead.count({ where: { catererId } }),
       prisma.lead.count({
         where: { catererId, createdAt: { gte: thisStart, lte: thisEnd } }
       }),
-      prisma.event.count({ where: { catererId, status: "booked" } }),
+      prisma.event.count({ where: { catererId, status: { in: ["booked", "completed"] } } }),
       prisma.event.findMany({
         where: { catererId, status: { in: ["booked", "completed"] } },
         orderBy: { eventDate: "desc" },
@@ -195,6 +200,7 @@ router.get("/summary", async (req: Request, res: Response) => {
       events: {
         total: allEvents.length,
         thisMonth: eventsThisMonth,
+        lastMonth: eventsLastMonth,
         byStatus,
         byType
       },

@@ -334,14 +334,44 @@ export default function TasksPage() {
     }
 
     try {
-      await Promise.all(
-        completedTasks.map((t) =>
-          fetch(`/api/tasks/${encodeURIComponent(t.id)}`, {
+      const results = await Promise.allSettled(
+        completedTasks.map(async (t) => {
+          const res = await fetch(`/api/tasks/${encodeURIComponent(t.id)}`, {
             method: "DELETE",
             credentials: "include"
-          })
-        )
+          });
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as { error?: string };
+            throw new Error(body.error ?? "Failed to delete task");
+          }
+          return t.id;
+        })
       );
+
+      const failedIds = new Set<string>();
+      results.forEach((result, i) => {
+        if (result.status === "rejected") {
+          failedIds.add(completedTasks[i]!.id);
+        }
+      });
+
+      if (failedIds.size > 0) {
+        const failedTasks = prevTasks.filter((t) => failedIds.has(t.id));
+        setTasks((current) => [...failedTasks, ...current]);
+        if (prevStats) {
+          setStats({
+            ...prevStats,
+            total: prevStats.total - (count - failedIds.size),
+            completed: prevStats.completed - (count - failedIds.size)
+          });
+        }
+        setToast(
+          failedIds.size === count
+            ? "Failed to clear completed tasks"
+            : `${failedIds.size} task(s) could not be deleted`
+        );
+      }
+
       useAppStore.getState().setTasksCache(cacheKey, null);
       useAppStore.getState().setTasksStats(null);
     } catch {
