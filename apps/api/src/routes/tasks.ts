@@ -1,3 +1,4 @@
+import type { Prisma } from "@tripeseats/database";
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
@@ -24,6 +25,11 @@ function mapTaskStatus(input: string): "todo" | "done" | null {
   return null;
 }
 
+function toDisplayStatus(status: string): "pending" | "completed" {
+  if (status === "done") return "completed";
+  return "pending";
+}
+
 function serializeTask(t: {
   id: string;
   title: string;
@@ -42,25 +48,154 @@ function serializeTask(t: {
   };
 }
 
+function serializeTaskWithEvent(t: {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: Date;
+  event: {
+    id: string;
+    title: string;
+    eventDate: Date;
+    venueName: string | null;
+    venueAddress: string | null;
+  } | null;
+}) {
+  return {
+    id: t.id,
+    title: t.title,
+    status: toDisplayStatus(t.status),
+    createdAt: t.createdAt.toISOString(),
+    event: t.event
+      ? {
+          id: t.event.id,
+          title: t.event.title,
+          eventDate: t.event.eventDate.toISOString(),
+          venue: t.event.venueAddress ?? t.event.venueName ?? "—"
+        }
+      : null
+  };
+}
+
+/** Authenticated: task counts */
+router.get("/stats", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const catererId = caterer.id;
+
+    const now = new Date();
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 7);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    const [total, pending, completed, dueSoon] = await Promise.all([
+      prisma.task.count({ where: { catererId } }),
+      prisma.task.count({ where: { catererId, status: { in: ["todo", "in_progress", "blocked"] } } }),
+      prisma.task.count({ where: { catererId, status: "done" } }),
+      prisma.task.count({
+        where: {
+          catererId,
+          status: { in: ["todo", "in_progress", "blocked"] },
+          event: {
+            eventDate: { gte: dayStart, lte: dayEnd }
+          }
+        }
+      })
+    ]);
+
+    return res.json({ total, pending, completed, dueSoon });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
+/** Authenticated: list tasks with optional filters */
+router.get("/", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const catererId = caterer.id;
+
+    const statusParam = String(req.query.status ?? "all").toLowerCase();
+    const eventId =
+      typeof req.query.eventId === "string" && req.query.eventId.trim()
+        ? req.query.eventId.trim()
+        : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+    const where: Prisma.TaskWhereInput = { catererId };
+
+    if (statusParam === "pending") {
+      where.status = { in: ["todo", "in_progress", "blocked"] };
+    } else if (statusParam === "completed") {
+      where.status = "done";
+    }
+
+    if (eventId) {
+      where.eventId = eventId;
+    }
+
+    if (search) {
+      where.title = { contains: search, mode: "insensitive" };
+    }
+
+    const tasks = await prisma.task.findMany({
+      where,
+      include: {
+        event: {
+          select: {
+            id: true,
+            title: true,
+            eventDate: true,
+            venueName: true,
+            venueAddress: true
+          }
+        }
+      },
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }]
+    });
+
+    const items = tasks
+      .map(serializeTaskWithEvent)
+      .sort((a, b) => {
+        const aPending = a.status === "pending" ? 0 : 1;
+        const bPending = b.status === "pending" ? 0 : 1;
+        if (aPending !== bPending) return aPending - bPending;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
+    return res.json({ items });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
 router.post("/", async (req: Request, res: Response) => {
   try {
     const { caterer } = await getSession(req);
     const { eventId, title } = req.body as { eventId?: string; title?: string };
-    if (!eventId || typeof eventId !== "string" || typeof title !== "string" || !title.trim()) {
-      return res.status(400).json({ error: "eventId and non-empty title are required." });
+    if (typeof title !== "string" || !title.trim()) {
+      return res.status(400).json({ error: "A non-empty title is required." });
     }
 
-    const event = await prisma.event.findFirst({
-      where: { id: eventId, catererId: caterer.id }
-    });
-    if (!event) {
-      return res.status(404).json({ error: "Event not found." });
+    let linkedEventId: string | null = null;
+    if (eventId != null && eventId !== "") {
+      if (typeof eventId !== "string") {
+        return res.status(400).json({ error: "eventId must be a string." });
+      }
+      const event = await prisma.event.findFirst({
+        where: { id: eventId, catererId: caterer.id }
+      });
+      if (!event) {
+        return res.status(404).json({ error: "Event not found." });
+      }
+      linkedEventId = event.id;
     }
 
     const task = await prisma.task.create({
       data: {
         catererId: caterer.id,
-        eventId: event.id,
+        eventId: linkedEventId,
         title: title.trim(),
         status: "todo"
       }
