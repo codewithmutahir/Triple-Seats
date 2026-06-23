@@ -159,6 +159,7 @@ export default function ReportsPage() {
       if (requestId === requestIdRef.current) {
         setReports(cached);
         setLoading(false);
+        setRefreshing(false);
       }
       return;
     }
@@ -170,6 +171,7 @@ export default function ReportsPage() {
         setLoading(false);
       }
     } else if (requestId === requestIdRef.current) {
+      setReports(null);
       setLoading(true);
     }
 
@@ -187,9 +189,10 @@ export default function ReportsPage() {
       setError(e instanceof Error ? e.message : "Request failed.");
       if (stale?.filterKey !== filterKey) setReports(null);
     } finally {
-      if (requestId !== requestIdRef.current) return;
-      setLoading(false);
-      setRefreshing(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [filterKey, year, month]);
 
