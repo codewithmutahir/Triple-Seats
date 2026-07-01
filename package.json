@@ -10,7 +10,8 @@
     "db:generate": "pnpm --filter @tripeseats/database prisma generate",
     "db:migrate": "pnpm --filter @tripeseats/database prisma migrate dev",
     "db:push": "pnpm --filter @tripeseats/database prisma db push",
-    "db:push:pooler": "node packages/database/scripts/push-via-pooler.mjs"
+    "db:push:pooler": "node packages/database/scripts/push-via-pooler.mjs",
+    "db:patch-slug": "pnpm --filter api db:patch-slug"
   },
   "devDependencies": {
     "turbo": "^2.1.2",

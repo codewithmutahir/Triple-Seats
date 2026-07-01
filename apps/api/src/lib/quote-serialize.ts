@@ -3,7 +3,17 @@ import type { Prisma } from "@tripeseats/database";
 import { calculateQuoteTotals } from "./quote-totals";
 
 export const quoteInclude = {
-  lineItems: { orderBy: { createdAt: "asc" as const } },
+  lineItems: {
+    orderBy: { createdAt: "asc" as const },
+    include: {
+      package: {
+        include: {
+          tiers: { orderBy: { minGuests: "asc" as const } },
+          items: { orderBy: { sortOrder: "asc" as const } }
+        }
+      }
+    }
+  },
   event: { include: { primaryGuest: true } }
 } satisfies Prisma.QuoteInclude;
 
@@ -17,12 +27,35 @@ export function serializeLineItem(item: QuoteLineItem) {
   return {
     id: item.id,
     quoteId: item.quoteId,
+    menuItemId: item.menuItemId,
+    packageId: item.packageId,
     category: item.category,
     name: item.name,
     quantity: item.quantity,
     unitPrice: item.unitPrice,
     unitType: item.unitType,
-    notes: item.notes
+    appliedTier: item.appliedTier,
+    appliedTierLabel: item.appliedTierLabel,
+    notes: item.notes,
+    package: item.package
+      ? {
+          id: item.package.id,
+          name: item.package.name,
+          minGuests: item.package.minGuests,
+          tiers: item.package.tiers.map((t) => ({
+            id: t.id,
+            minGuests: t.minGuests,
+            maxGuests: t.maxGuests,
+            pricePerHead: t.pricePerHead
+          })),
+          items: item.package.items.map((i) => ({
+            id: i.id,
+            label: i.label,
+            quantity: i.quantity,
+            sortOrder: i.sortOrder
+          }))
+        }
+      : null
   };
 }
 
@@ -99,7 +132,12 @@ export function parseItemCategory(value: unknown): ItemCategory | null {
 }
 
 export function parseQuoteUnit(value: unknown): QuoteUnit | null {
-  if (value === "per_head" || value === "by_tray" || value === "flat") {
+  if (
+    value === "per_head" ||
+    value === "by_tray" ||
+    value === "flat" ||
+    value === "tiered_per_head"
+  ) {
     return value;
   }
   return null;

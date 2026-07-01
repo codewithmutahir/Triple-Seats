@@ -1,5 +1,8 @@
 import { Router, type Request, type Response } from "express";
 
+import { getCatererPublicProfile } from "./caterers";
+import { monthRangeFromDate, previousMonthRange } from "../lib/date-ranges";
+import { pickBestQuote } from "../lib/quote-pick";
 import { getSession, SessionError } from "../lib/session";
 import { prisma } from "@tripeseats/database";
 
@@ -14,17 +17,6 @@ type StatsPayload = {
 
 const statsCache = new Map<string, { data: StatsPayload; ts: number }>();
 const CACHE_TTL = 60_000;
-
-function monthRange(d: Date) {
-  const start = new Date(d.getFullYear(), d.getMonth(), 1);
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-  return { start, end };
-}
-
-function prevMonthRange(d: Date) {
-  const prev = new Date(d.getFullYear(), d.getMonth() - 1, 15);
-  return monthRange(prev);
-}
 
 function pctTrend(current: number, previous: number): string {
   if (previous === 0) return current === 0 ? "No change" : "New this period";
@@ -41,6 +33,16 @@ function handleSessionError(res: Response, e: unknown) {
   return res.status(500).json({ error: "Internal server error" });
 }
 
+router.get("/profile", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const profile = await getCatererPublicProfile(caterer);
+    return res.json(profile);
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
 router.get("/stats", async (req: Request, res: Response) => {
   try {
     const { caterer } = await getSession(req);
@@ -52,8 +54,11 @@ router.get("/stats", async (req: Request, res: Response) => {
     }
 
     const now = new Date();
-    const { start: thisMonthStart, end: thisMonthEnd } = monthRange(now);
-    const { start: prevStart, end: prevEnd } = prevMonthRange(now);
+    const { start: thisMonthStart, end: thisMonthEnd } = monthRangeFromDate(now);
+    const { start: prevStart, end: prevEnd } = previousMonthRange(
+      now.getFullYear(),
+      now.getMonth() + 1
+    );
 
     const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const dayEnd = new Date(dayStart);
@@ -108,26 +113,40 @@ router.get("/stats", async (req: Request, res: Response) => {
           }
         }
       }),
-      prisma.quote.aggregate({
+      prisma.event.findMany({
         where: {
           catererId,
-          createdAt: { gte: thisMonthStart, lte: thisMonthEnd },
-          event: { status: "booked" }
+          status: { in: ["booked", "completed"] },
+          eventDate: { gte: thisMonthStart, lte: thisMonthEnd }
         },
-        _sum: { totalAmount: true }
+        select: {
+          quotes: {
+            select: { id: true, totalAmount: true, status: true, updatedAt: true }
+          }
+        }
       }),
-      prisma.quote.aggregate({
+      prisma.event.findMany({
         where: {
           catererId,
-          createdAt: { gte: prevStart, lte: prevEnd },
-          event: { status: "booked" }
+          status: { in: ["booked", "completed"] },
+          eventDate: { gte: prevStart, lte: prevEnd }
         },
-        _sum: { totalAmount: true }
+        select: {
+          quotes: {
+            select: { id: true, totalAmount: true, status: true, updatedAt: true }
+          }
+        }
       })
     ]);
 
-    const revenue = Number(revenueAgg._sum.totalAmount ?? 0);
-    const revenuePrev = Number(revenuePrevAgg._sum.totalAmount ?? 0);
+    const revenue = revenueAgg.reduce(
+      (sum, ev) => sum + (pickBestQuote(ev.quotes)?.totalAmount ?? 0),
+      0
+    );
+    const revenuePrev = revenuePrevAgg.reduce(
+      (sum, ev) => sum + (pickBestQuote(ev.quotes)?.totalAmount ?? 0),
+      0
+    );
 
     const result: StatsPayload = {
       leads: {

@@ -18,6 +18,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAppStore, type ReportsData } from "@/lib/stores/app-store";
+import { parseApiError } from "@/lib/user-facing-error";
 
 const ReportsBarCharts = dynamic(
   () => import("./reports-charts").then((m) => m.ReportsBarCharts),
@@ -33,6 +34,13 @@ const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 0
+});
+
+const moneyDetail = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
 });
 
 const MONTHS = [
@@ -64,8 +72,18 @@ function formatDisplayDate(iso: string) {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "numeric",
-      year: "numeric",
-      timeZone: "UTC"
+      year: "numeric"
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+function formatShortDate(iso: string) {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      day: "numeric",
+      month: "short"
     }).format(new Date(iso));
   } catch {
     return iso;
@@ -106,16 +124,16 @@ async function fetchReports(year: number, month: number): Promise<ReportsData | 
   const params = new URLSearchParams({ year: String(year), month: String(month) });
   const [summaryRes, timelineRes] = await Promise.all([
     fetch(`/api/reports/summary?${params}`, { credentials: "include" }),
-    fetch("/api/reports/events-timeline", { credentials: "include" })
+    fetch(`/api/reports/events-timeline?${params}`, { credentials: "include" })
   ]);
 
   if (!summaryRes.ok) {
     const body = (await summaryRes.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? summaryRes.statusText };
+    return { error: parseApiError(body, summaryRes.status, summaryRes.statusText) };
   }
   if (!timelineRes.ok) {
     const body = (await timelineRes.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? timelineRes.statusText };
+    return { error: parseApiError(body, timelineRes.status, timelineRes.statusText) };
   }
 
   const summary = await summaryRes.json();
@@ -248,7 +266,48 @@ export default function ReportsPage() {
       ...Object.entries(summary.events.byType).map(([k, v]) => [k, v]),
       [],
       ["Status", "Count"],
-      ...Object.entries(summary.events.byStatus).map(([k, v]) => [k, v])
+      ...Object.entries(summary.events.byStatus).map(([k, v]) => [k, v]),
+      [],
+      [
+        "Booking Date",
+        "Event Date",
+        "Status",
+        "Customer",
+        "Event ID",
+        "Phone",
+        "Email",
+        "Event",
+        "Location",
+        "Event Type",
+        "Food",
+        "Labor",
+        "Delivery",
+        "Equipment",
+        "Service Charges",
+        "Discount",
+        "Tax",
+        "Revenue"
+      ],
+      ...(summary.leadReports ?? []).map((row) => [
+        formatDisplayDate(row.bookingDate),
+        formatDisplayDate(row.eventDate),
+        row.status,
+        row.customerName,
+        row.displayEventId,
+        row.phone ?? "",
+        row.email ?? "",
+        row.eventTitle,
+        row.location,
+        row.eventType,
+        row.food,
+        row.labor,
+        row.delivery,
+        row.equipment,
+        row.serviceCharges,
+        row.discount,
+        row.tax,
+        row.revenue
+      ])
     ];
     const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -433,7 +492,107 @@ export default function ReportsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="font-heading text-lg text-[#1B2A4A]">Recent Activity</CardTitle>
+          <CardTitle className="font-heading text-lg text-[#1B2A4A]">Reports per Lead</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Lead and quote breakdown for events in the selected month
+          </p>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {loading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Booking Date</TableHead>
+                  <TableHead>Event Date</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Event ID</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Event</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead>Event Type</TableHead>
+                  <TableHead className="text-right">Food</TableHead>
+                  <TableHead className="text-right">Labor</TableHead>
+                  <TableHead className="text-right">Delivery</TableHead>
+                  <TableHead className="text-right">Equipment</TableHead>
+                  <TableHead className="text-right">Service</TableHead>
+                  <TableHead className="text-right">Discount</TableHead>
+                  <TableHead className="text-right">Tax</TableHead>
+                  <TableHead className="text-right">Revenue</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {summary?.leadReports?.length ? (
+                  summary.leadReports.map((row) => (
+                    <TableRow key={row.eventId}>
+                      <TableCell className="whitespace-nowrap">
+                        {formatShortDate(row.bookingDate)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {formatShortDate(row.eventDate)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant(row.status)}>
+                          {statusLabel(row.status)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {row.customerName}
+                      </TableCell>
+                      <TableCell>{row.displayEventId}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.phone ?? "—"}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {row.email ? (
+                          <a href={`mailto:${row.email}`} className="text-[#1B2A4A] hover:underline">
+                            {row.email}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell>{row.eventTitle}</TableCell>
+                      <TableCell className="max-w-[140px] truncate">{row.location}</TableCell>
+                      <TableCell>{row.eventType}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.food)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.labor)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.delivery)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.equipment)}</TableCell>
+                      <TableCell className="text-right">
+                        {moneyDetail.format(row.serviceCharges)}
+                      </TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.discount)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.tax)}</TableCell>
+                      <TableCell className="text-right font-medium">
+                        {moneyDetail.format(row.revenue)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={18} className="text-center text-muted-foreground">
+                      No leads or events for this month
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-heading text-lg text-[#1B2A4A]">Recent Bookings</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Confirmed and completed events this month
+          </p>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {loading ? (
@@ -460,7 +619,7 @@ export default function ReportsPage() {
                       <TableCell className="font-medium">{row.guestName}</TableCell>
                       <TableCell>{row.eventType}</TableCell>
                       <TableCell>{formatDisplayDate(row.eventDate)}</TableCell>
-                      <TableCell className="text-right">{money.format(row.revenue)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.revenue)}</TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(row.status)}>
                           {statusLabel(row.status)}

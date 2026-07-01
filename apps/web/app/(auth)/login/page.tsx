@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn, useSession } from "@/lib/auth-client";
+import { parseAuthError } from "@/lib/user-facing-error";
 import { Check, UtensilsCrossed } from "lucide-react";
 
 const TRUST_ITEMS = ["Secure sign-in", "Built for caterers", "Your data stays private"] as const;
@@ -40,7 +41,7 @@ export default function LoginPage() {
     try {
       const result = await signIn.email({ email: email.trim(), password });
       if (result.error) {
-        setError(result.error.message ?? "Sign in failed.");
+        setError(parseAuthError(result.error.message, "signIn"));
         return;
       }
       router.push("/dashboard");

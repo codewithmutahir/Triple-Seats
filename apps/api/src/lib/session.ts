@@ -2,6 +2,9 @@ import type { Request } from "express";
 
 import { auth } from "./auth";
 import { prisma, type Prisma } from "@tripeseats/database";
+import { seedMenuItemsForCaterer } from "./seed-menu-items";
+import { seedPackagesForCaterer } from "./seed-packages";
+import { ensureCatererSlug, uniqueSlugForName } from "./slug";
 
 type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 
@@ -136,13 +139,17 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
       const displayName = user.name?.trim() || email.split("@")[0] || "My catering business";
 
       try {
+        const slug = await uniqueSlugForName(displayName);
         caterer = await prisma.caterer.create({
           data: {
             userId: user.id,
             name: displayName,
+            slug,
             email
           }
         });
+        await seedMenuItemsForCaterer(caterer.id);
+        await seedPackagesForCaterer(caterer.id);
       } catch (e: unknown) {
         const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "";
         if (code === "P2002") {
@@ -164,7 +171,9 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
   }
 
   catererCache.set(user.id, { caterer, ts: Date.now() });
-  return caterer;
+  const withSlug = await ensureCatererSlug(caterer);
+  catererCache.set(user.id, { caterer: withSlug, ts: Date.now() });
+  return withSlug;
 }
 
 /**

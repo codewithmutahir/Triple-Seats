@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RefreshingBadge } from "@/components/refreshing-badge";
+import { BookingLinkCard } from "@/components/dashboard/booking-link-card";
 import {
   useAppStore,
   type DashboardRecentRow,
@@ -25,6 +26,7 @@ import {
   type DashboardUpcomingRow
 } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { parseApiError } from "@/lib/user-facing-error";
 
 type StatsResponse = DashboardStats;
 type RecentRow = DashboardRecentRow;
@@ -58,7 +60,7 @@ async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok:
     return {
       ok: false,
       status: 403,
-      message: body?.error ?? "No caterer profile linked to this account."
+      message: parseApiError(body, 403, res.statusText)
     };
   }
   if (res.status === 409) {
@@ -66,12 +68,12 @@ async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok:
     return {
       ok: false,
       status: 409,
-      message: body?.error ?? "Account conflict."
+      message: parseApiError(body, 409, res.statusText)
     };
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    return { ok: false, status: res.status, message: text || "Request failed." };
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    return { ok: false, status: res.status, message: parseApiError(body, res.status, res.statusText) };
   }
   return { ok: true, data: (await res.json()) as T };
 }
@@ -198,6 +200,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      <BookingLinkCard />
       {refreshing ? (
         <div className="flex justify-end">
           <RefreshingBadge />

@@ -1,446 +1,61 @@
-"use client";
-
-import { useState } from "react";
+import Link from "next/link";
+import { ArrowRight, UtensilsCrossed } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { Check, CircleCheck, UtensilsCrossed } from "lucide-react";
-
-const EVENT_TYPES = ["Wedding", "Corporate", "Birthday", "Other"] as const;
-const TIME_SLOTS = ["Breakfast", "Lunch", "Evening", "Late Night"] as const;
-
-const TRUST_ITEMS = [
-  "Free consultation",
-  "Reply within 2 hours",
-  "Served 500+ events"
-] as const;
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function validateStep1(guestName: string, contactNumber: string, email: string): string | null {
-  if (!guestName.trim()) return "Please enter your name.";
-  if (!contactNumber.trim() || contactNumber.replace(/\D/g, "").length < 8) {
-    return "Please enter a valid contact number.";
-  }
-  if (!EMAIL_RE.test(email.trim())) return "Please enter a valid email address.";
-  return null;
-}
-
-function validateStep2(
-  eventType: string,
-  eventDate: string,
-  eventLocation: string,
-  numberOfGuests: string
-): string | null {
-  if (!eventType) return "Please select an event type.";
-  if (!eventDate) return "Please choose an event date.";
-  const d = new Date(eventDate);
-  if (Number.isNaN(d.getTime())) return "Please enter a valid event date.";
-  if (!eventLocation.trim()) return "Please enter the event location.";
-  const n = Number(numberOfGuests);
-  if (!Number.isFinite(n) || n < 1) return "Please enter the number of guests (at least 1).";
-  return null;
-}
 
 export default function HomePage() {
-  const [step, setStep] = useState(1);
-  const [stepError, setStepError] = useState<string | null>(null);
-
-  const [guestName, setGuestName] = useState("");
-  const [contactNumber, setContactNumber] = useState("");
-  const [email, setEmail] = useState("");
-
-  const [eventType, setEventType] = useState("");
-  const [eventDate, setEventDate] = useState("");
-  const [eventLocation, setEventLocation] = useState("");
-  const [numberOfGuests, setNumberOfGuests] = useState("");
-
-  const [slotBreakfast, setSlotBreakfast] = useState(false);
-  const [slotLunch, setSlotLunch] = useState(false);
-  const [slotEvening, setSlotEvening] = useState(false);
-  const [slotLateNight, setSlotLateNight] = useState(false);
-  const [additionalNotes, setAdditionalNotes] = useState("");
-
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(false);
-
-  const progressValue = (step / 3) * 100;
-
-  const slotState: Record<(typeof TIME_SLOTS)[number], boolean> = {
-    Breakfast: slotBreakfast,
-    Lunch: slotLunch,
-    Evening: slotEvening,
-    "Late Night": slotLateNight
-  };
-
-  const setSlot = (slot: (typeof TIME_SLOTS)[number], checked: boolean) => {
-    if (slot === "Breakfast") setSlotBreakfast(checked);
-    if (slot === "Lunch") setSlotLunch(checked);
-    if (slot === "Evening") setSlotEvening(checked);
-    if (slot === "Late Night") setSlotLateNight(checked);
-  };
-
-  function goNext() {
-    setStepError(null);
-    if (step === 1) {
-      const err = validateStep1(guestName, contactNumber, email);
-      if (err) {
-        setStepError(err);
-        return;
-      }
-      setStep(2);
-      return;
-    }
-    if (step === 2) {
-      const err = validateStep2(eventType, eventDate, eventLocation, numberOfGuests);
-      if (err) {
-        setStepError(err);
-        return;
-      }
-      setStep(3);
-    }
-  }
-
-  function goBack() {
-    setStepError(null);
-    setStep((s) => Math.max(1, s - 1));
-  }
-
-  async function handleSubmit() {
-    setStepError(null);
-    setSubmitError(null);
-
-    const err1 = validateStep1(guestName, contactNumber, email);
-    if (err1) {
-      setStepError(err1);
-      setStep(1);
-      return;
-    }
-
-    const err = validateStep2(eventType, eventDate, eventLocation, numberOfGuests);
-    if (err) {
-      setStepError(err);
-      setStep(2);
-      return;
-    }
-
-    const preferredTimeSlots = TIME_SLOTS.filter((s) => slotState[s]);
-
-    const payload: Record<string, unknown> = {
-      guestName: guestName.trim(),
-      contactNumber: contactNumber.trim(),
-      email: email.trim(),
-      eventType,
-      eventLocation: eventLocation.trim(),
-      eventDate,
-      numberOfGuests: Number(numberOfGuests),
-      preferredTimeSlots
-    };
-    const notesTrim = additionalNotes.trim();
-    if (notesTrim) payload.additionalNotes = notesTrim;
-
-    setSubmitting(true);
-    try {
-      const response = await fetch("/api/leads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const body = (await response.json()) as { error?: string };
-        throw new Error(body.error ?? "Lead submission failed.");
-      }
-
-      setSuccess(true);
-      setGuestName("");
-      setContactNumber("");
-      setEmail("");
-      setEventType("");
-      setEventDate("");
-      setEventLocation("");
-      setNumberOfGuests("");
-      setSlotBreakfast(false);
-      setSlotLunch(false);
-      setSlotEvening(false);
-      setSlotLateNight(false);
-      setAdditionalNotes("");
-      setStep(1);
-    } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  function startAnother() {
-    setSuccess(false);
-    setSubmitError(null);
-    setStepError(null);
-  }
-
   return (
-    <div className="grid min-h-screen w-full font-sans lg:grid-cols-5">
-      {/* Left panel — 2/5 on large screens */}
-      <aside
-        className="relative flex w-full flex-col justify-between overflow-hidden bg-[#1B2A4A] px-8 py-10 text-white lg:col-span-2 lg:sticky lg:top-0 lg:min-h-screen lg:self-start lg:px-10 lg:py-12"
-        aria-label="CaterPro introduction"
-      >
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.12]"
-          style={{
-            backgroundImage: `
-              linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
-              linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px),
-              radial-gradient(circle at 15% 25%, rgba(255,255,255,0.14) 0%, transparent 42%),
-              radial-gradient(circle at 85% 60%, rgba(255,255,255,0.1) 0%, transparent 38%),
-              radial-gradient(circle at 50% 90%, rgba(255,255,255,0.08) 0%, transparent 35%)
-            `,
-            backgroundSize: "28px 28px, 28px 28px, auto, auto, auto"
-          }}
-          aria-hidden
-        />
-
-        <div className="relative z-10 flex-1">
-          <div className="mb-8 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/20 bg-white/10 backdrop-blur-sm">
-              <UtensilsCrossed className="h-6 w-6 text-white" aria-hidden />
-            </div>
-            <div>
-              <p className="font-heading text-2xl font-semibold tracking-tight">CaterPro</p>
-              <p className="text-sm text-white/70">Catering partners</p>
-            </div>
+    <div className="flex min-h-screen flex-col bg-[#1B2A4A] text-white">
+      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/20 bg-white/10">
+            <UtensilsCrossed className="h-5 w-5" aria-hidden />
           </div>
-
-          <h1 className="font-heading text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">
-            Professional Catering for Every Occasion
-          </h1>
-
-          <ul className="mt-10 space-y-4">
-            {TRUST_ITEMS.map((item) => (
-              <li key={item} className="flex items-start gap-3 text-sm text-white/90 sm:text-base">
-                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-300">
-                  <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />
-                </span>
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
+          <span className="font-heading text-xl font-semibold">Tripeseats</span>
         </div>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">
+            <Link href="/login">Log in</Link>
+          </Button>
+          <Button asChild className="bg-white text-[#1B2A4A] hover:bg-white/90">
+            <Link href="/register">Get started</Link>
+          </Button>
+        </div>
+      </header>
 
-        <p className="relative z-10 mt-10 text-xs text-white/50 lg:mt-0">
-          © {new Date().getFullYear()} CaterPro. All rights reserved.
+      <main className="mx-auto flex flex-1 w-full max-w-5xl flex-col justify-center px-6 py-16">
+        <p className="mb-4 text-sm font-medium uppercase tracking-wider text-emerald-300">
+          Catering business software
         </p>
-      </aside>
-
-      {/* Right panel — 3/5 on large screens */}
-      <section className="flex w-full flex-col bg-white lg:col-span-3">
-        <div className="mx-auto flex w-full max-w-lg flex-1 flex-col px-6 py-10 sm:px-10 sm:py-14">
-          {success ? (
-            <div className="flex flex-1 flex-col items-center justify-center text-center animate-in fade-in-0 zoom-in-95 duration-300">
-              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-                <CircleCheck className="h-9 w-9 text-emerald-600" strokeWidth={2} aria-hidden />
-              </div>
-              <h2 className="font-heading text-2xl font-semibold text-[#1B2A4A] sm:text-3xl">
-                You&apos;re all set
-              </h2>
-              <p className="mt-3 max-w-sm text-muted-foreground">
-                We&apos;ll contact you within 2 hours to discuss your event and next steps.
-              </p>
-              <Button type="button" variant="outline" className="mt-8" onClick={startAnother}>
-                Submit another inquiry
-              </Button>
-            </div>
-          ) : (
-            <>
-              <header className="mb-8">
-                <h2 className="font-heading text-2xl font-semibold text-[#1B2A4A] sm:text-3xl">
-                  Request a consultation
-                </h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Tell us about your event — it only takes a minute.
-                </p>
-              </header>
-
-              <div className="mb-8 space-y-2">
-                <div className="flex justify-between text-xs font-medium text-muted-foreground">
-                  <span className={step >= 1 ? "text-[#1B2A4A]" : ""}>Your details</span>
-                  <span className={step >= 2 ? "text-[#1B2A4A]" : ""}>Event</span>
-                  <span className={step >= 3 ? "text-[#1B2A4A]" : ""}>Preferences</span>
-                </div>
-                <Progress value={progressValue} className="h-1.5" />
-              </div>
-
-              <div
-                key={step}
-                className="flex flex-1 flex-col animate-in fade-in-0 slide-in-from-bottom-2 duration-300"
-              >
-                {step === 1 ? (
-                  <div className="space-y-5">
-                    <h3 className="font-heading text-lg font-semibold text-foreground">Your details</h3>
-                    <div className="space-y-2">
-                      <Label htmlFor="guestName">Full name</Label>
-                      <Input
-                        id="guestName"
-                        autoComplete="name"
-                        value={guestName}
-                        onChange={(e) => setGuestName(e.target.value)}
-                        placeholder="Jane Cooper"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="contactNumber">Contact number</Label>
-                      <Input
-                        id="contactNumber"
-                        type="tel"
-                        autoComplete="tel"
-                        value={contactNumber}
-                        onChange={(e) => setContactNumber(e.target.value)}
-                        placeholder="+1 555 0100"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="email">Email</Label>
-                      <Input
-                        id="email"
-                        type="email"
-                        autoComplete="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="you@company.com"
-                      />
-                    </div>
-                  </div>
-                ) : null}
-
-                {step === 2 ? (
-                  <div className="space-y-5">
-                    <h3 className="font-heading text-lg font-semibold text-foreground">Event details</h3>
-                    <div className="space-y-2">
-                      <Label>Event type</Label>
-                      <Select value={eventType} onValueChange={setEventType}>
-                        <SelectTrigger aria-label="Event type">
-                          <SelectValue placeholder="Select event type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {EVENT_TYPES.map((t) => (
-                            <SelectItem key={t} value={t}>
-                              {t}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="eventDate">Event date</Label>
-                      <Input
-                        id="eventDate"
-                        type="date"
-                        value={eventDate}
-                        onChange={(e) => setEventDate(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="eventLocation">Event location</Label>
-                      <Input
-                        id="eventLocation"
-                        value={eventLocation}
-                        onChange={(e) => setEventLocation(e.target.value)}
-                        placeholder="City, venue, or address"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="numberOfGuests">Number of guests</Label>
-                      <Input
-                        id="numberOfGuests"
-                        type="number"
-                        min={1}
-                        inputMode="numeric"
-                        value={numberOfGuests}
-                        onChange={(e) => setNumberOfGuests(e.target.value)}
-                        placeholder="120"
-                      />
-                    </div>
-                  </div>
-                ) : null}
-
-                {step === 3 ? (
-                  <div className="space-y-5">
-                    <h3 className="font-heading text-lg font-semibold text-foreground">Preferences</h3>
-                    <fieldset>
-                      <legend className="mb-3 text-sm font-medium text-foreground">Preferred time slots</legend>
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {TIME_SLOTS.map((slot) => (
-                          <label
-                            key={slot}
-                            className="flex cursor-pointer items-center gap-3 rounded-lg border border-input bg-background p-3 text-sm transition-colors hover:bg-muted/40"
-                          >
-                            <Checkbox
-                              checked={slotState[slot]}
-                              onCheckedChange={(v) => setSlot(slot, v === true)}
-                              aria-label={slot}
-                            />
-                            <span>{slot}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                    <div className="space-y-2">
-                      <Label htmlFor="additionalNotes">Additional notes</Label>
-                      <Textarea
-                        id="additionalNotes"
-                        value={additionalNotes}
-                        onChange={(e) => setAdditionalNotes(e.target.value)}
-                        placeholder="Dietary requirements, theme, budget, or anything else we should know."
-                        rows={4}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              {stepError ? <p className="mt-4 text-sm text-destructive">{stepError}</p> : null}
-              {submitError ? <p className="mt-4 text-sm text-destructive">{submitError}</p> : null}
-
-              <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-border pt-8">
-                {step > 1 ? (
-                  <Button type="button" variant="outline" onClick={goBack}>
-                    Back
-                  </Button>
-                ) : (
-                  <span />
-                )}
-                {step < 3 ? (
-                  <Button type="button" className="min-w-[120px] lg:ml-auto" onClick={goNext}>
-                    Continue
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    className="min-w-[120px] lg:ml-auto"
-                    disabled={submitting}
-                    onClick={handleSubmit}
-                  >
-                    {submitting ? "Submitting…" : "Submit"}
-                  </Button>
-                )}
-              </div>
-            </>
-          )}
+        <h1 className="font-heading max-w-2xl text-4xl font-semibold leading-tight sm:text-5xl">
+          Run your catering business on your own subdomain
+        </h1>
+        <p className="mt-6 max-w-xl text-lg text-white/80">
+          Each caterer gets a branded booking page like{" "}
+          <span className="font-mono text-white">royaltaj.caterpro.com/book</span> and a private
+          dashboard — all on one platform.
+        </p>
+        <div className="mt-10 flex flex-wrap gap-4">
+          <Button asChild size="lg" className="bg-white text-[#1B2A4A] hover:bg-white/90">
+            <Link href="/register">
+              Create your account
+              <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
+            </Link>
+          </Button>
+          <Button
+            asChild
+            size="lg"
+            variant="outline"
+            className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white"
+          >
+            <Link href="/login">Sign in to dashboard</Link>
+          </Button>
         </div>
-      </section>
+      </main>
+
+      <footer className="mx-auto w-full max-w-5xl px-6 py-8 text-sm text-white/50">
+        © {new Date().getFullYear()} Tripeseats
+      </footer>
     </div>
   );
 }

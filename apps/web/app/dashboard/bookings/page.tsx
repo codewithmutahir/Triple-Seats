@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type BookingsListResponse, type BookingsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { parseApiError } from "@/lib/user-facing-error";
 
 type ListResponse = BookingsListResponse;
 type StatsResponse = BookingsStats;
@@ -92,7 +93,7 @@ async function fetchBookings(
   const res = await fetch(`/api/bookings?${params.toString()}`, { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText, status: res.status };
+    return { error: parseApiError(body, res.status, res.statusText), status: res.status };
   }
   return (await res.json()) as ListResponse;
 }
@@ -101,7 +102,7 @@ async function fetchStats(): Promise<StatsResponse | { error: string; status: nu
   const res = await fetch("/api/bookings/stats", { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText, status: res.status };
+    return { error: parseApiError(body, res.status, res.statusText), status: res.status };
   }
   return (await res.json()) as StatsResponse;
 }

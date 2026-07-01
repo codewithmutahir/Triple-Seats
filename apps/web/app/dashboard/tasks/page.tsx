@@ -28,6 +28,7 @@ import {
   type TasksStats
 } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { parseApiError } from "@/lib/user-facing-error";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -60,7 +61,7 @@ async function fetchTasks(
   const res = await fetch(`/api/tasks?${params.toString()}`, { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText };
+    return { error: parseApiError(body, res.status, res.statusText) };
   }
   return (await res.json()) as TasksListResponse;
 }
@@ -69,7 +70,7 @@ async function fetchTaskStats(): Promise<TasksStats | { error: string }> {
   const res = await fetch("/api/tasks/stats", { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText };
+    return { error: parseApiError(body, res.status, res.statusText) };
   }
   return (await res.json()) as TasksStats;
 }
@@ -226,7 +227,7 @@ export default function TasksPage() {
         error?: string;
         task?: { id: string; title: string; status: string; createdAt: string };
       };
-      if (!res.ok) throw new Error(body.error ?? "Failed to add task");
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
 
       setTasks((t) =>
         t.map((item) =>
@@ -275,7 +276,7 @@ export default function TasksPage() {
         body: JSON.stringify({ status: newStatus })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(body.error ?? "Failed to update task");
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       useAppStore.getState().setTasksCache(cacheKey, null);
       useAppStore.getState().setTasksStats(null);
     } catch (e) {
@@ -307,7 +308,7 @@ export default function TasksPage() {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? "Failed to delete task");
+        throw new Error(parseApiError(body, res.status, res.statusText));
       }
       useAppStore.getState().setTasksCache(cacheKey, null);
       useAppStore.getState().setTasksStats(null);
@@ -342,7 +343,7 @@ export default function TasksPage() {
           });
           if (!res.ok) {
             const body = (await res.json().catch(() => ({}))) as { error?: string };
-            throw new Error(body.error ?? "Failed to delete task");
+            throw new Error(parseApiError(body, res.status, res.statusText));
           }
           return t.id;
         })
