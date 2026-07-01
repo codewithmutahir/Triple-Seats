@@ -17,6 +17,8 @@ function buildCookieHeader(): string | undefined {
 async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   const path = pathSegments.join("/");
   const target = `${apiOrigin()}/api/${path}${req.nextUrl.search}`;
+  const isLongRunning =
+    path.endsWith("/pdf") || path.endsWith("/send") || path.includes("/pdf/");
 
   const forwardHeaders = new Headers();
   const accept = req.headers.get("accept");
@@ -38,12 +40,16 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
       init.body = await req.arrayBuffer();
     } catch (err) {
       console.error("Failed to read request body:", err);
-      return new NextResponse("Bad request body", { status: 400 });
+      return NextResponse.json(
+        { error: "Something was wrong with your request. Please check your input and try again." },
+        { status: 400 }
+      );
     }
   }
 
+  const timeoutMs = isLongRunning ? 120_000 : 30_000;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   init.signal = controller.signal;
 
   let res;
@@ -52,10 +58,16 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   } catch (err) {
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
-      return new NextResponse("Gateway timeout", { status: 504 });
+      return NextResponse.json(
+        { error: isLongRunning ? "Request timed out while generating the quote PDF." : "Gateway timeout" },
+        { status: 504 }
+      );
     }
     console.error("Proxy fetch failed:", err);
-    return new NextResponse("Bad gateway", { status: 502 });
+    return NextResponse.json(
+      { error: "We couldn't reach the server. Please try again." },
+      { status: 502 }
+    );
   }
   clearTimeout(timeoutId);
 
@@ -67,6 +79,12 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
 
   const contentTypeRes = res.headers.get("content-type");
   if (contentTypeRes) responseHeaders.set("content-type", contentTypeRes);
+
+  const disposition = res.headers.get("content-disposition");
+  if (disposition) responseHeaders.set("content-disposition", disposition);
+
+  const contentLength = res.headers.get("content-length");
+  if (contentLength) responseHeaders.set("content-length", contentLength);
 
   return new NextResponse(res.body, {
     status: res.status,

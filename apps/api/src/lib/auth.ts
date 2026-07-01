@@ -9,6 +9,8 @@ import { escapeHtml, getResend, resendFromEmail } from "./mail";
 
 const resend = getResend();
 
+const rootDomain = process.env.PUBLIC_ROOT_DOMAIN?.trim();
+
 const authEmail =
   resend != null
     ? {
@@ -50,8 +52,6 @@ const authEmail =
     : {};
 
 export const auth = betterAuth({
-  // Public URL where `/api/auth` is reached (Next rewrites to this API). Use your
-  // tunnel URL when testing outside localhost (same value as `WEB_ORIGIN`).
   baseURL: process.env.BETTER_AUTH_URL,
   database: prismaAdapter(prisma, {
     provider: "postgresql"
@@ -64,6 +64,14 @@ export const auth = betterAuth({
   ...(authEmail.emailVerification ? { emailVerification: authEmail.emailVerification } : {}),
   trustedOrigins: allowedWebOrigins(),
   secret: process.env.BETTER_AUTH_SECRET,
+  advanced: rootDomain
+    ? {
+        crossSubDomainCookies: {
+          enabled: true,
+          domain: rootDomain
+        }
+      }
+    : undefined,
   plugins: [
     dash({
       apiKey: process.env.BETTER_AUTH_API_KEY

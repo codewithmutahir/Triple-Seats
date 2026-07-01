@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp, useSession } from "@/lib/auth-client";
+import { parseAuthError } from "@/lib/user-facing-error";
 import { Check, UtensilsCrossed } from "lucide-react";
 
 const TRUST_ITEMS = ["Secure sign-up", "Built for caterers", "Your data stays private"] as const;
@@ -46,7 +47,7 @@ export default function RegisterPage() {
         name: name.trim()
       });
       if (result.error) {
-        setError(result.error.message ?? "Sign up failed.");
+        setError(parseAuthError(result.error.message, "signUp"));
         return;
       }
       router.push("/login?registered=1");

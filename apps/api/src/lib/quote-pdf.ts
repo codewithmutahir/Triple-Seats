@@ -12,7 +12,10 @@ import {
 import { escapeHtml } from "./mail";
 import {
   calculateQuoteTotals,
+  formatTierLabel,
+  formatTierRange,
   formatUsd,
+  getActiveTier,
   lineItemTotal
 } from "./quote-totals";
 import type { QuoteWithRelations } from "./quote-serialize";
@@ -44,7 +47,8 @@ const CATEGORY_LABELS: Record<(typeof CATEGORY_ORDER)[number], string> = {
 const UNIT_LABELS: Record<string, string> = {
   per_head: "Per Head",
   by_tray: "By Tray",
-  flat: "Flat Rate"
+  flat: "Flat Rate",
+  tiered_per_head: "Package"
 };
 
 const styles = StyleSheet.create({
@@ -162,6 +166,36 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#ccc",
     paddingTop: 10
+  },
+  packageBlock: {
+    marginBottom: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 4
+  },
+  packageTitle: {
+    fontFamily: "Helvetica-Bold",
+    fontSize: 10,
+    color: NAVY,
+    marginBottom: 4
+  },
+  packageMeta: {
+    fontSize: 9,
+    color: "#444",
+    marginBottom: 6
+  },
+  tierTableRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderColor: "#ddd",
+    paddingVertical: 3,
+    paddingHorizontal: 4,
+    fontSize: 8
+  },
+  tierTableActive: {
+    backgroundColor: NAVY,
+    color: "#ffffff"
   }
 });
 
@@ -189,10 +223,24 @@ function eventLocation(quote: QuoteWithRelations): string {
 }
 
 function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: number): string {
-  if (item.unitType === "per_head") {
+  if (item.unitType === "per_head" || item.unitType === "tiered_per_head") {
     return String(Math.max(0, guestCount) * item.quantity);
   }
   return String(item.quantity);
+}
+
+function formatIncludedItems(
+  items: NonNullable<QuoteWithRelations["lineItems"][number]["package"]>["items"]
+): string {
+  return items
+    .map((item) => (item.quantity > 1 ? `${item.label} ×${item.quantity}` : item.label))
+    .join(", ");
+}
+
+function packageTierLabel(item: QuoteWithRelations["lineItems"][number]): string {
+  if (item.appliedTierLabel) return item.appliedTierLabel;
+  if (item.notes) return item.notes;
+  return formatUsd(item.unitPrice) + "/person";
 }
 
 function groupItemsByCategory(quote: QuoteWithRelations) {
@@ -201,11 +249,16 @@ function groupItemsByCategory(quote: QuoteWithRelations) {
     map.set(cat, []);
   }
   for (const item of quote.lineItems) {
+    if (item.unitType === "tiered_per_head") continue;
     const list = map.get(item.category) ?? [];
     list.push(item);
     map.set(item.category, list);
   }
   return map;
+}
+
+function packageLineItems(quote: QuoteWithRelations) {
+  return quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
 }
 
 function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
@@ -218,6 +271,66 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
   );
   const g = quote.event?.primaryGuest;
   const itemsByCategory = groupItemsByCategory(quote);
+  const packages = packageLineItems(quote);
+
+  const packageSections = packages.flatMap((item) => {
+    const tiers = item.package?.tiers ?? [];
+    const activeTier =
+      item.appliedTier != null
+        ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
+          getActiveTier(tiers, guestCount)
+        : getActiveTier(tiers, guestCount);
+
+    const tierTableHeader = React.createElement(
+      View,
+      { key: `tier-head-${item.id}`, style: { ...styles.tierTableRow, backgroundColor: "#eef1f6" } },
+      React.createElement(Text, { style: { width: "50%" } }, "Guest Range"),
+      React.createElement(Text, { style: { width: "50%", textAlign: "right" } }, "Per Person")
+    );
+
+    const tierRows = tiers.map((tier) => {
+      const isActive =
+        activeTier?.minGuests === tier.minGuests && activeTier?.maxGuests === tier.maxGuests;
+      return React.createElement(
+        View,
+        {
+          key: `tier-${item.id}-${tier.minGuests}`,
+          style: { ...styles.tierTableRow, ...(isActive ? styles.tierTableActive : {}) }
+        },
+        React.createElement(Text, { style: { width: "50%" } }, formatTierRange(tier)),
+        React.createElement(
+          Text,
+          { style: { width: "50%", textAlign: "right" } },
+          `${formatUsd(tier.pricePerHead)}${isActive ? "  ← Applied" : ""}`
+        )
+      );
+    });
+
+    const includes = item.package?.items?.length
+      ? formatIncludedItems(item.package.items)
+      : "—";
+
+    return [
+      React.createElement(
+        View,
+        { key: `pkg-${item.id}`, style: styles.packageBlock },
+        React.createElement(Text, { style: styles.packageTitle }, item.name),
+        React.createElement(
+          Text,
+          { style: styles.packageMeta },
+          `${packageTierLabel(item)} · ${guestCount} guests`
+        ),
+        React.createElement(Text, { style: { fontSize: 9, marginBottom: 6 } }, `Includes: ${includes}`),
+        React.createElement(
+          Text,
+          { style: { fontSize: 9, fontFamily: "Helvetica-Bold", marginBottom: 4 } },
+          `Total: ${formatUsd(lineItemTotal(item, guestCount))}`
+        ),
+        tierTableHeader,
+        ...tierRows
+      )
+    ];
+  });
 
   return React.createElement(
     Document,
@@ -293,6 +406,10 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           React.createElement(Text, { style: styles.detailValue }, eventLocation(quote))
         )
       ),
+      packages.length > 0
+        ? React.createElement(Text, { style: styles.sectionTitle }, "Packages")
+        : null,
+      ...packageSections,
       React.createElement(Text, { style: styles.sectionTitle }, "Line Items"),
       React.createElement(
         View,
@@ -396,6 +513,53 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
   const eventDate = formatDate(quote.event?.eventDate);
   const location = eventLocation(quote);
   const itemsByCategory = groupItemsByCategory(quote);
+  const packages = packageLineItems(quote);
+
+  const packageHtml =
+    packages.length > 0
+      ? `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">PACKAGES</td></tr>` +
+        packages
+          .map((item) => {
+            const tiers = item.package?.tiers ?? [];
+            const activeTier =
+              item.appliedTier != null
+                ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
+                  getActiveTier(tiers, guestCount)
+                : getActiveTier(tiers, guestCount);
+            const includes = item.package?.items?.length
+              ? escapeHtml(formatIncludedItems(item.package.items))
+              : "—";
+            const tierRows = tiers
+              .map((tier) => {
+                const isActive =
+                  activeTier?.minGuests === tier.minGuests &&
+                  activeTier?.maxGuests === tier.maxGuests;
+                const style = isActive
+                  ? "background:#1B2A4A;color:#fff;font-weight:bold;"
+                  : "";
+                return `<tr style="${style}">
+                  <td style="padding:2px 8px;">${escapeHtml(formatTierRange(tier))}</td>
+                  <td style="padding:2px 8px;text-align:right;">${escapeHtml(formatUsd(tier.pricePerHead))}${isActive ? " ← Applied" : ""}</td>
+                </tr>`;
+              })
+              .join("");
+            return `<tr>
+              <td colspan="2" style="padding:8px;border-bottom:1px solid #eee;">
+                <strong>${escapeHtml(item.name)}</strong> (${escapeHtml(packageTierLabel(item))})<br/>
+                Includes: ${includes}<br/>
+                Total: ${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}
+                <table style="width:100%;margin-top:8px;border-collapse:collapse;font-size:12px;">
+                  <tr style="background:#eef1f6;font-weight:bold;">
+                    <td style="padding:4px 8px;">Guest Range</td>
+                    <td style="padding:4px 8px;text-align:right;">Per Person</td>
+                  </tr>
+                  ${tierRows}
+                </table>
+              </td>
+            </tr>`;
+          })
+          .join("")
+      : "";
 
   const lineItemsHtml = CATEGORY_ORDER.flatMap((cat) => {
     const items = itemsByCategory.get(cat) ?? [];
@@ -441,6 +605,7 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
       <td style="padding:8px;border-bottom:1px solid #ddd;">${guestCount}</td>
     </tr>
     <tr><td colspan="2" style="padding:8px 0;border-top:2px solid #1B2A4A;"></td></tr>
+    ${packageHtml}
     ${lineItemsHtml}
     <tr><td colspan="2" style="padding:8px 0;border-top:2px solid #1B2A4A;"></td></tr>
     <tr>

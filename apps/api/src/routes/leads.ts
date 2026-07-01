@@ -3,7 +3,8 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { getIntakeCatererId } from "../lib/intake-caterer";
-import { getResend, resendFromEmail } from "../lib/mail";
+import { CatererResolveError, resolveLeadCatererId } from "../lib/caterer-resolver";
+import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { getSession, SessionError } from "../lib/session";
 
 const router = Router();
@@ -21,6 +22,7 @@ type LeadPayload = {
   numberOfGuests: number;
   preferredTimeSlots: string[];
   additionalNotes?: string;
+  catererSlug?: string;
 };
 
 function parsePayload(body: unknown): LeadPayload | null {
@@ -41,6 +43,8 @@ function parsePayload(body: unknown): LeadPayload | null {
 
   const additionalNotes =
     typeof value.additionalNotes === "string" ? value.additionalNotes.trim() : undefined;
+  const catererSlug =
+    typeof value.catererSlug === "string" ? value.catererSlug.trim().toLowerCase() : undefined;
 
   const payload: LeadPayload = {
     guestName: value.guestName.trim(),
@@ -53,7 +57,8 @@ function parsePayload(body: unknown): LeadPayload | null {
     preferredTimeSlots: value.preferredTimeSlots
       .filter((slot): slot is string => typeof slot === "string" && slot.trim().length > 0)
       .map((slot) => slot.trim()),
-    ...(additionalNotes ? { additionalNotes } : {})
+    ...(additionalNotes ? { additionalNotes } : {}),
+    ...(catererSlug ? { catererSlug } : {})
   };
 
   const parsedDate = new Date(payload.eventDate);
@@ -99,12 +104,14 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     let catererId: string;
     try {
-      catererId = await getIntakeCatererId();
+      catererId = await resolveLeadCatererId(payload.catererSlug);
     } catch (configErr) {
+      if (configErr instanceof CatererResolveError) {
+        return res.status(configErr.status).json({ error: configErr.message });
+      }
       console.error("Lead intake configuration:", configErr);
       return res.status(503).json({
-        error:
-          "Lead intake is not configured. Set LEAD_INTAKE_CATERER_ID to your caterer ID (see apps/api/.env.example)."
+        error: "This booking page isn't available right now. Please try again later."
       });
     }
     const [firstName, ...lastNameParts] = payload.guestName.split(" ").filter(Boolean);
@@ -186,9 +193,9 @@ router.post("/", async (req: Request, res: Response) => {
         from: resendFromEmail(),
         to: payload.email,
         subject: "We received your catering inquiry",
-        html: `<p>Hi ${payload.guestName},</p>
-               <p>Thanks for your inquiry for <strong>${payload.eventType}</strong> on <strong>${eventDate.toDateString()}</strong>.</p>
-               <p>Location: ${payload.eventLocation}<br/>Guests: ${payload.numberOfGuests}<br/>Preferred slots: ${preferredSlots || "Not provided"}</p>
+        html: `<p>Hi ${escapeHtml(payload.guestName)},</p>
+               <p>Thanks for your inquiry for <strong>${escapeHtml(payload.eventType)}</strong> on <strong>${escapeHtml(eventDate.toDateString())}</strong>.</p>
+               <p>Location: ${escapeHtml(payload.eventLocation)}<br/>Guests: ${payload.numberOfGuests}<br/>Preferred slots: ${escapeHtml(preferredSlots || "Not provided")}</p>
                <p>Our team will contact you shortly.</p>`
       });
     }
@@ -320,8 +327,8 @@ router.get("/", async (req: Request, res: Response) => {
       });
       if (intakeLeadCount > 0) {
         intakeMismatchWarning =
-          "Public form submissions are saved under a different caterer account than the one linked to your login. " +
-          "Sign in with the email that owns your lead intake account, or set LEAD_INTAKE_CATERER_ID to your caterer id in apps/api/.env.";
+          "Inquiries from your public booking page may be saved under a different account. " +
+          "Sign in with the email tied to your business, or contact support for help.";
       }
     }
 

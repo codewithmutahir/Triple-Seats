@@ -1,20 +1,7 @@
 "use client";
 
-import { formatInTimeZone } from "date-fns-tz";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
 import { CalendarCheck, DollarSign, Download, TrendingUp, Users } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
@@ -31,20 +18,29 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAppStore, type ReportsData } from "@/lib/stores/app-store";
+import { parseApiError } from "@/lib/user-facing-error";
 
-const NAVY = "#1B2A4A";
-const STATUS_COLORS = {
-  lead: "#f59e0b",
-  discussion: "#38bdf8",
-  booked: "#10b981",
-  completed: "#94a3b8"
-};
-const TYPE_COLORS = ["#1B2A4A", "#3d5a80", "#6b8cae", "#c4d4e0"];
+const ReportsBarCharts = dynamic(
+  () => import("./reports-charts").then((m) => m.ReportsBarCharts),
+  { ssr: false }
+);
+
+const ReportsTypePieChart = dynamic(
+  () => import("./reports-charts").then((m) => m.ReportsTypePieChart),
+  { ssr: false }
+);
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 0
+});
+
+const moneyDetail = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
 });
 
 const MONTHS = [
@@ -73,7 +69,22 @@ function yearOptions() {
 
 function formatDisplayDate(iso: string) {
   try {
-    return formatInTimeZone(iso, "UTC", "MMM d, yyyy");
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+function formatShortDate(iso: string) {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      day: "numeric",
+      month: "short"
+    }).format(new Date(iso));
   } catch {
     return iso;
   }
@@ -113,16 +124,16 @@ async function fetchReports(year: number, month: number): Promise<ReportsData | 
   const params = new URLSearchParams({ year: String(year), month: String(month) });
   const [summaryRes, timelineRes] = await Promise.all([
     fetch(`/api/reports/summary?${params}`, { credentials: "include" }),
-    fetch("/api/reports/events-timeline", { credentials: "include" })
+    fetch(`/api/reports/events-timeline?${params}`, { credentials: "include" })
   ]);
 
   if (!summaryRes.ok) {
     const body = (await summaryRes.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? summaryRes.statusText };
+    return { error: parseApiError(body, summaryRes.status, summaryRes.statusText) };
   }
   if (!timelineRes.ok) {
     const body = (await timelineRes.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? timelineRes.statusText };
+    return { error: parseApiError(body, timelineRes.status, timelineRes.statusText) };
   }
 
   const summary = await summaryRes.json();
@@ -255,7 +266,48 @@ export default function ReportsPage() {
       ...Object.entries(summary.events.byType).map(([k, v]) => [k, v]),
       [],
       ["Status", "Count"],
-      ...Object.entries(summary.events.byStatus).map(([k, v]) => [k, v])
+      ...Object.entries(summary.events.byStatus).map(([k, v]) => [k, v]),
+      [],
+      [
+        "Booking Date",
+        "Event Date",
+        "Status",
+        "Customer",
+        "Event ID",
+        "Phone",
+        "Email",
+        "Event",
+        "Location",
+        "Event Type",
+        "Food",
+        "Labor",
+        "Delivery",
+        "Equipment",
+        "Service Charges",
+        "Discount",
+        "Tax",
+        "Revenue"
+      ],
+      ...(summary.leadReports ?? []).map((row) => [
+        formatDisplayDate(row.bookingDate),
+        formatDisplayDate(row.eventDate),
+        row.status,
+        row.customerName,
+        row.displayEventId,
+        row.phone ?? "",
+        row.email ?? "",
+        row.eventTitle,
+        row.location,
+        row.eventType,
+        row.food,
+        row.labor,
+        row.delivery,
+        row.equipment,
+        row.serviceCharges,
+        row.discount,
+        row.tax,
+        row.revenue
+      ])
     ];
     const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -365,91 +417,22 @@ export default function ReportsPage() {
         ))}
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="font-heading text-lg text-[#1B2A4A]">
-            Revenue Last 6 Months
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <Skeleton className="h-[280px] w-full" />
-          ) : (
-            <div className="overflow-x-auto -mx-2 px-2">
-              <div className="min-w-[480px] h-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={revenueChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(v) => `$${(v as number) / 1000}k`}
-                    />
-                    <Tooltip
-                      formatter={(v) => money.format(v as number)}
-                      labelFormatter={(_, payload) => {
-                        const row = payload?.[0]?.payload as { fullMonth?: string } | undefined;
-                        return row?.fullMonth ?? "";
-                      }}
-                      content={({ active, payload }) => {
-                        if (!active || !payload?.length) return null;
-                        const row = payload[0].payload as { fullMonth: string; revenue: number };
-                        return (
-                          <div className="rounded-md border bg-white px-3 py-2 text-sm shadow-sm">
-                            {money.format(row.revenue)} in {row.fullMonth}
-                          </div>
-                        );
-                      }}
-                    />
-                    <Bar dataKey="revenue" fill={NAVY} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="font-heading text-lg text-[#1B2A4A]">
-            Event Pipeline (Last 6 Months)
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <Skeleton className="h-[280px] w-full" />
-          ) : (
-            <div className="overflow-x-auto -mx-2 px-2">
-              <div className="min-w-[480px] h-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={timeline} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="lead" stackId="a" fill={STATUS_COLORS.lead} name="Lead" />
-                    <Bar
-                      dataKey="discussion"
-                      stackId="a"
-                      fill={STATUS_COLORS.discussion}
-                      name="Discussion"
-                    />
-                    <Bar dataKey="booked" stackId="a" fill={STATUS_COLORS.booked} name="Booked" />
-                    <Bar
-                      dataKey="completed"
-                      stackId="a"
-                      fill={STATUS_COLORS.completed}
-                      name="Completed"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {loading ? (
+        <>
+          <Card>
+            <CardContent className="p-6">
+              <Skeleton className="h-[280px] w-full" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-6">
+              <Skeleton className="h-[280px] w-full" />
+            </CardContent>
+          </Card>
+        </>
+      ) : (
+        <ReportsBarCharts revenueChartData={revenueChartData} timeline={timeline} />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
@@ -460,36 +443,10 @@ export default function ReportsPage() {
             {loading ? (
               <Skeleton className="mx-auto h-[240px] w-[240px] rounded-full" />
             ) : (
-              <div className="relative mx-auto h-[240px] w-full max-w-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={typeChartData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={90}
-                      paddingAngle={2}
-                    >
-                      {typeChartData.map((_, i) => (
-                        <Cell key={i} fill={TYPE_COLORS[i % TYPE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div className="text-center">
-                    <p className="font-heading text-2xl font-semibold text-[#1B2A4A]">
-                      {totalEventsByType}
-                    </p>
-                    <p className="text-xs text-muted-foreground">events</p>
-                  </div>
-                </div>
-              </div>
+              <ReportsTypePieChart
+                typeChartData={typeChartData}
+                totalEventsByType={totalEventsByType}
+              />
             )}
           </CardContent>
         </Card>
@@ -535,7 +492,107 @@ export default function ReportsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="font-heading text-lg text-[#1B2A4A]">Recent Activity</CardTitle>
+          <CardTitle className="font-heading text-lg text-[#1B2A4A]">Reports per Lead</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Lead and quote breakdown for events in the selected month
+          </p>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {loading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Booking Date</TableHead>
+                  <TableHead>Event Date</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Event ID</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Event</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead>Event Type</TableHead>
+                  <TableHead className="text-right">Food</TableHead>
+                  <TableHead className="text-right">Labor</TableHead>
+                  <TableHead className="text-right">Delivery</TableHead>
+                  <TableHead className="text-right">Equipment</TableHead>
+                  <TableHead className="text-right">Service</TableHead>
+                  <TableHead className="text-right">Discount</TableHead>
+                  <TableHead className="text-right">Tax</TableHead>
+                  <TableHead className="text-right">Revenue</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {summary?.leadReports?.length ? (
+                  summary.leadReports.map((row) => (
+                    <TableRow key={row.eventId}>
+                      <TableCell className="whitespace-nowrap">
+                        {formatShortDate(row.bookingDate)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {formatShortDate(row.eventDate)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant(row.status)}>
+                          {statusLabel(row.status)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {row.customerName}
+                      </TableCell>
+                      <TableCell>{row.displayEventId}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.phone ?? "—"}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {row.email ? (
+                          <a href={`mailto:${row.email}`} className="text-[#1B2A4A] hover:underline">
+                            {row.email}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell>{row.eventTitle}</TableCell>
+                      <TableCell className="max-w-[140px] truncate">{row.location}</TableCell>
+                      <TableCell>{row.eventType}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.food)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.labor)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.delivery)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.equipment)}</TableCell>
+                      <TableCell className="text-right">
+                        {moneyDetail.format(row.serviceCharges)}
+                      </TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.discount)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.tax)}</TableCell>
+                      <TableCell className="text-right font-medium">
+                        {moneyDetail.format(row.revenue)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={18} className="text-center text-muted-foreground">
+                      No leads or events for this month
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-heading text-lg text-[#1B2A4A]">Recent Bookings</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Confirmed and completed events this month
+          </p>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {loading ? (
@@ -562,7 +619,7 @@ export default function ReportsPage() {
                       <TableCell className="font-medium">{row.guestName}</TableCell>
                       <TableCell>{row.eventType}</TableCell>
                       <TableCell>{formatDisplayDate(row.eventDate)}</TableCell>
-                      <TableCell className="text-right">{money.format(row.revenue)}</TableCell>
+                      <TableCell className="text-right">{moneyDetail.format(row.revenue)}</TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(row.status)}>
                           {statusLabel(row.status)}

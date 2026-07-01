@@ -2,39 +2,15 @@ import type { Prisma } from "@tripeseats/database";
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
+import { monthRange, previousMonthRange } from "../lib/date-ranges";
+import { breakdownQuoteLineItems } from "../lib/quote-breakdown";
+import { pickBestQuote } from "../lib/quote-pick";
 import { getSession, SessionError } from "../lib/session";
 
 const router = Router();
 
-type QuoteStatusValue = "draft" | "sent" | "accepted" | "declined";
-
-const QUOTE_STATUS_PRIORITY: Record<QuoteStatusValue, number> = {
-  accepted: 4,
-  sent: 3,
-  draft: 2,
-  declined: 1
-};
-
-type QuotePick = { id: string; totalAmount: number; status: QuoteStatusValue; updatedAt: Date };
-
 const EVENT_TYPES = ["Wedding", "Corporate", "Birthday", "Other"] as const;
 type EventTypeBucket = (typeof EVENT_TYPES)[number];
-
-function monthRange(year: number, month: number) {
-  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
-  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
-  return { start, end };
-}
-
-function pickBestQuote(quotes: QuotePick[]) {
-  const accepted = quotes.filter((q) => q.status === "accepted");
-  if (!accepted.length) return null;
-  return [...accepted].sort((a, b) => {
-    const byStatus = QUOTE_STATUS_PRIORITY[b.status] - QUOTE_STATUS_PRIORITY[a.status];
-    if (byStatus !== 0) return byStatus;
-    return b.updatedAt.getTime() - a.updatedAt.getTime();
-  })[0];
-}
 
 function categorizeEventType(title: string): EventTypeBucket {
   const t = title.toLowerCase();
@@ -69,6 +45,12 @@ function parseYearMonth(req: Request) {
   return { year, month };
 }
 
+function displayEventId(eventId: string) {
+  const digits = eventId.replace(/\D/g, "");
+  if (digits.length >= 4) return digits.slice(-4);
+  return eventId.slice(-6).toUpperCase();
+}
+
 async function revenueForEvents(
   catererId: string,
   where: Prisma.EventWhereInput
@@ -92,9 +74,7 @@ router.get("/summary", async (req: Request, res: Response) => {
     const { year, month } = parseYearMonth(req);
 
     const { start: thisStart, end: thisEnd } = monthRange(year, month);
-    const prevMonth = month === 1 ? 12 : month - 1;
-    const prevYear = month === 1 ? year - 1 : year;
-    const { start: lastStart, end: lastEnd } = monthRange(prevYear, prevMonth);
+    const { start: lastStart, end: lastEnd } = previousMonthRange(year, month);
 
     const [
       allEvents,
@@ -103,7 +83,7 @@ router.get("/summary", async (req: Request, res: Response) => {
       leadsTotal,
       leadsThisMonth,
       bookedCount,
-      recentEvents
+      monthEvents
     ] = await Promise.all([
       prisma.event.findMany({
         where: { catererId },
@@ -121,13 +101,37 @@ router.get("/summary", async (req: Request, res: Response) => {
       }),
       prisma.event.count({ where: { catererId, status: { in: ["booked", "completed"] } } }),
       prisma.event.findMany({
-        where: { catererId, status: { in: ["booked", "completed"] } },
-        orderBy: { eventDate: "desc" },
-        take: 10,
+        where: { catererId, eventDate: { gte: thisStart, lte: thisEnd } },
+        orderBy: [{ eventDate: "desc" }, { createdAt: "desc" }],
         include: {
           primaryGuest: true,
+          lead: {
+            select: {
+              id: true,
+              contactEmail: true,
+              createdAt: true,
+              title: true
+            }
+          },
           quotes: {
-            select: { id: true, totalAmount: true, status: true, updatedAt: true }
+            select: {
+              id: true,
+              totalAmount: true,
+              status: true,
+              updatedAt: true,
+              taxRate: true,
+              lineItems: {
+                select: {
+                  category: true,
+                  name: true,
+                  unitPrice: true,
+                  quantity: true,
+                  unitType: true,
+                  appliedTier: true
+                }
+              }
+            },
+            orderBy: { updatedAt: "desc" }
           }
         }
       })
@@ -154,11 +158,11 @@ router.get("/summary", async (req: Request, res: Response) => {
     ]);
 
     const topMonths: Array<{ month: string; revenue: number; events: number }> = [];
-    const now = new Date();
+    const anchor = new Date(year, month - 1, 1);
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      const y = d.getUTCFullYear();
-      const m = d.getUTCMonth() + 1;
+      const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
       const { start, end } = monthRange(y, m);
       const [rev, evCount] = await Promise.all([
         revenueForEvents(catererId, { eventDate: { gte: start, lte: end } }),
@@ -168,24 +172,66 @@ router.get("/summary", async (req: Request, res: Response) => {
       ]);
       const label = new Intl.DateTimeFormat("en-US", {
         month: "short",
-        year: "numeric",
-        timeZone: "UTC"
+        year: "numeric"
       }).format(start);
       topMonths.push({ month: label, revenue: rev, events: evCount });
     }
 
-    const recentActivity = recentEvents.map((ev) => {
-      const g = ev.primaryGuest;
-      const guestName = g ? [g.firstName, g.lastName].filter(Boolean).join(" ") : "—";
+    const leadReports = monthEvents.map((ev) => {
+      const guest = ev.primaryGuest;
+      const guestName = guest
+        ? [guest.firstName, guest.lastName].filter(Boolean).join(" ")
+        : "—";
+      const email = guest?.email ?? ev.lead?.contactEmail ?? null;
+      const phone = guest?.phone ?? null;
       const quote = pickBestQuote(ev.quotes);
+      const guestCount = ev.guestCountEstimate ?? 0;
+      const breakdown = quote
+        ? breakdownQuoteLineItems(quote.lineItems, quote.taxRate, guestCount)
+        : {
+            food: 0,
+            labor: 0,
+            delivery: 0,
+            equipment: 0,
+            serviceCharges: 0,
+            discount: 0,
+            tax: 0,
+            total: 0
+          };
+
       return {
-        guestName,
-        eventType: ev.title,
+        eventId: ev.id,
+        displayEventId: displayEventId(ev.id),
+        bookingDate: (ev.lead?.createdAt ?? ev.createdAt).toISOString(),
         eventDate: ev.eventDate.toISOString(),
-        revenue: quote?.totalAmount ?? 0,
-        status: ev.status
+        status: ev.status,
+        customerName: guestName,
+        phone,
+        email,
+        eventTitle: ev.title,
+        location: ev.venueAddress ?? ev.venueName ?? "—",
+        eventType: categorizeEventType(ev.title),
+        food: breakdown.food,
+        labor: breakdown.labor,
+        delivery: breakdown.delivery,
+        equipment: breakdown.equipment,
+        serviceCharges: breakdown.serviceCharges,
+        discount: breakdown.discount,
+        tax: breakdown.tax,
+        revenue: quote?.totalAmount ?? breakdown.total
       };
     });
+
+    const recentActivity = leadReports
+      .filter((row) => row.status === "booked" || row.status === "completed")
+      .slice(0, 10)
+      .map((row) => ({
+        guestName: row.customerName,
+        eventType: row.eventTitle,
+        eventDate: row.eventDate,
+        revenue: row.revenue,
+        status: row.status
+      }));
 
     const conversionRate =
       allEvents.length === 0 ? 0 : Math.round((bookedCount / allEvents.length) * 100);
@@ -210,7 +256,8 @@ router.get("/summary", async (req: Request, res: Response) => {
         conversionRate
       },
       topMonths,
-      recentActivity
+      recentActivity,
+      leadReports
     });
   } catch (e) {
     return handleSessionError(res, e);
@@ -218,11 +265,13 @@ router.get("/summary", async (req: Request, res: Response) => {
 });
 
 /** Authenticated: last 6 months event counts by status for pipeline chart */
-router.get("/events-timeline", async (_req: Request, res: Response) => {
+router.get("/events-timeline", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(_req);
+    const { caterer } = await getSession(req);
     const catererId = caterer.id;
-    const now = new Date();
+    const { year, month } = parseYearMonth(req);
+    const anchor = new Date(year, month - 1, 1);
+
     const timeline: Array<{
       month: string;
       lead: number;
@@ -232,14 +281,11 @@ router.get("/events-timeline", async (_req: Request, res: Response) => {
     }> = [];
 
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      const y = d.getUTCFullYear();
-      const m = d.getUTCMonth() + 1;
+      const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
       const { start, end } = monthRange(y, m);
-      const monthLabel = new Intl.DateTimeFormat("en-US", {
-        month: "short",
-        timeZone: "UTC"
-      }).format(start);
+      const monthLabel = new Intl.DateTimeFormat("en-US", { month: "short" }).format(start);
 
       const [lead, discussion, booked, completed] = await Promise.all([
         prisma.event.count({

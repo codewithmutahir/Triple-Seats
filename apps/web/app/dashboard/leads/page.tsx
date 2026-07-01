@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type LeadsListResponse } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { tenantUrls } from "@/lib/tenant-host";
+import { parseApiError } from "@/lib/user-facing-error";
 
 type ListResponse = LeadsListResponse;
 
@@ -56,9 +58,19 @@ async function fetchLeads(params: URLSearchParams): Promise<ListResponse | { err
   const res = await fetch(`/api/leads?${params.toString()}`, { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText, status: res.status };
+    return { error: parseApiError(body, res.status, res.statusText), status: res.status };
   }
   return (await res.json()) as ListResponse;
+}
+
+type CatererProfile = {
+  slug: string;
+  bookUrl: string | null;
+};
+
+function resolveBookUrl(profile: CatererProfile | null): string | null {
+  if (!profile?.slug) return profile?.bookUrl ?? null;
+  return profile.bookUrl ?? tenantUrls(profile.slug).bookUrl;
 }
 
 export default function LeadsPage() {
@@ -89,6 +101,21 @@ export default function LeadsPage() {
   const [intakeWarning, setIntakeWarning] = useState<string | null>(
     () => useAppStore.getState().peekLeadsCache(cacheKey)?.intakeMismatchWarning ?? null
   );
+  const [bookUrl, setBookUrl] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/dashboard/profile", { credentials: "include" });
+      if (!res.ok || cancelled) return;
+      const profile = (await res.json()) as CatererProfile;
+      if (!cancelled) setBookUrl(resolveBookUrl(profile));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
@@ -184,12 +211,13 @@ export default function LeadsPage() {
   }
 
   async function copyLeadFormLink() {
-    const url = typeof window !== "undefined" ? `${window.location.origin}/` : "";
+    if (!bookUrl) return;
     try {
-      await navigator.clipboard.writeText(url);
-      alert("Lead form link copied to clipboard.");
+      await navigator.clipboard.writeText(bookUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
     } catch {
-      alert(`Copy this link: ${url}`);
+      setLinkCopied(false);
     }
   }
 
@@ -304,9 +332,9 @@ export default function LeadsPage() {
                 <p className="mt-3 max-w-md text-sm text-amber-800">{intakeWarning}</p>
               ) : null}
             </div>
-            <Button type="button" onClick={copyLeadFormLink}>
+            <Button type="button" onClick={() => void copyLeadFormLink()} disabled={!bookUrl}>
               <Share2 className="mr-2 h-4 w-4" />
-              Share your lead form link
+              {linkCopied ? "Copied!" : "Share your lead form link"}
             </Button>
           </CardContent>
         </Card>

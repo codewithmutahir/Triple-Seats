@@ -188,6 +188,27 @@ export type ReportsSummary = {
     revenue: number;
     status: string;
   }>;
+  leadReports: Array<{
+    eventId: string;
+    displayEventId: string;
+    bookingDate: string;
+    eventDate: string;
+    status: string;
+    customerName: string;
+    phone: string | null;
+    email: string | null;
+    eventTitle: string;
+    location: string;
+    eventType: string;
+    food: number;
+    labor: number;
+    delivery: number;
+    equipment: number;
+    serviceCharges: number;
+    discount: number;
+    tax: number;
+    revenue: number;
+  }>;
 };
 
 export type ReportsTimeline = Array<{

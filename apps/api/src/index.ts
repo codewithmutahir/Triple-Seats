@@ -6,14 +6,20 @@ import cors from "cors";
 import express from "express";
 
 import { auth } from "./lib/auth";
-import { allowedWebOrigins } from "./lib/origins";
+import { ensureCatererSlugSchema } from "./lib/ensure-caterer-slug-schema";
+import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-schema";
+import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { getResend } from "./lib/mail";
+import { leadSubmitLimiter } from "./lib/rate-limit";
 import { bookingsRouter } from "./routes/bookings";
 import { calendarRouter } from "./routes/calendar";
+import { caterersRouter } from "./routes/caterers";
 import { dashboardRouter } from "./routes/dashboard";
 import { eventsRouter } from "./routes/events";
 import { leadsRouter } from "./routes/leads";
 import { messagesRouter } from "./routes/messages";
+import { menuItemsRouter } from "./routes/menu-items";
+import { packagesRouter } from "./routes/packages";
 import { quotesRouter } from "./routes/quotes";
 import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
@@ -21,11 +27,14 @@ import { tasksRouter } from "./routes/tasks";
 function createApp() {
   const app = express();
 
-  const corsOrigins = allowedWebOrigins();
   app.use(
     cors({
       origin(origin, callback) {
-        if (!origin || corsOrigins.includes(origin)) {
+        if (!origin || isAllowedWebOrigin(origin)) {
+          callback(null, true);
+          return;
+        }
+        if (process.env.NODE_ENV !== "production" && allowedWebOrigins().includes(origin)) {
           callback(null, true);
           return;
         }
@@ -34,25 +43,26 @@ function createApp() {
       credentials: true
     })
   );
-  app.use(express.json());
+  app.use(express.json({ limit: "256kb" }));
 
   app.use("/api/auth", toNodeHandler(auth));
+  app.use("/api/caterers", caterersRouter);
   app.use("/api/dashboard", dashboardRouter);
   app.use("/api/bookings", bookingsRouter);
   app.use("/api/calendar", calendarRouter);
   app.use("/api/events", eventsRouter);
-  app.use("/api/leads", leadsRouter);
+  app.use("/api/leads", leadSubmitLimiter, leadsRouter);
   app.use("/api/messages", messagesRouter);
+  app.use("/api/menu-items", menuItemsRouter);
+  app.use("/api/packages", packagesRouter);
   app.use("/api/quotes", quotesRouter);
   app.use("/api/reports", reportsRouter);
   app.use("/api/tasks", tasksRouter);
 
-  /** Process is up — used by `apps/web/scripts/wait-for-api.mjs` (no DB). */
   app.get("/health/live", (_req, res) => {
     res.json({ ok: true, service: "api" });
   });
 
-  /** DB connectivity — for monitoring / deploy readiness. */
   app.get("/health", async (_req, res) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
@@ -76,11 +86,16 @@ async function start() {
   }
 
   await connectDB();
+  await ensureCatererSlugSchema();
+  await ensureCateringPackagesSchema();
 
   const app = createApp();
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`API running on port ${port}`);
   });
+  server.setTimeout(120_000);
+  server.requestTimeout = 120_000;
+  server.headersTimeout = 125_000;
 }
 
 start().catch((err) => {

@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type Conversation, type DiscussionThread } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { parseApiError } from "@/lib/user-facing-error";
 
 type EventThreadMeta = DiscussionThread["event"];
 type Message = DiscussionThread["messages"][number];
@@ -62,7 +63,7 @@ async function fetchConversations(): Promise<{ conversations: Conversation[] } |
   const res = await fetch("/api/messages/conversations", { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText };
+    return { error: parseApiError(body, res.status, res.statusText) };
   }
   return (await res.json()) as { conversations: Conversation[] };
 }
@@ -75,7 +76,7 @@ async function fetchThread(
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText };
+    return { error: parseApiError(body, res.status, res.statusText) };
   }
   return (await res.json()) as { event: EventThreadMeta; messages: Message[] };
 }
@@ -299,7 +300,7 @@ function DiscussionsInner() {
         })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; message?: Message };
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.message) {
         setMessages((prev) => [...prev, body.message!]);
         setComposerText("");

@@ -42,6 +42,7 @@ import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { parseApiError } from "@/lib/user-facing-error";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -67,7 +68,7 @@ async function fetchEventsList(
   const res = await fetch(`/api/leads?${params.toString()}`, { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText };
+    return { error: parseApiError(body, res.status, res.statusText) };
   }
   return (await res.json()) as EventsListResponse;
 }
@@ -76,7 +77,7 @@ async function fetchEventsStats(): Promise<EventsStats | { error: string }> {
   const res = await fetch("/api/events/stats", { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: body?.error ?? res.statusText };
+    return { error: parseApiError(body, res.status, res.statusText) };
   }
   return (await res.json()) as EventsStats;
 }
@@ -162,7 +163,7 @@ function daysUntilLabel(iso: string): string {
 async function fetchEvent(id: string): Promise<{ event: EventDetailPayload } | { error: string; status: number }> {
   const res = await fetch(`/api/events/${encodeURIComponent(id)}`, { credentials: "include" });
   const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-  if (!res.ok) return { error: body.error ?? res.statusText, status: res.status };
+  if (!res.ok) return { error: parseApiError(body, res.status, res.statusText), status: res.status };
   if (!body.event) return { error: "Invalid response", status: 500 };
   return { event: body.event };
 }
@@ -505,7 +506,7 @@ function EventDetailInner() {
         body: JSON.stringify({ status: next })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.event) setEvent(body.event);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update status");
@@ -526,7 +527,7 @@ function EventDetailInner() {
         body: JSON.stringify({ notes: additionalNotes })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.event) setEvent(body.event);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save notes");
@@ -555,7 +556,7 @@ function EventDetailInner() {
         })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.event) setEvent(body.event);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save guest");
@@ -573,7 +574,7 @@ function EventDetailInner() {
         body: JSON.stringify({ eventId, title: newTaskTitle.trim() })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; task?: TaskPayload };
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.task && event) {
         setEvent({ ...event, tasks: [...event.tasks, body.task] });
         setNewTaskTitle("");
@@ -597,7 +598,7 @@ function EventDetailInner() {
         body: JSON.stringify({ status: completed ? "completed" : "pending" })
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; task?: TaskPayload };
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.task && event) {
         setEvent({
           ...event,
@@ -617,7 +618,7 @@ function EventDetailInner() {
       });
       if (!res.ok && res.status !== 204) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? res.statusText);
+        throw new Error(parseApiError(body, res.status, res.statusText));
       }
       if (event) setEvent({ ...event, tasks: event.tasks.filter((t) => t.id !== id) });
     } catch (e) {
