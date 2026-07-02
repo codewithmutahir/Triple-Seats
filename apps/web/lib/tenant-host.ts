@@ -1,9 +1,9 @@
-/** Request header set by middleware when the host is a tenant subdomain. */
+/** Request header set by middleware when the host is a tenant subdomain (legacy redirect). */
 export const TENANT_HEADER = "x-tenant-slug";
 
 const RESERVED = new Set(["www", "api", "app", "admin", "mail", "smtp"]);
 
-/** Root domain without protocol, e.g. `caterpro.com` or `localhost` for dev subdomains. */
+/** Root domain without protocol, e.g. `tripleseat.example.com` or `localhost` for dev. */
 export function getRootDomain(): string | null {
   const env = process.env.NEXT_PUBLIC_ROOT_DOMAIN?.trim().toLowerCase();
   if (env) return env.split(":")[0]!;
@@ -11,11 +11,45 @@ export function getRootDomain(): string | null {
   return null;
 }
 
+/** Public web app origin (apex) — not per-caterer subdomains. */
+export function getAppOrigin(): string | null {
+  const root = getRootDomain();
+  if (!root) return null;
+
+  const protocol = process.env.NODE_ENV === "production" ? "https" : "http";
+  const port =
+    process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEV_PORT
+      ? `:${process.env.NEXT_PUBLIC_DEV_PORT}`
+      : process.env.NODE_ENV !== "production" && root === "localhost"
+        ? ":3000"
+        : "";
+
+  return `${protocol}://${root}${port}`;
+}
+
+/** Slug segment for `/book/[slug]` — mirrors API reserved slugs. */
+export function isPublicBookSlug(slug: string): boolean {
+  if (!slug || slug.length < 2 || slug.length > 48) return false;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return false;
+  const reserved = new Set([
+    "admin",
+    "api",
+    "app",
+    "auth",
+    "book",
+    "c",
+    "dashboard",
+    "health",
+    "login",
+    "register",
+    "www"
+  ]);
+  return !reserved.has(slug);
+}
+
 /**
- * Extracts tenant slug from host.
+ * Extracts tenant slug from host (legacy subdomain URLs).
  * `royaltaj.caterpro.com` → `royaltaj`
- * `caterpro.com` / `www.caterpro.com` → null (apex)
- * `royaltaj.localhost:3000` → `royaltaj` (local dev)
  */
 export function getTenantSlugFromHost(host: string): string | null {
   const rootHost = getRootDomain();
@@ -39,25 +73,17 @@ export function getTenantSlugFromHost(host: string): string | null {
   return sub;
 }
 
-/** Builds public URLs for a caterer on their subdomain. */
+/** Builds public URLs for a caterer (path-based booking on the app host). */
 export function tenantUrls(slug: string) {
-  const root = getRootDomain();
-  if (!root) {
+  const origin = getAppOrigin();
+  if (!origin) {
     return { bookUrl: null as string | null, dashboardUrl: null as string | null, origin: null as string | null };
   }
 
-  const protocol = process.env.NODE_ENV === "production" ? "https" : "http";
-  const port =
-    process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DEV_PORT
-      ? `:${process.env.NEXT_PUBLIC_DEV_PORT}`
-      : process.env.NODE_ENV !== "production" && root === "localhost"
-        ? ":3000"
-        : "";
-
-  const origin = `${protocol}://${slug}.${root}${port}`;
+  const encoded = encodeURIComponent(slug);
   return {
     origin,
-    bookUrl: `${origin}/book`,
+    bookUrl: `${origin}/book/${encoded}`,
     dashboardUrl: `${origin}/dashboard`
   };
 }

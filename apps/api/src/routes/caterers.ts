@@ -40,21 +40,16 @@ export const caterersRouter = router;
 export async function getCatererPublicProfile(caterer: { id: string; name: string; slug: string | null }) {
   const row = await ensureCatererSlug(caterer);
   const slug = row.slug!;
-  const rootDomain = process.env.PUBLIC_ROOT_DOMAIN?.trim();
+  const webOrigin = process.env.WEB_ORIGIN?.trim().replace(/\/+$/, "");
 
-  if (!rootDomain) {
+  if (!webOrigin) {
     return { name: row.name, slug, bookUrl: null as string | null, dashboardUrl: null as string | null };
   }
-
-  const protocol = process.env.NODE_ENV === "production" ? "https" : "http";
-  const port =
-    process.env.NODE_ENV !== "production" && rootDomain === "localhost" ? ":3000" : "";
-  const origin = `${protocol}://${slug}.${rootDomain}${port}`;
 
   return {
     name: row.name,
     slug,
-    bookUrl: `${origin}/book`,
-    dashboardUrl: `${origin}/dashboard`
+    bookUrl: `${webOrigin}/book/${encodeURIComponent(slug)}`,
+    dashboardUrl: `${webOrigin}/dashboard`
   };
 }
