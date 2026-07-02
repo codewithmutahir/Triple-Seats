@@ -70,7 +70,7 @@ type CatererProfile = {
 
 function resolveBookUrl(profile: CatererProfile | null): string | null {
   if (!profile?.slug) return profile?.bookUrl ?? null;
-  return profile.bookUrl ?? tenantUrls(profile.slug).bookUrl;
+  return tenantUrls(profile.slug).bookUrl ?? profile.bookUrl;
 }
 
 export default function LeadsPage() {
