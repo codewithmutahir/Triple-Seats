@@ -136,7 +136,7 @@ Hostinger is fine for the Express API; **deploy Next.js to Vercel** instead of f
 | `BETTER_AUTH_URL` | `https://your-project.vercel.app` |
 | `PUBLIC_ROOT_DOMAIN` | `your-project.vercel.app` |
 
-Restart the API app in hPanel. Tenant subdomains (`slug.yourdomain.com`) need a custom domain + wildcard DNS on Vercel later.
+Restart the API app in hPanel. Public booking links use **`/book/[slug]`** on your app domain (e.g. `https://tripleseat.hussaincatering.com/book/royaltaj`) — no wildcard DNS required.
 
 
 ## Useful scripts
@@ -171,7 +171,7 @@ Deploy with `hosting_createNodeJSBuildFromArchiveV1` using `tripeseats-api-hosti
 ### Infrastructure (Hostinger MCP)
 
 - `hosting_listWebsitesV1` — confirm API and web sites exist (create with `hosting_createWebsiteV1` if needed)
-- Domains MCP — wildcard DNS for tenant subdomains (`*.yourdomain.com`)
+- Domains MCP — apex + `tripleseat` CNAME to Vercel (wildcard not required for `/book/[slug]` links)
 - `pnpm db:migrate:deploy` against production Postgres (Supabase)
 
 ### Smoke tests before go-live

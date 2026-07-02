@@ -28,12 +28,12 @@ export default function HomePage() {
           Catering business software
         </p>
         <h1 className="font-heading max-w-2xl text-4xl font-semibold leading-tight sm:text-5xl">
-          Run your catering business on your own subdomain
+          Run your catering business on one platform
         </h1>
         <p className="mt-6 max-w-xl text-lg text-white/80">
-          Each caterer gets a branded booking page like{" "}
-          <span className="font-mono text-white">royaltaj.caterpro.com/book</span> and a private
-          dashboard — all on one platform.
+          Each caterer gets a branded booking link like{" "}
+          <span className="font-mono text-white">tripleseat.example.com/book/your-name</span> and a
+          private dashboard.
         </p>
         <div className="mt-10 flex flex-wrap gap-4">
           <Button asChild size="lg" className="bg-white text-[#1B2A4A] hover:bg-white/90">
