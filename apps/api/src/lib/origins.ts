@@ -10,8 +10,15 @@ export function allowedWebOrigins(): string[] {
     origins.push("http://localhost:3000", "http://127.0.0.1:3000");
   }
 
-  const web = process.env.WEB_ORIGIN?.trim();
-  if (web) origins.push(web.replace(/\/+$/, ""));
+  for (const raw of [process.env.WEB_ORIGIN, process.env.BETTER_AUTH_URL]) {
+    const trimmed = raw?.trim().replace(/\/+$/, "");
+    if (trimmed) origins.push(trimmed);
+  }
+
+  const root = process.env.PUBLIC_ROOT_DOMAIN?.trim().toLowerCase().split(":")[0];
+  if (root && process.env.NODE_ENV === "production") {
+    origins.push(`https://${root}`, `https://www.${root}`);
+  }
 
   const extras =
     process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",")

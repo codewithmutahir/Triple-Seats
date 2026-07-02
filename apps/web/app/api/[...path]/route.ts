@@ -4,6 +4,23 @@ import { NextRequest, NextResponse } from "next/server";
 const apiOrigin = () =>
   (process.env.INTERNAL_API_URL ?? "http://127.0.0.1:4000").replace(/\/+$/, "");
 
+/** Drop stale Domain= on auth cookies when API env still points at an old host. */
+function rewriteSetCookieForProxy(setCookie: string, requestHost: string | null): string {
+  const hostname = requestHost?.split(":")[0]?.toLowerCase();
+  if (!hostname) return setCookie;
+
+  const parts = setCookie.split(";").map((p) => p.trim());
+  const domainPart = parts.find((p) => p.toLowerCase().startsWith("domain="));
+  if (!domainPart) return setCookie;
+
+  const domain = domainPart.slice(7).trim().replace(/^\./, "").toLowerCase();
+  if (hostname === domain || hostname.endsWith(`.${domain}`)) {
+    return setCookie;
+  }
+
+  return parts.filter((p) => !p.toLowerCase().startsWith("domain=")).join("; ");
+}
+
 function buildCookieHeader(): string | undefined {
   const fromHeaders = headers().get("cookie")?.trim();
   if (fromHeaders) return fromHeaders;
@@ -25,6 +42,16 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   if (accept) forwardHeaders.set("accept", accept);
   const contentType = req.headers.get("content-type");
   if (contentType) forwardHeaders.set("content-type", contentType);
+  const origin = req.headers.get("origin");
+  if (origin) forwardHeaders.set("origin", origin);
+  const referer = req.headers.get("referer");
+  if (referer) forwardHeaders.set("referer", referer);
+  const host = req.headers.get("host");
+  if (host) {
+    forwardHeaders.set("x-forwarded-host", host);
+    forwardHeaders.set("host", host);
+  }
+  forwardHeaders.set("x-forwarded-proto", req.nextUrl.protocol.replace(":", ""));
   const cookieHeader = buildCookieHeader();
   if (cookieHeader) forwardHeaders.set("cookie", cookieHeader);
 
@@ -72,9 +99,12 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   clearTimeout(timeoutId);
 
   const responseHeaders = new Headers();
+  const requestHost = req.headers.get("host");
+  const isAuthPath = path.startsWith("auth/");
 
   for (const cookie of res.headers.getSetCookie()) {
-    responseHeaders.append("set-cookie", cookie);
+    const value = isAuthPath ? rewriteSetCookieForProxy(cookie, requestHost) : cookie;
+    responseHeaders.append("set-cookie", value);
   }
 
   const contentTypeRes = res.headers.get("content-type");

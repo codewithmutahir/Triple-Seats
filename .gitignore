@@ -21,3 +21,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Hostinger deploy artifacts (local only)
+tripeseats-*-hostinger*.zip
+hostinger-env-*.env
+deploy/
