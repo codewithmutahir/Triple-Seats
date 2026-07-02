@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm --filter @tripeseats/database build && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:patch-slug": "tsx src/scripts/apply-caterer-slug-migration.ts",
     "lint": "echo \"No lint configured for api\"",

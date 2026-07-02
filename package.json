@@ -2,19 +2,32 @@
   "name": "tripeseats-monorepo",
   "private": true,
   "packageManager": "pnpm@9.12.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma", "esbuild"]
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "start": "pnpm --filter api start",
+    "hostinger:build": "npx prisma generate --schema packages/database/prisma/schema.prisma && npx tsc -p packages/database/tsconfig.json && npx tsc -p apps/api/tsconfig.json",
+    "hostinger:archive": "powershell -ExecutionPolicy Bypass -File scripts/hostinger-api-archive.ps1",
+    "hostinger:archive:web": "powershell -ExecutionPolicy Bypass -File scripts/hostinger-web-archive.ps1",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "db:generate": "pnpm --filter @tripeseats/database prisma generate",
     "db:migrate": "pnpm --filter @tripeseats/database prisma migrate dev",
+    "db:migrate:deploy": "pnpm --filter @tripeseats/database prisma migrate deploy",
     "db:push": "pnpm --filter @tripeseats/database prisma db push",
     "db:push:pooler": "node packages/database/scripts/push-via-pooler.mjs",
     "db:patch-slug": "pnpm --filter api db:patch-slug"
   },
   "devDependencies": {
+    "axios": "^1.18.1",
     "turbo": "^2.1.2",
+    "tus-js-client": "^4.3.1",
     "typescript": "^5.6.3"
   }
 }

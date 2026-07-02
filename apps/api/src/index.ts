@@ -26,6 +26,7 @@ import { tasksRouter } from "./routes/tasks";
 
 function createApp() {
   const app = express();
+  app.set("trust proxy", 1);
 
   app.use(
     cors({
@@ -77,7 +78,8 @@ function createApp() {
 }
 
 async function start() {
-  const port = Number(process.env.API_PORT ?? 4000);
+  const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
+  const host = process.env.HOST ?? "0.0.0.0";
   const resend = getResend();
   if (resend) {
     console.log("Resend: API key loaded (transactional + Better Auth emails).");
@@ -85,17 +87,22 @@ async function start() {
     console.warn("Resend: RESEND_API_KEY missing — lead emails and auth emails disabled.");
   }
 
-  await connectDB();
-  await ensureCatererSlugSchema();
-  await ensureCateringPackagesSchema();
-
   const app = createApp();
-  const server = app.listen(port, () => {
-    console.log(`API running on port ${port}`);
+  const server = app.listen(port, host, () => {
+    console.log(`API running on ${host}:${port}`);
   });
   server.setTimeout(120_000);
   server.requestTimeout = 120_000;
   server.headersTimeout = 125_000;
+
+  try {
+    await connectDB();
+    await ensureCatererSlugSchema();
+    await ensureCateringPackagesSchema();
+    console.log("[db] Schema checks complete");
+  } catch (err) {
+    console.error("[db] Startup schema/connect failed — API still listening for /health/live:", err);
+  }
 }
 
 start().catch((err) => {
