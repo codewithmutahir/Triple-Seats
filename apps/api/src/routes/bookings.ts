@@ -4,6 +4,7 @@ import { Router, type Request, type Response } from "express";
 
 import { monthRange, monthRangeFromDate } from "../lib/date-ranges";
 import { eventTypeTitle } from "../lib/event-customer-types";
+import { parsePagination } from "../lib/pagination";
 import { pickBestQuote } from "../lib/quote-pick";
 import { getSession, SessionError } from "../lib/session";
 import { timer } from "../lib/perf";
@@ -89,9 +90,7 @@ router.get("/", async (req: Request, res: Response) => {
 
     const catererId = caterer.id;
 
-    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
-    const pageSize = 20;
-    const offset = (page - 1) * pageSize;
+    const { page, pageSize, offset } = parsePagination(req.query as Record<string, unknown>);
     const statusParam = String(req.query.status ?? "all").toLowerCase() as BookingStatusFilter;
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const monthParam = parseInt(String(req.query.month ?? ""), 10);

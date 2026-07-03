@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
+import { ListPagination } from "@/components/dashboard/list-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -77,7 +78,7 @@ async function fetchTaskStats(): Promise<TasksStats | { error: string }> {
 }
 
 async function fetchEventOptions(): Promise<EventOption[]> {
-  const res = await fetch("/api/leads?page=1&status=all", { credentials: "include" });
+  const res = await fetch("/api/leads?page=1&status=all&pageSize=100", { credentials: "include" });
   if (!res.ok) return [];
   const body = (await res.json()) as {
     items: Array<{ id: string; eventType: string; eventDate: string }>;
@@ -97,6 +98,7 @@ export default function TasksPage() {
   const [searchDebounced, setSearchDebounced] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [eventFilter, setEventFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
   const [eventOptions, setEventOptions] = useState<EventOption[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [newEventId, setNewEventId] = useState<string>("none");
@@ -106,12 +108,26 @@ export default function TasksPage() {
   const cacheKey = JSON.stringify({
     status,
     search: searchDebounced,
-    eventId: eventFilter === "all" ? undefined : eventFilter
+    eventId: eventFilter === "all" ? undefined : eventFilter,
+    page
   });
 
   const [tasks, setTasks] = useState<TaskItem[]>(
     () => useAppStore.getState().peekTasksCache(cacheKey)?.items ?? []
   );
+  const [listMeta, setListMeta] = useState<Pick<
+    TasksListResponse,
+    "total" | "page" | "pageSize" | "totalPages"
+  > | null>(() => {
+    const cached = useAppStore.getState().peekTasksCache(cacheKey);
+    if (!cached) return null;
+    return {
+      total: cached.total,
+      page: cached.page,
+      pageSize: cached.pageSize,
+      totalPages: cached.totalPages
+    };
+  });
   const [stats, setStats] = useState<TasksStats | null>(() =>
     useAppStore.getState().peekTasksStats()
   );
@@ -138,11 +154,12 @@ export default function TasksPage() {
 
   const queryParams = useMemo(() => {
     const p = new URLSearchParams();
+    p.set("page", String(page));
     p.set("status", status);
     if (searchDebounced) p.set("search", searchDebounced);
     if (eventFilter !== "all") p.set("eventId", eventFilter);
     return p;
-  }, [status, searchDebounced, eventFilter]);
+  }, [page, status, searchDebounced, eventFilter]);
 
   const load = useCallback(async () => {
     const store = useAppStore.getState();
@@ -162,6 +179,12 @@ export default function TasksPage() {
         },
         onData: (result) => {
           setTasks(result.items);
+          setListMeta({
+            total: result.total,
+            page: result.page,
+            pageSize: result.pageSize,
+            totalPages: result.totalPages
+          });
           perfRef.current?.step("fetch:done");
         },
         setLoading,
@@ -187,6 +210,10 @@ export default function TasksPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [status, searchDebounced, eventFilter]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading) return;
@@ -403,7 +430,7 @@ export default function TasksPage() {
     }
   }
 
-  const empty = !loading && tasks.length === 0;
+  const empty = !loading && listMeta?.total === 0;
 
   function TaskCard({ task, completed = false }: { task: TaskItem; completed?: boolean }) {
     const badge = formatEventBadge(task.event);
@@ -463,7 +490,12 @@ export default function TasksPage() {
           <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">
             Tasks
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage your operational to-dos</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage your operational to-dos
+            {listMeta && !loading ? (
+              <span className="text-foreground/80"> · {listMeta.total} total</span>
+            ) : null}
+          </p>
         </div>
         {refreshing ? <RefreshingBadge /> : null}
       </header>
@@ -617,11 +649,11 @@ export default function TasksPage() {
                       <ChevronRight className="h-4 w-4" />
                     )}
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Completed ({completedTasks.length})
+                      Completed on this page ({completedTasks.length})
                     </span>
                   </Button>
                 </CollapsibleTrigger>
-                {completedOpen ? (
+                {completedOpen && status !== "completed" ? (
                   <Button
                     type="button"
                     variant="ghost"
@@ -639,6 +671,18 @@ export default function TasksPage() {
                 ))}
               </CollapsibleContent>
             </Collapsible>
+          ) : null}
+
+          {listMeta ? (
+            <ListPagination
+              page={listMeta.page}
+              totalPages={listMeta.totalPages}
+              total={listMeta.total}
+              pageSize={listMeta.pageSize}
+              itemLabel="task"
+              loading={loading}
+              onPageChange={setPage}
+            />
           ) : null}
         </div>
       )}

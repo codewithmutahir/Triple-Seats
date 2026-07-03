@@ -1,0 +1,16 @@
+---
+description: Next.js App Router conventions
+globs: apps/web/app/**/*.tsx,apps/web/app/**/*.ts,apps/web/components/**/*.tsx
+alwaysApply: false
+---
+
+# Next.js (App Router) Conventions
+
+- Default to Server Components; add `"use client"` only when the component genuinely needs interactivity, browser APIs, or hooks like `useState`/`useEffect`.
+- Data fetching happens in Server Components/route handlers where possible — don't fetch client-side if it can be done server-side and passed down as props.
+- Use the `app/api/*` route handlers (or Server Actions) for backend logic like form submissions/email sending (e.g. Resend) — never call third-party APIs with secret keys from the client.
+- Tailwind: keep utility classes readable — extract to a component or `cn()`-merged variant when a single element's class string gets unwieldy.
+- Auth (Clerk or similar): guard protected routes via middleware, not just client-side checks — client-side-only checks are not real protection.
+- Search (Fuse.js or similar client-side search): keep the search index generation server-side/build-time when the dataset is static, don't rebuild it on every client render.
+- File/prompt organization: keep the numbered Cursor prompt-file convention (`NN-description-prompt.md`) consistent — don't rename or renumber existing files when adding new ones, append the next number.
+- SEO/ad-revenue-focused tool pages: ensure each tool page has proper metadata (`generateMetadata` or `metadata` export) — title, description — since organic/search traffic is the target.

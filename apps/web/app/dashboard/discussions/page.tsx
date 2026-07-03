@@ -24,7 +24,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
-import { useAppStore, type Conversation, type DiscussionThread } from "@/lib/stores/app-store";
+import { ListPagination } from "@/components/dashboard/list-pagination";
+import { useAppStore, type Conversation, type ConversationsListResponse, type DiscussionThread } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
 import { browserTimer } from "@/lib/perf";
@@ -60,13 +61,15 @@ function formatMessageTime(iso: string) {
   }
 }
 
-async function fetchConversations(): Promise<{ conversations: Conversation[] } | { error: string }> {
-  const res = await fetch("/api/messages/conversations", { credentials: "include" });
+async function fetchConversations(
+  params: URLSearchParams
+): Promise<ConversationsListResponse | { error: string }> {
+  const res = await fetch(`/api/messages/conversations?${params.toString()}`, { credentials: "include" });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     return { error: parseApiError(body, res.status, res.statusText) };
   }
-  return (await res.json()) as { conversations: Conversation[] };
+  return (await res.json()) as ConversationsListResponse;
 }
 
 async function fetchThread(
@@ -159,9 +162,12 @@ function DiscussionsInner() {
     perfRef.current.step("mount");
   }
 
-  const [conversations, setConversations] = useState<Conversation[]>(
-    () => useAppStore.getState().peekDiscussionsConversations() ?? []
-  );
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [listMeta, setListMeta] = useState<Pick<
+    ConversationsListResponse,
+    "total" | "page" | "pageSize" | "totalPages"
+  > | null>(null);
+  const [page, setPage] = useState(1);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(urlEventId);
   const [threadEvent, setThreadEvent] = useState<EventThreadMeta | null>(() => {
     const cached = urlEventId
@@ -176,12 +182,11 @@ function DiscussionsInner() {
     return cached?.messages ?? [];
   });
   const [search, setSearch] = useState("");
+  const [searchDebounced, setSearchDebounced] = useState("");
   const [composerText, setComposerText] = useState("");
   const [sendAsEmail, setSendAsEmail] = useState(true);
   const [sending, setSending] = useState(false);
-  const [listLoading, setListLoading] = useState(
-    () => useAppStore.getState().peekDiscussionsConversations() == null
-  );
+  const [listLoading, setListLoading] = useState(true);
   const [threadLoading, setThreadLoading] = useState(false);
   const [listRefreshing, setListRefreshing] = useState(false);
   const [threadRefreshing, setThreadRefreshing] = useState(false);
@@ -191,21 +196,54 @@ function DiscussionsInner() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
 
+  const conversationsCacheKey = JSON.stringify({ page, search: searchDebounced });
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchDebounced]);
+
   const loadConversations = useCallback(async () => {
     const store = useAppStore.getState();
+    const key = conversationsCacheKey;
     setError(null);
     perfRef.current?.step("fetch:start");
+
+    const cached = store.peekDiscussionsConversations(key);
+    if (cached) {
+      setConversations(cached.conversations);
+      setListMeta({
+        total: cached.total,
+        page: cached.page,
+        pageSize: cached.pageSize,
+        totalPages: cached.totalPages
+      });
+    }
+
     await loadWithCache({
-      peek: () => store.peekDiscussionsConversations(),
-      getFresh: () => store.getDiscussionsConversations(),
-      set: (data) => store.setDiscussionsConversations(data),
+      peek: () => store.peekDiscussionsConversations(key),
+      getFresh: () => store.getDiscussionsConversations(key),
+      set: (data) => store.setDiscussionsConversations(key, data),
       fetch: async () => {
-        const result = await fetchConversations();
+        const params = new URLSearchParams();
+        params.set("page", String(page));
+        if (searchDebounced) params.set("search", searchDebounced);
+        const result = await fetchConversations(params);
         if ("error" in result) throw new Error(result.error);
-        return result.conversations;
+        return result;
       },
       onData: (data) => {
-        setConversations(data);
+        setConversations(data.conversations);
+        setListMeta({
+          total: data.total,
+          page: data.page,
+          pageSize: data.pageSize,
+          totalPages: data.totalPages
+        });
         perfRef.current?.step("fetch:done");
       },
       setLoading: setListLoading,
@@ -213,8 +251,9 @@ function DiscussionsInner() {
     }).catch((e) => {
       setError(e instanceof Error ? e.message : "Request failed.");
       setConversations([]);
+      setListMeta(null);
     });
-  }, []);
+  }, [conversationsCacheKey, page, searchDebounced]);
 
   const loadThread = useCallback(async (eventId: string) => {
     const store = useAppStore.getState();
@@ -271,11 +310,7 @@ function DiscussionsInner() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, threadLoading]);
 
-  const filteredConversations = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return conversations;
-    return conversations.filter((c) => c.guestName.toLowerCase().includes(q));
-  }, [conversations, search]);
+  const filteredConversations = conversations;
 
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.eventId === selectedEventId) ?? null,
@@ -357,6 +392,9 @@ function DiscussionsInner() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Message guests about their events
+            {listMeta && !listLoading ? (
+              <span className="text-foreground/80"> · {listMeta.total} conversations</span>
+            ) : null}
           </p>
         </div>
       </header>
@@ -406,36 +444,50 @@ function DiscussionsInner() {
                 </p>
               </div>
             ) : (
-              <ul>
-                {filteredConversations.map((c) => (
-                  <li key={c.eventId}>
-                    <button
-                      type="button"
-                      onClick={() => selectConversation(c.eventId)}
-                      className={cn(
-                        "flex w-full items-start gap-3 border-b border-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-50",
-                        selectedEventId === c.eventId && "bg-slate-100"
-                      )}
-                    >
-                      <Avatar className="h-10 w-10 text-xs">{initials(c.guestName)}</Avatar>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium text-[#1B2A4A]">{c.guestName}</span>
-                          <span className="shrink-0 text-[10px] text-muted-foreground">
-                            {relativeTime(c.lastMessageAt)}
-                          </span>
+              <>
+                <ul>
+                  {filteredConversations.map((c) => (
+                    <li key={c.eventId}>
+                      <button
+                        type="button"
+                        onClick={() => selectConversation(c.eventId)}
+                        className={cn(
+                          "flex w-full items-start gap-3 border-b border-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-50",
+                          selectedEventId === c.eventId && "bg-slate-100"
+                        )}
+                      >
+                        <Avatar className="h-10 w-10 text-xs">{initials(c.guestName)}</Avatar>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate font-medium text-[#1B2A4A]">{c.guestName}</span>
+                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                              {relativeTime(c.lastMessageAt)}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 flex items-center gap-2">
+                            <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
+                              {c.eventType}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 truncate text-xs text-muted-foreground">{c.lastMessage}</p>
                         </div>
-                        <div className="mt-0.5 flex items-center gap-2">
-                          <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
-                            {c.eventType}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 truncate text-xs text-muted-foreground">{c.lastMessage}</p>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {listMeta ? (
+                  <ListPagination
+                    page={listMeta.page}
+                    totalPages={listMeta.totalPages}
+                    total={listMeta.total}
+                    pageSize={listMeta.pageSize}
+                    itemLabel="conversation"
+                    itemLabelPlural="conversations"
+                    loading={listLoading}
+                    onPageChange={setPage}
+                  />
+                ) : null}
+              </>
             )}
           </div>
         </div>

@@ -24,6 +24,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
+import { ListPagination } from "@/components/dashboard/list-pagination";
 import { useAppStore, type LeadsListResponse } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { tenantUrls } from "@/lib/tenant-host";
@@ -244,7 +245,12 @@ export default function LeadsPage() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Leads</h1>
-          <p className="mt-1 text-sm text-muted-foreground">All incoming catering inquiries</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            All incoming catering inquiries
+            {data && !loading ? (
+              <span className="text-foreground/80"> · {data.total} total</span>
+            ) : null}
+          </p>
         </div>
         {refreshing ? <RefreshingBadge /> : null}
       </header>
@@ -435,33 +441,15 @@ export default function LeadsPage() {
               </Table>
             </div>
 
-            {data && data.totalPages > 1 ? (
-              <div className="flex flex-col items-center justify-between gap-3 border-t px-4 py-3 sm:flex-row">
-                <p className="text-sm text-muted-foreground">
-                  Page {data.page} of {data.totalPages} · {data.total} total
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1 || loading}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={loading || page >= data.totalPages}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            ) : null}
+            <ListPagination
+              page={data?.page ?? page}
+              totalPages={data?.totalPages ?? 1}
+              total={data?.total ?? 0}
+              pageSize={data?.pageSize ?? 20}
+              itemLabel="lead"
+              loading={loading}
+              onPageChange={setPage}
+            />
           </CardContent>
         </Card>
       )}

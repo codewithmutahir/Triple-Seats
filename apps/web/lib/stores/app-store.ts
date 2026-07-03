@@ -159,6 +159,18 @@ export type TaskItem = {
 
 export type TasksListResponse = {
   items: TaskItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type ConversationsListResponse = {
+  conversations: Conversation[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 };
 
 export type TasksStats = {
@@ -259,7 +271,7 @@ interface AppStore {
   bookingsStats: CacheEntry<BookingsStats> | null;
   eventsCache: Record<string, CacheEntry<EventsListResponse>>;
   eventsStats: CacheEntry<EventsStats> | null;
-  discussionsConversations: CacheEntry<Conversation[]> | null;
+  discussionsConversationsCache: Record<string, CacheEntry<ConversationsListResponse>>;
   discussionsThreads: Record<string, CacheEntry<DiscussionThread>>;
   tasksCache: Record<string, CacheEntry<TasksListResponse>>;
   tasksStats: CacheEntry<TasksStats> | null;
@@ -274,7 +286,7 @@ interface AppStore {
   setBookingsStats: (data: BookingsStats) => void;
   setEventsCache: (key: string, data: EventsListResponse) => void;
   setEventsStats: (data: EventsStats) => void;
-  setDiscussionsConversations: (data: Conversation[]) => void;
+  setDiscussionsConversations: (key: string, data: ConversationsListResponse) => void;
   setDiscussionsThread: (eventId: string, data: DiscussionThread) => void;
   setTasksCache: (key: string, data: TasksListResponse | null) => void;
   setTasksStats: (data: TasksStats | null) => void;
@@ -289,7 +301,7 @@ interface AppStore {
   getBookingsStats: () => BookingsStats | null;
   getEventsCache: (key: string) => EventsListResponse | null;
   getEventsStats: () => EventsStats | null;
-  getDiscussionsConversations: () => Conversation[] | null;
+  getDiscussionsConversations: (key: string) => ConversationsListResponse | null;
   getDiscussionsThread: (eventId: string) => DiscussionThread | null;
   getTasksCache: (key: string) => TasksListResponse | null;
   getTasksStats: () => TasksStats | null;
@@ -304,7 +316,7 @@ interface AppStore {
   peekBookingsStats: () => BookingsStats | null;
   peekEventsCache: (key: string) => EventsListResponse | null;
   peekEventsStats: () => EventsStats | null;
-  peekDiscussionsConversations: () => Conversation[] | null;
+  peekDiscussionsConversations: (key: string) => ConversationsListResponse | null;
   peekDiscussionsThread: (eventId: string) => DiscussionThread | null;
   peekTasksCache: (key: string) => TasksListResponse | null;
   peekTasksStats: () => TasksStats | null;
@@ -321,7 +333,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   bookingsStats: null,
   eventsCache: {},
   eventsStats: null,
-  discussionsConversations: null,
+  discussionsConversationsCache: {},
   discussionsThreads: {},
   tasksCache: {},
   tasksStats: null,
@@ -345,8 +357,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       eventsCache: { ...state.eventsCache, [key]: { data, fetchedAt: Date.now() } }
     })),
   setEventsStats: (data) => set({ eventsStats: { data, fetchedAt: Date.now() } }),
-  setDiscussionsConversations: (data) =>
-    set({ discussionsConversations: { data, fetchedAt: Date.now() } }),
+  setDiscussionsConversations: (key, data) =>
+    set((state) => ({
+      discussionsConversationsCache: {
+        ...state.discussionsConversationsCache,
+        [key]: { data, fetchedAt: Date.now() }
+      }
+    })),
   setDiscussionsThread: (eventId, data) =>
     set((state) => ({
       discussionsThreads: {
@@ -403,8 +420,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const entry = get().eventsStats;
     return isFresh(entry, EVENTS_TTL) ? (entry?.data ?? null) : null;
   },
-  getDiscussionsConversations: () => {
-    const entry = get().discussionsConversations;
+  getDiscussionsConversations: (key) => {
+    const entry = get().discussionsConversationsCache[key];
     return isFresh(entry, DISCUSSIONS_TTL) ? (entry?.data ?? null) : null;
   },
   getDiscussionsThread: (eventId) => {
@@ -436,7 +453,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   peekBookingsStats: () => get().bookingsStats?.data ?? null,
   peekEventsCache: (key) => get().eventsCache[key]?.data ?? null,
   peekEventsStats: () => get().eventsStats?.data ?? null,
-  peekDiscussionsConversations: () => get().discussionsConversations?.data ?? null,
+  peekDiscussionsConversations: (key) => get().discussionsConversationsCache[key]?.data ?? null,
   peekDiscussionsThread: (eventId) => get().discussionsThreads[eventId]?.data ?? null,
   peekTasksCache: (key) => get().tasksCache[key]?.data ?? null,
   peekTasksStats: () => get().tasksStats?.data ?? null,
