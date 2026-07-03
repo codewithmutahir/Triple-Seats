@@ -79,6 +79,33 @@ async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok:
   return { ok: true, data: (await res.json()) as T };
 }
 
+/** Prefer batch endpoint; fall back to legacy routes when API is not yet deployed. */
+async function fetchDashboardAll(): Promise<
+  { ok: true; data: DashboardAllResponse } | { ok: false; status: number; message: string }
+> {
+  const batch = await fetchJson<DashboardAllResponse>("/api/dashboard/all");
+  if (batch.ok || batch.status !== 404) return batch;
+
+  const [statsRes, recentRes, upcomingRes] = await Promise.all([
+    fetchJson<StatsResponse>("/api/dashboard/stats"),
+    fetchJson<{ items: RecentRow[] }>("/api/dashboard/recent-leads"),
+    fetchJson<{ items: UpcomingRow[] }>("/api/dashboard/upcoming-events")
+  ]);
+
+  if (!statsRes.ok) return statsRes;
+  if (!recentRes.ok) return recentRes;
+  if (!upcomingRes.ok) return upcomingRes;
+
+  return {
+    ok: true,
+    data: {
+      stats: statsRes.data,
+      recent: recentRes.data,
+      upcoming: upcomingRes.data
+    }
+  };
+}
+
 export default function DashboardPage() {
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -140,7 +167,7 @@ export default function DashboardPage() {
           perfRef.current?.step("fetch:done");
           // Stale-while-revalidate: show cache instantly, refresh in background
           void (async () => {
-            const res = await fetchJson<DashboardAllResponse>("/api/dashboard/all");
+            const res = await fetchDashboardAll();
             if (res.ok) applyAll(res.data);
           })();
           return;
@@ -152,7 +179,7 @@ export default function DashboardPage() {
       setUpcomingLoading(upcoming == null);
       setRefreshing(force);
 
-      const res = await fetchJson<DashboardAllResponse>("/api/dashboard/all");
+      const res = await fetchDashboardAll();
       if (!res.ok) throw new Error(res.message);
       applyAll(res.data);
       perfRef.current?.step("fetch:done");
