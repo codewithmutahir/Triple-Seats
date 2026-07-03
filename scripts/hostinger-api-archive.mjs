@@ -11,10 +11,13 @@ const out = path.join(root, "tripeseats-api-hostinger-v2.zip");
 
 const copyItems = [
   "tsconfig.base.json",
+  "pnpm-lock.yaml",
   "apps/api/src",
+  "apps/api/dist",
   "apps/api/package.json",
   "apps/api/tsconfig.json",
   "packages/database/src",
+  "packages/database/dist",
   "packages/database/package.json",
   "packages/database/tsconfig.json",
   "packages/database/prisma"
@@ -28,14 +31,16 @@ const rootPkg = `{
     "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma"]
   },
   "scripts": {
-    "build": "npx prisma generate --schema packages/database/prisma/schema.prisma && npx tsc -p packages/database/tsconfig.json && npx tsc -p apps/api/tsconfig.json",
+    "build": "pnpm exec prisma generate --schema packages/database/prisma/schema.prisma",
     "start": "node app.js"
   },
   "engines": {
     "node": "20"
   },
+  "dependencies": {
+    "prisma": "^5.22.0"
+  },
   "devDependencies": {
-    "prisma": "^5.22.0",
     "typescript": "^5.6.3"
   }
 }
@@ -51,15 +56,35 @@ function copyRecursive(src, dest) {
   fs.cpSync(src, dest, { recursive: true });
 }
 
-function removeBuildArtifacts(dir) {
+function removeNodeModules(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "dist") {
+      if (entry.name === "node_modules") {
         fs.rmSync(full, { recursive: true, force: true });
       } else {
-        removeBuildArtifacts(full);
+        removeNodeModules(full);
       }
+    }
+  }
+}
+
+function runPrebuild() {
+  console.log("Pre-building API dist locally...");
+  const steps = [
+    ["pnpm", ["--filter", "@tripeseats/database", "exec", "prisma", "generate"]],
+    ["pnpm", ["--filter", "@tripeseats/database", "build"]],
+    ["pnpm", ["--filter", "api", "build"]]
+  ];
+  for (const [cmd, args] of steps) {
+    const result = spawnSync(cmd, args, {
+      cwd: root,
+      stdio: "inherit",
+      shell: process.platform === "win32"
+    });
+    if (result.status !== 0) {
+      console.error(`Pre-build failed: ${cmd} ${args.join(" ")}`);
+      process.exit(result.status ?? 1);
     }
   }
 }
@@ -89,6 +114,8 @@ function createZip(sourceDir, zipPath) {
 }
 
 function main() {
+  runPrebuild();
+
   if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
 
@@ -105,7 +132,7 @@ function main() {
 
   const apiPkgPath = path.join(staging, "apps/api/package.json");
   const apiPkg = JSON.parse(fs.readFileSync(apiPkgPath, "utf8"));
-  apiPkg.scripts.build = "npx tsc -p tsconfig.json";
+  apiPkg.scripts.build = "echo dist prebuilt";
   writeUtf8(apiPkgPath, `${JSON.stringify(apiPkg, null, 2)}\n`);
 
   const dbPkgPath = path.join(staging, "packages/database/package.json");
@@ -114,7 +141,7 @@ function main() {
   dbPkg.devDependencies.prisma = "^5.22.0";
   writeUtf8(dbPkgPath, `${JSON.stringify(dbPkg, null, 2)}\n`);
 
-  removeBuildArtifacts(staging);
+  removeNodeModules(staging);
   createZip(staging, out);
   fs.rmSync(staging, { recursive: true, force: true });
 
