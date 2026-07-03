@@ -17,6 +17,9 @@ export function loadCredentials() {
 }
 
 export async function getAccessToken() {
+  const apiToken = process.env.HOSTINGER_API_TOKEN?.trim() || process.env.API_TOKEN?.trim();
+  if (apiToken) return apiToken;
+
   const creds = loadCredentials();
   if (creds.access_token && (!creds.expires_at || Date.now() < creds.expires_at - 60_000)) {
     return creds.access_token;
