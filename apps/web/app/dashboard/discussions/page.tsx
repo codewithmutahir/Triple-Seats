@@ -25,6 +25,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
+import {
+  CLIENT_LIST_FETCH_SIZE,
+  fetchAllListPages,
+  filterConversationItems,
+  LIST_PAGE_SIZE,
+  paginateItems
+} from "@/lib/client-list-filter";
 import { useAppStore, type Conversation, type ConversationsListResponse, type DiscussionThread } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -32,6 +39,8 @@ import { browserTimer } from "@/lib/perf";
 
 type EventThreadMeta = DiscussionThread["event"];
 type Message = DiscussionThread["messages"][number];
+
+const ALL_CONVERSATIONS_CACHE_KEY = "__all__";
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -162,11 +171,7 @@ function DiscussionsInner() {
     perfRef.current.step("mount");
   }
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [listMeta, setListMeta] = useState<Pick<
-    ConversationsListResponse,
-    "total" | "page" | "pageSize" | "totalPages"
-  > | null>(null);
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [page, setPage] = useState(1);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(urlEventId);
   const [threadEvent, setThreadEvent] = useState<EventThreadMeta | null>(() => {
@@ -187,6 +192,18 @@ function DiscussionsInner() {
   const [sendAsEmail, setSendAsEmail] = useState(true);
   const [sending, setSending] = useState(false);
   const [listLoading, setListLoading] = useState(true);
+
+  const filteredConversations = useMemo(
+    () => filterConversationItems(allConversations, searchDebounced),
+    [allConversations, searchDebounced]
+  );
+
+  const listMeta = useMemo(
+    () => paginateItems(filteredConversations, page, LIST_PAGE_SIZE),
+    [filteredConversations, page]
+  );
+
+  const conversations = listMeta.items;
   const [threadLoading, setThreadLoading] = useState(false);
   const [listRefreshing, setListRefreshing] = useState(false);
   const [threadRefreshing, setThreadRefreshing] = useState(false);
@@ -195,8 +212,6 @@ function DiscussionsInner() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
-
-  const conversationsCacheKey = JSON.stringify({ page, search: searchDebounced });
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(search.trim()), 350);
@@ -209,51 +224,49 @@ function DiscussionsInner() {
 
   const loadConversations = useCallback(async () => {
     const store = useAppStore.getState();
-    const key = conversationsCacheKey;
     setError(null);
     perfRef.current?.step("fetch:start");
 
-    const cached = store.peekDiscussionsConversations(key);
-    if (cached) {
-      setConversations(cached.conversations);
-      setListMeta({
-        total: cached.total,
-        page: cached.page,
-        pageSize: cached.pageSize,
-        totalPages: cached.totalPages
-      });
-    }
-
     await loadWithCache({
-      peek: () => store.peekDiscussionsConversations(key),
-      getFresh: () => store.getDiscussionsConversations(key),
-      set: (data) => store.setDiscussionsConversations(key, data),
+      peek: () => store.peekDiscussionsConversations(ALL_CONVERSATIONS_CACHE_KEY),
+      getFresh: () => store.getDiscussionsConversations(ALL_CONVERSATIONS_CACHE_KEY),
+      set: (data) => store.setDiscussionsConversations(ALL_CONVERSATIONS_CACHE_KEY, data),
       fetch: async () => {
-        const params = new URLSearchParams();
-        params.set("page", String(page));
-        if (searchDebounced) params.set("search", searchDebounced);
-        const result = await fetchConversations(params);
+        const result = await fetchAllListPages<Conversation>(
+          async (pageNum) => {
+            const params = new URLSearchParams();
+            params.set("page", String(pageNum));
+            params.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
+            const res = await fetchConversations(params);
+            if ("error" in res) return res;
+            return {
+              items: res.conversations,
+              total: res.total,
+              pageSize: res.pageSize
+            };
+          },
+          CLIENT_LIST_FETCH_SIZE
+        );
         if ("error" in result) throw new Error(result.error);
-        return result;
+        return {
+          conversations: result.items,
+          total: result.total,
+          page: 1,
+          pageSize: LIST_PAGE_SIZE,
+          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE))
+        };
       },
       onData: (data) => {
-        setConversations(data.conversations);
-        setListMeta({
-          total: data.total,
-          page: data.page,
-          pageSize: data.pageSize,
-          totalPages: data.totalPages
-        });
+        setAllConversations(data.conversations);
         perfRef.current?.step("fetch:done");
       },
       setLoading: setListLoading,
       setRefreshing: setListRefreshing
     }).catch((e) => {
       setError(e instanceof Error ? e.message : "Request failed.");
-      setConversations([]);
-      setListMeta(null);
+      setAllConversations([]);
     });
-  }, [conversationsCacheKey, page, searchDebounced]);
+  }, []);
 
   const loadThread = useCallback(async (eventId: string) => {
     const store = useAppStore.getState();
@@ -309,8 +322,6 @@ function DiscussionsInner() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, threadLoading]);
-
-  const filteredConversations = conversations;
 
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.eventId === selectedEventId) ?? null,
@@ -435,7 +446,7 @@ function DiscussionsInner() {
                   <Skeleton key={i} className="h-16 w-full" />
                 ))}
               </div>
-            ) : filteredConversations.length === 0 && !urlEventId ? (
+            ) : listMeta.total === 0 && !urlEventId ? (
               <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
                 <MessageSquare className="h-10 w-10 text-muted-foreground" />
                 <p className="text-sm font-medium text-[#1B2A4A]">No discussions yet</p>
@@ -446,7 +457,7 @@ function DiscussionsInner() {
             ) : (
               <>
                 <ul>
-                  {filteredConversations.map((c) => (
+                  {conversations.map((c) => (
                     <li key={c.eventId}>
                       <button
                         type="button"
@@ -475,7 +486,7 @@ function DiscussionsInner() {
                     </li>
                   ))}
                 </ul>
-                {listMeta ? (
+                {listMeta.total > 0 ? (
                   <ListPagination
                     page={listMeta.page}
                     totalPages={listMeta.totalPages}
@@ -483,7 +494,7 @@ function DiscussionsInner() {
                     pageSize={listMeta.pageSize}
                     itemLabel="conversation"
                     itemLabelPlural="conversations"
-                    loading={listLoading}
+                    loading={listLoading && allConversations.length === 0}
                     onPageChange={setPage}
                   />
                 ) : null}

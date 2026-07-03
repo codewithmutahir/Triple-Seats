@@ -22,6 +22,13 @@ import { cn } from "@/lib/utils";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
+import {
+  CLIENT_LIST_FETCH_SIZE,
+  fetchAllListPages,
+  filterBookingItems,
+  LIST_PAGE_SIZE,
+  paginateItems
+} from "@/lib/client-list-filter";
 import { useAppStore, type BookingsListResponse, type BookingsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -31,6 +38,8 @@ type ListResponse = BookingsListResponse;
 type StatsResponse = BookingsStats;
 
 type BookingRow = ListResponse["items"][number];
+
+const ALL_BOOKINGS_CACHE_KEY = "__all__";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -134,16 +143,14 @@ export default function BookingsPage() {
   const [year, setYear] = useState("all");
   const [page, setPage] = useState(1);
 
-  const cacheKey = JSON.stringify({ page, status, month, year, search: searchDebounced });
-
-  const [data, setData] = useState<ListResponse | null>(() =>
-    useAppStore.getState().peekBookingsCache(cacheKey)
+  const [allBookings, setAllBookings] = useState<BookingRow[]>(
+    () => useAppStore.getState().peekBookingsCache(ALL_BOOKINGS_CACHE_KEY)?.items ?? []
   );
   const [stats, setStats] = useState<StatsResponse | null>(() =>
     useAppStore.getState().peekBookingsStats()
   );
   const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekBookingsCache(cacheKey) == null
+    () => useAppStore.getState().peekBookingsCache(ALL_BOOKINGS_CACHE_KEY) == null
   );
   const [statsLoading, setStatsLoading] = useState(
     () => useAppStore.getState().peekBookingsStats() == null
@@ -158,41 +165,66 @@ export default function BookingsPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const queryParams = useMemo(() => {
-    const p = new URLSearchParams();
-    p.set("page", String(page));
-    p.set("status", status);
-    if (searchDebounced) p.set("search", searchDebounced);
-    if (month !== "all") p.set("month", month);
-    if (year !== "all") p.set("year", year);
-    return p;
-  }, [page, status, searchDebounced, month, year]);
+  const filteredBookings = useMemo(
+    () =>
+      filterBookingItems(allBookings, {
+        status,
+        search: searchDebounced,
+        month,
+        year
+      }),
+    [allBookings, status, searchDebounced, month, year]
+  );
 
-  const load = useCallback(async () => {
+  const data = useMemo(
+    () => paginateItems(filteredBookings, page, LIST_PAGE_SIZE),
+    [filteredBookings, page]
+  );
+
+  const loadAllBookings = useCallback(async () => {
     const store = useAppStore.getState();
-    const key = cacheKey;
     setError(null);
     perfRef.current?.step("fetch:start");
 
     await loadWithCache({
-      peek: () => store.peekBookingsCache(key),
-      getFresh: () => store.getBookingsCache(key),
-      set: (result) => store.setBookingsCache(key, result),
+      peek: () => store.peekBookingsCache(ALL_BOOKINGS_CACHE_KEY),
+      getFresh: () => store.getBookingsCache(ALL_BOOKINGS_CACHE_KEY),
+      set: (result) => store.setBookingsCache(ALL_BOOKINGS_CACHE_KEY, result),
       fetch: async () => {
-        const result = await fetchBookings(queryParams);
+        const result = await fetchAllListPages<BookingRow>(
+          async (pageNum) => {
+            const p = new URLSearchParams();
+            p.set("page", String(pageNum));
+            p.set("status", "all");
+            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
+            return fetchBookings(p);
+          },
+          CLIENT_LIST_FETCH_SIZE
+        );
         if ("error" in result) throw new Error(result.error);
-        return result;
+        return {
+          items: result.items,
+          total: result.total,
+          page: 1,
+          pageSize: LIST_PAGE_SIZE,
+          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE))
+        };
       },
-      onData: (data) => {
-        setData(data);
+      onData: (result) => {
+        setAllBookings(result.items);
         perfRef.current?.step("fetch:done");
       },
       setLoading,
       setRefreshing
     }).catch((e) => {
       setError(e instanceof Error ? e.message : "Request failed.");
+      setAllBookings([]);
     });
-  }, [cacheKey, queryParams]);
+  }, []);
+
+  useEffect(() => {
+    void loadAllBookings();
+  }, [loadAllBookings]);
 
   const loadStats = useCallback(async () => {
     const store = useAppStore.getState();
@@ -213,28 +245,24 @@ export default function BookingsPage() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
     void loadStats();
   }, [loadStats]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading) return;
-    if (data || error) {
+    if (data.items.length || error) {
       perfEndedRef.current = true;
       perfRef.current?.step("render:complete");
       perfRef.current?.end();
     }
-  }, [data, loading, error]);
+  }, [data.items.length, loading, error]);
 
   useEffect(() => {
     setPage(1);
   }, [status, searchDebounced, month, year]);
 
   function exportCsv() {
-    if (!data?.items.length) return;
+    if (!data.items.length) return;
     const headers = [
       "Guest Name",
       "Email",
@@ -273,7 +301,7 @@ export default function BookingsPage() {
     URL.revokeObjectURL(url);
   }
 
-  const empty = !loading && data && data.total === 0;
+  const empty = !loading && data.total === 0;
 
   return (
     <div className="space-y-8">
@@ -372,7 +400,7 @@ export default function BookingsPage() {
               variant="outline"
               className="shrink-0 bg-white"
               onClick={exportCsv}
-              disabled={!data?.items.length}
+              disabled={!data.items.length}
             >
               <Download className="mr-2 h-4 w-4" />
               Export CSV
@@ -444,7 +472,7 @@ export default function BookingsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading && !(data?.items.length)
+                  {loading && allBookings.length === 0
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 10 }).map((__, j) => (
@@ -454,7 +482,7 @@ export default function BookingsPage() {
                           ))}
                         </TableRow>
                       ))
-                    : (data?.items ?? []).map((row) => (
+                    : data.items.map((row) => (
                         <TableRow key={row.eventId}>
                           <TableCell>
                             <div className="font-medium">{row.guestName}</div>
@@ -530,12 +558,12 @@ export default function BookingsPage() {
             </div>
 
             <ListPagination
-              page={data?.page ?? page}
-              totalPages={data?.totalPages ?? 1}
-              total={data?.total ?? 0}
-              pageSize={data?.pageSize ?? 20}
+              page={data.page}
+              totalPages={data.totalPages}
+              total={data.total}
+              pageSize={data.pageSize}
               itemLabel="booking"
-              loading={loading}
+              loading={loading && allBookings.length === 0}
               onPageChange={setPage}
             />
           </CardContent>

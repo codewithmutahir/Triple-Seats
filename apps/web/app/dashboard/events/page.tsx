@@ -50,7 +50,12 @@ import {
 } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
-import { CLIENT_EVENTS_FETCH_SIZE, filterAndPaginate, fetchAllListPages } from "@/lib/client-list-filter";
+import {
+  CLIENT_LIST_FETCH_SIZE,
+  fetchAllListPages,
+  filterAndPaginate,
+  LIST_PAGE_SIZE
+} from "@/lib/client-list-filter";
 import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -65,7 +70,7 @@ const STATUS_TABS = [
 ] as const;
 
 const ALL_EVENTS_CACHE_KEY = "__all__";
-const EVENTS_PAGE_SIZE = 20;
+const EVENTS_PAGE_SIZE = LIST_PAGE_SIZE;
 
 type EventListRow = EventsListResponse["items"][number];
 
@@ -250,10 +255,10 @@ function EventsListView() {
             const p = new URLSearchParams();
             p.set("page", String(pageNum));
             p.set("status", "all");
-            p.set("pageSize", String(CLIENT_EVENTS_FETCH_SIZE));
+            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
             return fetchEventsList(p);
           },
-          CLIENT_EVENTS_FETCH_SIZE
+          CLIENT_LIST_FETCH_SIZE
         );
         if ("error" in result) throw new Error(result.error);
         return {
@@ -442,7 +447,7 @@ function EventsListView() {
               total={data.total}
               pageSize={data.pageSize}
               itemLabel="event"
-              loading={loading}
+              loading={loading && allEvents.length === 0}
               onPageChange={setPage}
             />
           </CardContent>
