@@ -305,6 +305,8 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
         eventType: event.eventType,
         customerType: event.customerType,
         eventDate: event.eventDate.toISOString(),
+        startTime: event.startTime?.toISOString() ?? null,
+        endTime: event.endTime?.toISOString() ?? null,
         guestCountEstimate: event.guestCountEstimate,
         venueName: event.venueName,
         venueAddress: event.venueAddress,

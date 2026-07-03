@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   ClipboardList,
+  Clock,
   Loader2,
   Mail,
   MapPin,
@@ -48,6 +49,7 @@ import {
   type CustomerTypeValue,
   type EventTypeValue
 } from "@/lib/event-customer-types";
+import { formatEventTimeRange } from "@/lib/event-datetime";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
@@ -129,6 +131,8 @@ export type EventDetailPayload = {
   customerType: CustomerTypeValue;
   status: string;
   eventDate: string;
+  startTime: string | null;
+  endTime: string | null;
   venueName: string | null;
   venueAddress: string | null;
   guestCountEstimate: number | null;
@@ -385,6 +389,7 @@ function EventsListView() {
                     <TableHead>Event</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Date</TableHead>
+                    <TableHead className="hidden md:table-cell">Time</TableHead>
                     <TableHead className="hidden sm:table-cell">Location</TableHead>
                     <TableHead className="text-right">Guests</TableHead>
                     <TableHead>Status</TableHead>
@@ -395,7 +400,7 @@ function EventsListView() {
                   {loading && allEvents.length === 0
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 8 }).map((__, j) => (
+                          {Array.from({ length: 9 }).map((__, j) => (
                             <TableCell key={j}>
                               <Skeleton className="h-8 w-full" />
                             </TableCell>
@@ -413,6 +418,9 @@ function EventsListView() {
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-sm">
                             {formatTableDate(row.eventDate)}
+                          </TableCell>
+                          <TableCell className="hidden md:table-cell whitespace-nowrap text-sm text-muted-foreground">
+                            {formatEventTimeRange(row.startTime, row.endTime)}
                           </TableCell>
                           <TableCell className="hidden max-w-[180px] truncate sm:table-cell text-sm">
                             {row.location}
@@ -916,6 +924,13 @@ function EventDetailInner() {
                   </div>
                 </div>
                 <div className="flex items-start gap-2">
+                  <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">Event time</p>
+                    <p>{formatEventTimeRange(event.startTime, event.endTime)}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2">
                   <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   <div>
                     <p className="text-xs font-medium text-muted-foreground">Location</p>
@@ -1105,6 +1120,10 @@ function EventDetailInner() {
                 <p className="text-xs text-muted-foreground">Event date</p>
                 <p className="font-medium">{formatLongDate(event.eventDate)}</p>
                 <p className="text-xs text-muted-foreground">{daysUntilLabel(event.eventDate)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Event time</p>
+                <p className="font-medium">{formatEventTimeRange(event.startTime, event.endTime)}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Location</p>

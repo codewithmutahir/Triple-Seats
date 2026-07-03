@@ -47,6 +47,8 @@ function validateStep1(guestName: string, contactNumber: string, email: string):
 function validateStep2(
   eventType: string,
   eventDate: string,
+  eventStartTime: string,
+  eventEndTime: string,
   eventLocation: string,
   numberOfGuests: string
 ): string | null {
@@ -57,6 +59,10 @@ function validateStep2(
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (d < today) return "Event date must be in the future.";
+  if (!eventStartTime) return "Please choose when your event starts.";
+  if (eventEndTime && eventEndTime <= eventStartTime) {
+    return "End time must be after start time.";
+  }
   if (!eventLocation.trim()) return "Please enter the event location.";
   const n = Number(numberOfGuests);
   if (!Number.isFinite(n) || n < 1) return "Please enter the number of guests (at least 1).";
@@ -79,6 +85,8 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
 
   const [eventType, setEventType] = useState("");
   const [eventDate, setEventDate] = useState("");
+  const [eventStartTime, setEventStartTime] = useState("");
+  const [eventEndTime, setEventEndTime] = useState("");
   const [eventLocation, setEventLocation] = useState("");
   const [numberOfGuests, setNumberOfGuests] = useState("");
 
@@ -120,7 +128,14 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
       return;
     }
     if (step === 2) {
-      const err = validateStep2(eventType, eventDate, eventLocation, numberOfGuests);
+      const err = validateStep2(
+        eventType,
+        eventDate,
+        eventStartTime,
+        eventEndTime,
+        eventLocation,
+        numberOfGuests
+      );
       if (err) {
         setStepError(err);
         return;
@@ -145,7 +160,14 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
       return;
     }
 
-    const err = validateStep2(eventType, eventDate, eventLocation, numberOfGuests);
+    const err = validateStep2(
+      eventType,
+      eventDate,
+      eventStartTime,
+      eventEndTime,
+      eventLocation,
+      numberOfGuests
+    );
     if (err) {
       setStepError(err);
       setStep(2);
@@ -163,9 +185,11 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
       customerType,
       eventLocation: eventLocation.trim(),
       eventDate,
+      eventStartTime,
       numberOfGuests: Number(numberOfGuests),
       preferredTimeSlots
     };
+    if (eventEndTime) payload.eventEndTime = eventEndTime;
     const notesTrim = additionalNotes.trim();
     if (notesTrim) payload.additionalNotes = notesTrim;
 
@@ -189,6 +213,8 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
       setCustomerType("b2c");
       setEventType("");
       setEventDate("");
+      setEventStartTime("");
+      setEventEndTime("");
       setEventLocation("");
       setNumberOfGuests("");
       setSlotBreakfast(false);
@@ -395,6 +421,30 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
                         value={eventDate}
                         onChange={(e) => setEventDate(e.target.value)}
                       />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="eventStartTime">Event start time</Label>
+                        <Input
+                          id="eventStartTime"
+                          type="time"
+                          value={eventStartTime}
+                          onChange={(e) => setEventStartTime(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="eventEndTime">
+                          Event end time <span className="font-normal text-muted-foreground">(optional)</span>
+                        </Label>
+                        <Input
+                          id="eventEndTime"
+                          type="time"
+                          value={eventEndTime}
+                          onChange={(e) => setEventEndTime(e.target.value)}
+                          min={eventStartTime || undefined}
+                        />
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="eventLocation">Event location</Label>

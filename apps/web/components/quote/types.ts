@@ -79,6 +79,8 @@ export type QuoteEvent = {
   eventTypeLabel?: string;
   customerType?: "b2b" | "b2c";
   eventDate: string;
+  startTime?: string | null;
+  endTime?: string | null;
   guestCountEstimate: number;
   venueAddress: string | null;
   venueName: string | null;

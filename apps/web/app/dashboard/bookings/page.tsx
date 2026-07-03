@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
+import { formatEventTimeRange } from "@/lib/event-datetime";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
@@ -463,6 +464,7 @@ export default function BookingsPage() {
                     <TableHead className="hidden sm:table-cell">Event</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Event Date</TableHead>
+                    <TableHead className="hidden lg:table-cell">Time</TableHead>
                     <TableHead className="hidden md:table-cell">Location</TableHead>
                     <TableHead className="text-right">Guests</TableHead>
                     <TableHead className="hidden lg:table-cell text-right">Quote Total</TableHead>
@@ -475,7 +477,7 @@ export default function BookingsPage() {
                   {loading && allBookings.length === 0
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 10 }).map((__, j) => (
+                          {Array.from({ length: 11 }).map((__, j) => (
                             <TableCell key={j}>
                               <Skeleton className="h-8 w-full" />
                             </TableCell>
@@ -515,6 +517,9 @@ export default function BookingsPage() {
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-sm">
                             {formatBookingDate(row.eventDate)}
+                          </TableCell>
+                          <TableCell className="hidden lg:table-cell whitespace-nowrap text-sm text-muted-foreground">
+                            {formatEventTimeRange(row.startTime, row.endTime)}
                           </TableCell>
                           <TableCell className="hidden md:table-cell max-w-[180px] truncate text-sm">
                             {row.location}

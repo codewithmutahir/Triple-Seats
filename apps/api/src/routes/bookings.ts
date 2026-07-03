@@ -168,6 +168,8 @@ router.get("/", async (req: Request, res: Response) => {
         eventTypeLabel: eventTypeTitle(ev.eventType),
         customerType: ev.customerType,
         eventDate: ev.eventDate.toISOString(),
+        startTime: ev.startTime?.toISOString() ?? null,
+        endTime: ev.endTime?.toISOString() ?? null,
         location: ev.venueAddress ?? ev.venueName ?? "—",
         guestCount: ev.guestCountEstimate,
         status: ev.status,
