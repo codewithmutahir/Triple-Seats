@@ -11,6 +11,7 @@ import {
   type CustomerTypeValue,
   type EventTypeValue
 } from "../lib/event-customer-types";
+import { combineDateAndTime, formatTimeRange, parseTimeString } from "../lib/event-datetime";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { leadFormLimiter } from "../lib/rate-limit";
 import { parsePagination } from "../lib/pagination";
@@ -30,6 +31,8 @@ type LeadPayload = {
   customerType: CustomerTypeValue;
   eventLocation: string;
   eventDate: string;
+  eventStartTime: string;
+  eventEndTime?: string;
   numberOfGuests: number;
   preferredTimeSlots: string[];
   additionalNotes?: string;
@@ -46,6 +49,7 @@ function parsePayload(body: unknown): LeadPayload | null {
     typeof value.eventType !== "string" ||
     typeof value.eventLocation !== "string" ||
     typeof value.eventDate !== "string" ||
+    typeof value.eventStartTime !== "string" ||
     typeof value.numberOfGuests !== "number" ||
     !Array.isArray(value.preferredTimeSlots)
   ) {
@@ -62,7 +66,18 @@ function parsePayload(body: unknown): LeadPayload | null {
   const eventTypeRaw =
     typeof value.eventType === "string" ? value.eventType.trim().toLowerCase() : "";
 
+  const eventEndTimeRaw =
+    typeof value.eventEndTime === "string" ? value.eventEndTime.trim() : undefined;
+
   if (!isEventType(eventTypeRaw)) {
+    return null;
+  }
+
+  if (!parseTimeString(value.eventStartTime)) {
+    return null;
+  }
+
+  if (eventEndTimeRaw && !parseTimeString(eventEndTimeRaw)) {
     return null;
   }
 
@@ -74,10 +89,12 @@ function parsePayload(body: unknown): LeadPayload | null {
     customerType,
     eventLocation: value.eventLocation.trim(),
     eventDate: value.eventDate,
+    eventStartTime: value.eventStartTime.trim(),
     numberOfGuests: value.numberOfGuests,
     preferredTimeSlots: value.preferredTimeSlots
       .filter((slot): slot is string => typeof slot === "string" && slot.trim().length > 0)
       .map((slot) => slot.trim()),
+    ...(eventEndTimeRaw ? { eventEndTime: eventEndTimeRaw } : {}),
     ...(additionalNotes ? { additionalNotes } : {}),
     ...(catererSlug ? { catererSlug } : {})
   };
@@ -89,10 +106,21 @@ function parsePayload(body: unknown): LeadPayload | null {
     !payload.email ||
     !payload.eventType ||
     !payload.eventLocation ||
+    !payload.eventStartTime ||
     Number.isNaN(parsedDate.getTime()) ||
     payload.numberOfGuests <= 0
   ) {
     return null;
+  }
+
+  const startTime = combineDateAndTime(parsedDate, payload.eventStartTime);
+  if (!startTime) return null;
+
+  if (payload.eventEndTime) {
+    const endTime = combineDateAndTime(parsedDate, payload.eventEndTime);
+    if (!endTime || endTime.getTime() <= startTime.getTime()) {
+      return null;
+    }
   }
 
   return payload;
@@ -138,10 +166,17 @@ router.post("/", leadFormLimiter, async (req: Request, res: Response) => {
     const [firstName, ...lastNameParts] = payload.guestName.split(" ").filter(Boolean);
     const lastName = lastNameParts.join(" ") || null;
     const eventDate = new Date(payload.eventDate);
+    const startTime = combineDateAndTime(eventDate, payload.eventStartTime)!;
+    const endTime = payload.eventEndTime
+      ? combineDateAndTime(eventDate, payload.eventEndTime)
+      : null;
     const preferredSlots = payload.preferredTimeSlots.join(", ");
+    const eventTimeLabel = formatTimeRange(startTime, endTime);
     const notesExtra = payload.additionalNotes
       ? `\nAdditional notes: ${payload.additionalNotes}`
       : "";
+    const eventNotesBase = `Event time: ${eventTimeLabel}\nPreferred time slots: ${preferredSlots || "Not provided"}`;
+    const leadNotesBase = `${eventNotesBase}\nEvent location: ${payload.eventLocation}`;
 
     const insertBundle = async (tx: Prisma.TransactionClient, storeContactEmail: boolean) => {
       const guest = await tx.guest.upsert({
@@ -173,7 +208,7 @@ router.post("/", leadFormLimiter, async (req: Request, res: Response) => {
           source: "public_form",
           title: eventTypeTitle(payload.eventType),
           customerType: payload.customerType,
-          notes: `Preferred time slots: ${preferredSlots || "Not provided"}\nEvent location: ${payload.eventLocation}${notesExtra}`,
+          notes: `${leadNotesBase}${notesExtra}`,
           estimatedGuests: payload.numberOfGuests,
           expectedEventAt: eventDate
         }
@@ -189,9 +224,11 @@ router.post("/", leadFormLimiter, async (req: Request, res: Response) => {
           customerType: payload.customerType,
           status: "lead",
           eventDate,
+          startTime,
+          ...(endTime ? { endTime } : {}),
           venueAddress: payload.eventLocation,
           guestCountEstimate: payload.numberOfGuests,
-          notes: `Preferred time slots: ${preferredSlots || "Not provided"}${notesExtra}`
+          notes: `${eventNotesBase}${notesExtra}`
         }
       });
 
@@ -219,7 +256,7 @@ router.post("/", leadFormLimiter, async (req: Request, res: Response) => {
         subject: "We received your catering inquiry",
         html: `<p>Hi ${escapeHtml(payload.guestName)},</p>
                <p>Thanks for your inquiry for <strong>${escapeHtml(eventTypeTitle(payload.eventType))}</strong> on <strong>${escapeHtml(eventDate.toDateString())}</strong>.</p>
-               <p>Location: ${escapeHtml(payload.eventLocation)}<br/>Guests: ${payload.numberOfGuests}<br/>Preferred slots: ${escapeHtml(preferredSlots || "Not provided")}</p>
+               <p>Location: ${escapeHtml(payload.eventLocation)}<br/>Guests: ${payload.numberOfGuests}<br/>Event time: ${escapeHtml(eventTimeLabel)}<br/>Preferred slots: ${escapeHtml(preferredSlots || "Not provided")}</p>
                <p>Our team will contact you shortly.</p>`
       });
     }
@@ -313,6 +350,8 @@ router.get("/", async (req: Request, res: Response) => {
           eventType: true,
           customerType: true,
           eventDate: true,
+          startTime: true,
+          endTime: true,
           venueAddress: true,
           venueName: true,
           guestCountEstimate: true,
@@ -348,6 +387,8 @@ router.get("/", async (req: Request, res: Response) => {
         eventTypeLabel: eventTypeTitle(ev.eventType),
         customerType: ev.customerType,
         eventDate: ev.eventDate.toISOString(),
+        startTime: ev.startTime?.toISOString() ?? null,
+        endTime: ev.endTime?.toISOString() ?? null,
         location: ev.venueAddress ?? ev.venueName ?? "—",
         guestCount: ev.guestCountEstimate,
         status: ev.status

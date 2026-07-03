@@ -48,6 +48,7 @@ import {
   lineItemTotal
 } from "@/lib/quote-totals";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
+import { formatEventDateWithTime } from "@/lib/event-datetime";
 import { isPackageIncludedSection, packageItemsForSection } from "@/lib/package-sections";
 import { useDebouncedCallback } from "@/lib/use-debounce";
 import { fetchQuoteBuilder } from "@/lib/quote-builder-api";
@@ -817,7 +818,12 @@ function QuoteBuilderPage() {
             </Badge>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {formatEventDate(quote.event?.eventDate ?? "")} · {location}
+            {formatEventDateWithTime(
+              quote.event?.eventDate ?? "",
+              quote.event?.startTime,
+              quote.event?.endTime
+            )}{" "}
+            · {location}
           </p>
         </div>
         <Badge variant={statusBadgeVariant(quote.status)} className="w-fit capitalize">

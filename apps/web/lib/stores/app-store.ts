@@ -50,6 +50,8 @@ export type LeadsListResponse = {
     eventTypeLabel?: string;
     customerType: string;
     eventDate: string;
+    startTime: string | null;
+    endTime: string | null;
     location: string;
     guestCount: number | null;
     status: string;
@@ -70,6 +72,8 @@ export type BookingsListResponse = {
     eventTypeLabel?: string;
     customerType: string;
     eventDate: string;
+    startTime: string | null;
+    endTime: string | null;
     location: string;
     guestCount: number | null;
     status: string;
@@ -97,6 +101,8 @@ export type EventsListResponse = {
     eventTypeLabel?: string;
     customerType: string;
     eventDate: string;
+    startTime: string | null;
+    endTime: string | null;
     location: string;
     guestCount: number | null;
     status: string;
