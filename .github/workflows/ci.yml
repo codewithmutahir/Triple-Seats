@@ -25,6 +25,9 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
+      - name: Build database package
+        run: pnpm --filter @tripeseats/database build
+
       - name: Type check
         run: pnpm typecheck
 
