@@ -130,6 +130,16 @@ function createApp() {
     }
   });
 
+  app.get("/api/meta", (_req, res) => {
+    res.json({
+      features: {
+        dashboardAll: true,
+        calendarInit: true,
+        quoteBuilder: true
+      }
+    });
+  });
+
   app.use("/api/auth", authLimiter, toNodeHandler(auth));
 
   app.use("/api", generalLimiter);

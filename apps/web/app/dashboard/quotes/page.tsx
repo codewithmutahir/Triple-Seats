@@ -50,6 +50,7 @@ import {
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { isPackageIncludedSection, packageItemsForSection } from "@/lib/package-sections";
 import { useDebouncedCallback } from "@/lib/use-debounce";
+import { fetchQuoteBuilder } from "@/lib/quote-builder-api";
 import { parseApiError } from "@/lib/user-facing-error";
 import { browserTimer } from "@/lib/perf";
 import { cn } from "@/lib/utils";
@@ -228,29 +229,21 @@ function QuoteBuilderPage() {
       setError(null);
 
       perfRef.current?.step("fetch:start");
-      const res = await fetch(`/api/quotes/builder/${encodeURIComponent(eventId)}`, {
-        credentials: "include"
-      });
-      const body = (await res.json().catch(() => null)) as {
-        error?: string;
-        quote?: Quote;
-        packages?: CateringPackage[];
-        menuItemsByCategory?: Partial<Record<ItemCategory, MenuItem[]>>;
-      } | null;
+      const res = await fetchQuoteBuilder(eventId);
 
       perfRef.current?.step("fetch:all-done");
       if (cancelled) return;
 
-      if (!res.ok || !body?.quote) {
-        setError(parseApiError(body, res.status, res.statusText));
+      if (!res.ok || !res.data.quote) {
+        setError(res.ok ? "Could not load quote." : res.message);
         setLoading(false);
         setPackagesLoading(false);
         return;
       }
 
-      applyQuote(body.quote);
-      setPackages(body.packages ?? []);
-      setMenuItemsByCategory(body.menuItemsByCategory ?? {});
+      applyQuote(res.data.quote);
+      setPackages(res.data.packages ?? []);
+      setMenuItemsByCategory(res.data.menuItemsByCategory ?? {});
       perfRef.current?.step("state:set");
       setLoading(false);
       setPackagesLoading(false);

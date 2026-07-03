@@ -26,7 +26,7 @@ import {
   type DashboardStats,
   type DashboardUpcomingRow
 } from "@/lib/stores/app-store";
-import { parseApiError } from "@/lib/user-facing-error";
+import { fetchDashboardAll } from "@/lib/dashboard-api";
 import { browserTimer } from "@/lib/perf";
 
 type StatsResponse = DashboardStats;
@@ -50,61 +50,6 @@ function formatShortDate(iso: string) {
 }
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-
-async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number; message: string }> {
-  const res = await fetch(path, { credentials: "include" });
-  if (res.status === 401) {
-    return { ok: false, status: 401, message: "You need to sign in again." };
-  }
-  if (res.status === 403) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return {
-      ok: false,
-      status: 403,
-      message: parseApiError(body, 403, res.statusText)
-    };
-  }
-  if (res.status === 409) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return {
-      ok: false,
-      status: 409,
-      message: parseApiError(body, 409, res.statusText)
-    };
-  }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { ok: false, status: res.status, message: parseApiError(body, res.status, res.statusText) };
-  }
-  return { ok: true, data: (await res.json()) as T };
-}
-
-/** Prefer batch endpoint; fall back to legacy routes when API is not yet deployed. */
-async function fetchDashboardAll(): Promise<
-  { ok: true; data: DashboardAllResponse } | { ok: false; status: number; message: string }
-> {
-  const batch = await fetchJson<DashboardAllResponse>("/api/dashboard/all");
-  if (batch.ok || batch.status !== 404) return batch;
-
-  const [statsRes, recentRes, upcomingRes] = await Promise.all([
-    fetchJson<StatsResponse>("/api/dashboard/stats"),
-    fetchJson<{ items: RecentRow[] }>("/api/dashboard/recent-leads"),
-    fetchJson<{ items: UpcomingRow[] }>("/api/dashboard/upcoming-events")
-  ]);
-
-  if (!statsRes.ok) return statsRes;
-  if (!recentRes.ok) return recentRes;
-  if (!upcomingRes.ok) return upcomingRes;
-
-  return {
-    ok: true,
-    data: {
-      stats: statsRes.data,
-      recent: recentRes.data,
-      upcoming: upcomingRes.data
-    }
-  };
-}
 
 export default function DashboardPage() {
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
