@@ -285,6 +285,7 @@ interface AppStore {
   setBookingsCache: (key: string, data: BookingsListResponse) => void;
   setBookingsStats: (data: BookingsStats) => void;
   setEventsCache: (key: string, data: EventsListResponse) => void;
+  invalidateEventsData: () => void;
   setEventsStats: (data: EventsStats) => void;
   setDiscussionsConversations: (key: string, data: ConversationsListResponse) => void;
   setDiscussionsThread: (eventId: string, data: DiscussionThread) => void;
@@ -356,6 +357,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set((state) => ({
       eventsCache: { ...state.eventsCache, [key]: { data, fetchedAt: Date.now() } }
     })),
+  invalidateEventsData: () => set({ eventsCache: {}, eventsStats: null }),
   setEventsStats: (data) => set({ eventsStats: { data, fetchedAt: Date.now() } }),
   setDiscussionsConversations: (key, data) =>
     set((state) => ({

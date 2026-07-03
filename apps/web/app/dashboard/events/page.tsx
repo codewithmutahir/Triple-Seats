@@ -50,6 +50,7 @@ import {
 } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
+import { CLIENT_EVENTS_FETCH_SIZE, filterAndPaginate, fetchAllListPages } from "@/lib/client-list-filter";
 import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -62,6 +63,9 @@ const STATUS_TABS = [
   { value: "booked", label: "Booked" },
   { value: "completed", label: "Completed" }
 ] as const;
+
+const ALL_EVENTS_CACHE_KEY = "__all__";
+const EVENTS_PAGE_SIZE = 20;
 
 type EventListRow = EventsListResponse["items"][number];
 
@@ -214,73 +218,90 @@ function EventsListView() {
   const router = useRouter();
   const [status, setStatus] = useState<string>("all");
   const [page, setPage] = useState(1);
-  const cacheKey = JSON.stringify({ page, status });
 
-  const [data, setData] = useState<EventsListResponse | null>(() =>
-    useAppStore.getState().peekEventsCache(cacheKey)
+  const [allEvents, setAllEvents] = useState<EventListRow[]>(
+    () => useAppStore.getState().peekEventsCache(ALL_EVENTS_CACHE_KEY)?.items ?? []
   );
   const [stats, setStats] = useState<EventsStats | null>(() =>
     useAppStore.getState().peekEventsStats()
   );
   const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekEventsCache(cacheKey) == null
+    () => useAppStore.getState().peekEventsCache(ALL_EVENTS_CACHE_KEY) == null
   );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const queryParams = useMemo(() => {
-    const p = new URLSearchParams();
-    p.set("page", String(page));
-    p.set("status", status);
-    return p;
-  }, [page, status]);
+  const data = useMemo(
+    () => filterAndPaginate(allEvents, { status, page, pageSize: EVENTS_PAGE_SIZE }),
+    [allEvents, status, page]
+  );
 
-  const load = useCallback(async () => {
+  const loadAllEvents = useCallback(async () => {
     const store = useAppStore.getState();
-    const key = cacheKey;
     setError(null);
 
-    await Promise.all([
-      loadWithCache({
-        peek: () => store.peekEventsCache(key),
-        getFresh: () => store.getEventsCache(key),
-        set: (result) => store.setEventsCache(key, result),
-        fetch: async () => {
-          const result = await fetchEventsList(queryParams);
-          if ("error" in result) throw new Error(result.error);
-          return result;
-        },
-        onData: setData,
-        setLoading,
-        setRefreshing
-      }),
-      loadWithCache({
-        peek: () => store.peekEventsStats(),
-        getFresh: () => store.getEventsStats(),
-        set: (result) => store.setEventsStats(result),
-        fetch: async () => {
-          const result = await fetchEventsStats();
-          if ("error" in result) throw new Error(result.error);
-          return result;
-        },
-        onData: setStats,
-        setLoading: () => {}
-      })
-    ]).catch((e) => {
+    await loadWithCache({
+      peek: () => store.peekEventsCache(ALL_EVENTS_CACHE_KEY),
+      getFresh: () => store.getEventsCache(ALL_EVENTS_CACHE_KEY),
+      set: (result) => store.setEventsCache(ALL_EVENTS_CACHE_KEY, result),
+      fetch: async () => {
+        const result = await fetchAllListPages<EventListRow>(
+          async (pageNum) => {
+            const p = new URLSearchParams();
+            p.set("page", String(pageNum));
+            p.set("status", "all");
+            p.set("pageSize", String(CLIENT_EVENTS_FETCH_SIZE));
+            return fetchEventsList(p);
+          },
+          CLIENT_EVENTS_FETCH_SIZE
+        );
+        if ("error" in result) throw new Error(result.error);
+        return {
+          items: result.items,
+          total: result.total,
+          page: 1,
+          pageSize: EVENTS_PAGE_SIZE,
+          totalPages: Math.max(1, Math.ceil(result.total / EVENTS_PAGE_SIZE))
+        };
+      },
+      onData: (result) => setAllEvents(result.items),
+      setLoading,
+      setRefreshing
+    }).catch((e) => {
       setError(e instanceof Error ? e.message : "Request failed.");
-      setData(null);
+      setAllEvents([]);
     });
-  }, [cacheKey, queryParams]);
+  }, []);
+
+  const loadStats = useCallback(async () => {
+    const store = useAppStore.getState();
+    await loadWithCache({
+      peek: () => store.peekEventsStats(),
+      getFresh: () => store.getEventsStats(),
+      set: (result) => store.setEventsStats(result),
+      fetch: async () => {
+        const result = await fetchEventsStats();
+        if ("error" in result) throw new Error(result.error);
+        return result;
+      },
+      onData: setStats,
+      setLoading: () => {},
+      setRefreshing: () => {}
+    }).catch(() => {
+      /* stats cards are supplementary; list still works */
+    });
+  }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadAllEvents();
+    void loadStats();
+  }, [loadAllEvents, loadStats]);
 
   useEffect(() => {
     setPage(1);
   }, [status]);
 
-  const empty = !loading && data && data.total === 0;
+  const empty = !loading && data.total === 0;
 
   return (
     <div className="space-y-6">
@@ -289,7 +310,7 @@ function EventsListView() {
           <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Events</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Manage inquiries and bookings through your pipeline
-            {data && !loading ? (
+            {!loading ? (
               <span className="text-foreground/80"> · {data.total} total</span>
             ) : null}
           </p>
@@ -366,7 +387,7 @@ function EventsListView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading && !(data?.items.length)
+                  {loading && allEvents.length === 0
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 8 }).map((__, j) => (
@@ -376,7 +397,7 @@ function EventsListView() {
                           ))}
                         </TableRow>
                       ))
-                    : (data?.items ?? []).map((row) => (
+                    : data.items.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell className="font-medium">{row.guestName}</TableCell>
                           <TableCell>
@@ -416,10 +437,10 @@ function EventsListView() {
             </div>
 
             <ListPagination
-              page={data?.page ?? page}
-              totalPages={data?.totalPages ?? 1}
-              total={data?.total ?? 0}
-              pageSize={data?.pageSize ?? 20}
+              page={data.page}
+              totalPages={data.totalPages}
+              total={data.total}
+              pageSize={data.pageSize}
               itemLabel="event"
               loading={loading}
               onPageChange={setPage}
@@ -572,6 +593,7 @@ function EventDetailInner() {
       const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
       if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
       if (body.event) setEvent(body.event);
+      useAppStore.getState().invalidateEventsData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update status");
     } finally {
