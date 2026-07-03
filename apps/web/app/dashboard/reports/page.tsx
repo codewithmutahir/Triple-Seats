@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
+import { ListPagination } from "@/components/dashboard/list-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -142,6 +143,8 @@ async function fetchReports(year: number, month: number): Promise<ReportsData | 
   return { filterKey: `${year}-${month}`, summary, timeline };
 }
 
+const REPORTS_PAGE_SIZE = 20;
+
 export default function ReportsPage() {
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -166,6 +169,8 @@ export default function ReportsPage() {
   });
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [leadReportsPage, setLeadReportsPage] = useState(1);
+  const [recentActivityPage, setRecentActivityPage] = useState(1);
   const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -223,6 +228,11 @@ export default function ReportsPage() {
   }, [load]);
 
   useEffect(() => {
+    setLeadReportsPage(1);
+    setRecentActivityPage(1);
+  }, [filterKey]);
+
+  useEffect(() => {
     if (perfEndedRef.current || loading) return;
     if (reports || error) {
       perfEndedRef.current = true;
@@ -233,6 +243,20 @@ export default function ReportsPage() {
 
   const summary = reports?.summary;
   const timeline = reports?.timeline ?? [];
+
+  const leadReports = summary?.leadReports ?? [];
+  const leadReportsTotalPages = Math.max(1, Math.ceil(leadReports.length / REPORTS_PAGE_SIZE));
+  const paginatedLeadReports = useMemo(() => {
+    const offset = (leadReportsPage - 1) * REPORTS_PAGE_SIZE;
+    return leadReports.slice(offset, offset + REPORTS_PAGE_SIZE);
+  }, [leadReports, leadReportsPage]);
+
+  const recentActivity = summary?.recentActivity ?? [];
+  const recentActivityTotalPages = Math.max(1, Math.ceil(recentActivity.length / REPORTS_PAGE_SIZE));
+  const paginatedRecentActivity = useMemo(() => {
+    const offset = (recentActivityPage - 1) * REPORTS_PAGE_SIZE;
+    return recentActivity.slice(offset, offset + REPORTS_PAGE_SIZE);
+  }, [recentActivity, recentActivityPage]);
 
   const avgEventValue = useMemo(() => {
     if (!summary) return 0;
@@ -515,6 +539,9 @@ export default function ReportsPage() {
           <CardTitle className="font-heading text-lg text-[#1B2A4A]">Reports per Lead</CardTitle>
           <p className="text-sm text-muted-foreground">
             Lead and quote breakdown for events in the selected month
+            {!loading && leadReports.length > 0 ? (
+              <span className="text-foreground/80"> · {leadReports.length} total</span>
+            ) : null}
           </p>
         </CardHeader>
         <CardContent className="overflow-x-auto">
@@ -549,8 +576,8 @@ export default function ReportsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {summary?.leadReports?.length ? (
-                  summary.leadReports.map((row) => (
+                {leadReports.length ? (
+                  paginatedLeadReports.map((row) => (
                     <TableRow key={row.eventId}>
                       <TableCell className="whitespace-nowrap">
                         {formatShortDate(row.bookingDate)}
@@ -604,6 +631,17 @@ export default function ReportsPage() {
               </TableBody>
             </Table>
           )}
+          {!loading && leadReports.length > 0 ? (
+            <ListPagination
+              page={leadReportsPage}
+              totalPages={leadReportsTotalPages}
+              total={leadReports.length}
+              pageSize={REPORTS_PAGE_SIZE}
+              itemLabel="report"
+              loading={loading}
+              onPageChange={setLeadReportsPage}
+            />
+          ) : null}
         </CardContent>
       </Card>
 
@@ -612,6 +650,9 @@ export default function ReportsPage() {
           <CardTitle className="font-heading text-lg text-[#1B2A4A]">Recent Bookings</CardTitle>
           <p className="text-sm text-muted-foreground">
             Confirmed and completed events this month
+            {!loading && recentActivity.length > 0 ? (
+              <span className="text-foreground/80"> · {recentActivity.length} total</span>
+            ) : null}
           </p>
         </CardHeader>
         <CardContent className="overflow-x-auto">
@@ -633,8 +674,8 @@ export default function ReportsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {summary?.recentActivity.length ? (
-                  summary.recentActivity.map((row, i) => (
+                {recentActivity.length ? (
+                  paginatedRecentActivity.map((row, i) => (
                     <TableRow key={`${row.guestName}-${row.eventDate}-${i}`}>
                       <TableCell className="font-medium">{row.guestName}</TableCell>
                       <TableCell>{row.eventType}</TableCell>
@@ -657,6 +698,17 @@ export default function ReportsPage() {
               </TableBody>
             </Table>
           )}
+          {!loading && recentActivity.length > 0 ? (
+            <ListPagination
+              page={recentActivityPage}
+              totalPages={recentActivityTotalPages}
+              total={recentActivity.length}
+              pageSize={REPORTS_PAGE_SIZE}
+              itemLabel="booking"
+              loading={loading}
+              onPageChange={setRecentActivityPage}
+            />
+          ) : null}
         </CardContent>
       </Card>
     </div>

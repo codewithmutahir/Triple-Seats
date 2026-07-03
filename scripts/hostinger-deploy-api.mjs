@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 
 const domain = process.argv[2] || process.env.HOSTINGER_DEPLOY_DOMAIN;
 const archivePath =
-  process.argv[3] || path.join(repoRoot, "tripeseats-api-hostinger.zip");
+  process.argv[3] || path.join(repoRoot, "tripeseats-api-hostinger-v2.zip");
 
 if (!domain) {
   console.error("Usage: node scripts/hostinger-deploy-api.mjs <domain> [archive.zip]");
@@ -100,10 +100,10 @@ async function triggerBuild(username, targetDomain, archiveBasename, buildSettin
     ...buildSettings,
     node_version: buildSettings?.node_version || 20,
     app_type: "express",
-    package_manager: "pnpm",
-    build_script: "hostinger:build",
-    entry_file: "apps/api/dist/index.js",
-    root_directory: ".",
+    package_manager: "npm",
+    build_script: buildSettings?.build_script || "build",
+    entry_file: buildSettings?.entry_file || "app.js",
+    root_directory: buildSettings?.root_directory || ".",
     source_type: "archive",
     source_options: { archive_path: archiveBasename }
   };

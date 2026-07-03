@@ -2,7 +2,10 @@ import type { Prisma } from "@tripeseats/database";
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
+import { buildPaginatedResponse, parsePagination } from "../lib/pagination";
 import { getSession, SessionError } from "../lib/session";
+
+const PENDING_STATUSES = ["todo", "in_progress", "blocked"] as const;
 
 const router = Router();
 
@@ -140,31 +143,82 @@ router.get("/", async (req: Request, res: Response) => {
       where.title = { contains: search, mode: "insensitive" };
     }
 
-    const tasks = await prisma.task.findMany({
-      where,
-      include: {
-        event: {
-          select: {
-            id: true,
-            title: true,
-            eventDate: true,
-            venueName: true,
-            venueAddress: true
-          }
+    const { page, pageSize, offset } = parsePagination(req.query as Record<string, unknown>);
+    const eventInclude = {
+      event: {
+        select: {
+          id: true,
+          title: true,
+          eventDate: true,
+          venueName: true,
+          venueAddress: true
         }
       }
-    });
+    } as const;
 
-    const items = tasks
-      .map(serializeTaskWithEvent)
-      .sort((a, b) => {
-        const aPending = a.status === "pending" ? 0 : 1;
-        const bPending = b.status === "pending" ? 0 : 1;
-        if (aPending !== bPending) return aPending - bPending;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    let items: ReturnType<typeof serializeTaskWithEvent>[] = [];
+    let total = 0;
+
+    if (statusParam === "pending" || statusParam === "completed") {
+      total = await prisma.task.count({ where });
+      const tasks = await prisma.task.findMany({
+        where,
+        include: eventInclude,
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: pageSize
       });
+      items = tasks.map(serializeTaskWithEvent);
+    } else {
+      const pendingWhere: Prisma.TaskWhereInput = {
+        ...where,
+        status: { in: [...PENDING_STATUSES] }
+      };
+      const completedWhere: Prisma.TaskWhereInput = {
+        ...where,
+        status: "done"
+      };
 
-    return res.json({ items });
+      const [pendingTotal, completedTotal] = await Promise.all([
+        prisma.task.count({ where: pendingWhere }),
+        prisma.task.count({ where: completedWhere })
+      ]);
+      total = pendingTotal + completedTotal;
+
+      if (offset < pendingTotal) {
+        const pendingTake = Math.min(pageSize, pendingTotal - offset);
+        const pendingTasks = await prisma.task.findMany({
+          where: pendingWhere,
+          include: eventInclude,
+          orderBy: { createdAt: "desc" },
+          skip: offset,
+          take: pendingTake
+        });
+        items = pendingTasks.map(serializeTaskWithEvent);
+
+        if (items.length < pageSize) {
+          const completedTasks = await prisma.task.findMany({
+            where: completedWhere,
+            include: eventInclude,
+            orderBy: { createdAt: "desc" },
+            skip: 0,
+            take: pageSize - items.length
+          });
+          items = [...items, ...completedTasks.map(serializeTaskWithEvent)];
+        }
+      } else {
+        const completedTasks = await prisma.task.findMany({
+          where: completedWhere,
+          include: eventInclude,
+          orderBy: { createdAt: "desc" },
+          skip: offset - pendingTotal,
+          take: pageSize
+        });
+        items = completedTasks.map(serializeTaskWithEvent);
+      }
+    }
+
+    return res.json(buildPaginatedResponse(items, total, page, pageSize));
   } catch (e) {
     return handleSessionError(res, e);
   }

@@ -1,7 +1,9 @@
+import type { Prisma } from "@tripeseats/database";
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
+import { buildPaginatedResponse, parsePagination } from "../lib/pagination";
 import { getSession, SessionError } from "../lib/session";
 import { timer } from "../lib/perf";
 
@@ -213,28 +215,64 @@ router.get("/conversations", async (req: Request, res: Response) => {
     const { caterer } = await getSession(req);
     perf.step("session");
 
-    const latestPerEvent = await prisma.message.findMany({
-      where: { catererId: caterer.id, eventId: { not: null } },
-      distinct: ["eventId"],
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        body: true,
-        direction: true,
-        createdAt: true,
-        eventId: true,
-        event: {
-          select: {
-            id: true,
-            title: true,
-            status: true,
-            primaryGuest: {
-              select: { firstName: true, lastName: true, email: true }
+    const { page, pageSize, offset } = parsePagination(req.query as Record<string, unknown>);
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+    const conversationWhere: Prisma.MessageWhereInput = {
+      catererId: caterer.id,
+      eventId: { not: null }
+    };
+
+    if (search) {
+      conversationWhere.event = {
+        is: {
+          primaryGuest: {
+            is: {
+              OR: [
+                { firstName: { contains: search, mode: "insensitive" } },
+                { lastName: { contains: search, mode: "insensitive" } },
+                { email: { contains: search, mode: "insensitive" } }
+              ]
             }
           }
         }
-      }
-    });
+      };
+    }
+
+    const [distinctEvents, latestPerEvent] = await Promise.all([
+      prisma.message.findMany({
+        where: conversationWhere,
+        distinct: ["eventId"],
+        select: { eventId: true }
+      }),
+      prisma.message.findMany({
+        where: conversationWhere,
+        distinct: ["eventId"],
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: pageSize,
+        select: {
+          id: true,
+          body: true,
+          direction: true,
+          createdAt: true,
+          eventId: true,
+          event: {
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              primaryGuest: {
+                select: { firstName: true, lastName: true, email: true }
+              }
+            }
+          }
+        }
+      })
+    ]);
+
+    const total = distinctEvents.filter((m) => m.eventId != null).length;
 
     const conversations = latestPerEvent
       .filter((m): m is typeof m & { eventId: string } => m.eventId != null)
@@ -254,7 +292,14 @@ router.get("/conversations", async (req: Request, res: Response) => {
 
     perf.step("db:conversations");
     perf.end();
-    return res.json({ conversations });
+    const paginated = buildPaginatedResponse(conversations, total, page, pageSize);
+    return res.json({
+      conversations: paginated.items,
+      total: paginated.total,
+      page: paginated.page,
+      pageSize: paginated.pageSize,
+      totalPages: paginated.totalPages
+    });
   } catch (e) {
     return handleSessionError(res, e);
   }

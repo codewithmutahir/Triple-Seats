@@ -77,7 +77,7 @@ async function main() {
 
   const form = new FormData();
   form.append("archive", new Blob([archiveBytes]), archiveName);
-  form.append("package_manager", "pnpm");
+  form.append("package_manager", "npm");
   form.append("build_script", "build");
   form.append("entry_file", "app.js");
   form.append("node_version", "20");

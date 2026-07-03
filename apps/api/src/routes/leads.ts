@@ -13,6 +13,7 @@ import {
 } from "../lib/event-customer-types";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { leadFormLimiter } from "../lib/rate-limit";
+import { parsePagination } from "../lib/pagination";
 import { getSession, SessionError } from "../lib/session";
 import { timer } from "../lib/perf";
 
@@ -246,9 +247,7 @@ router.get("/", async (req: Request, res: Response) => {
     const catererId = caterer.id;
     const intakeCatererId = process.env.LEAD_INTAKE_CATERER_ID?.trim();
 
-    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
-    const pageSize = 20;
-    const offset = (page - 1) * pageSize;
+    const { page, pageSize, offset } = parsePagination(req.query as Record<string, unknown>);
     const statusParam = String(req.query.status ?? "all").toLowerCase();
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom.trim() : "";

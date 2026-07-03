@@ -49,6 +49,7 @@ import {
   type EventTypeValue
 } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
+import { ListPagination } from "@/components/dashboard/list-pagination";
 import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -286,7 +287,12 @@ function EventsListView() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">Events</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage inquiries and bookings through your pipeline</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage inquiries and bookings through your pipeline
+            {data && !loading ? (
+              <span className="text-foreground/80"> · {data.total} total</span>
+            ) : null}
+          </p>
         </div>
         {refreshing ? <RefreshingBadge /> : null}
       </header>
@@ -409,33 +415,15 @@ function EventsListView() {
               </Table>
             </div>
 
-            {data && data.totalPages > 1 ? (
-              <div className="flex flex-col items-center justify-between gap-3 border-t px-4 py-3 sm:flex-row">
-                <p className="text-sm text-muted-foreground">
-                  Page {data.page} of {data.totalPages} · {data.total} total
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1 || loading}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={loading || page >= data.totalPages}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            ) : null}
+            <ListPagination
+              page={data?.page ?? page}
+              totalPages={data?.totalPages ?? 1}
+              total={data?.total ?? 0}
+              pageSize={data?.pageSize ?? 20}
+              itemLabel="event"
+              loading={loading}
+              onPageChange={setPage}
+            />
           </CardContent>
         </Card>
       )}
