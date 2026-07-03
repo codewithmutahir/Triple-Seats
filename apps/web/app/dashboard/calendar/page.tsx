@@ -20,7 +20,7 @@ function internalApiOrigin(): string {
   return process.env.INTERNAL_API_URL?.replace(/\/+$/, "") ?? "http://127.0.0.1:4000";
 }
 
-async function fetchInitialEvents(start: string, end: string): Promise<CalendarEvent[]> {
+async function fetchInitialCalendar(): Promise<CalendarEvent[]> {
   const cookieHeader = cookies()
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
@@ -29,16 +29,13 @@ async function fetchInitialEvents(start: string, end: string): Promise<CalendarE
   if (!cookieHeader) return [];
 
   try {
-    const res = await fetch(
-      `${internalApiOrigin()}/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
-      {
-        headers: { cookie: cookieHeader },
-        next: { revalidate: 60 }
-      }
-    );
+    const res = await fetch(`${internalApiOrigin()}/api/calendar/init`, {
+      headers: { cookie: cookieHeader },
+      next: { revalidate: 60 }
+    });
     if (!res.ok) return [];
-    const data = (await res.json()) as unknown;
-    return Array.isArray(data) ? (data as CalendarEvent[]) : [];
+    const data = (await res.json()) as { events?: CalendarEvent[] };
+    return Array.isArray(data.events) ? data.events : [];
   } catch {
     return [];
   }
@@ -48,7 +45,7 @@ export default async function CalendarPage() {
   const now = new Date();
   const start = startOfMonth(now).toISOString();
   const end = endOfMonth(now).toISOString();
-  const initialEvents = await fetchInitialEvents(start, end);
+  const initialEvents = await fetchInitialCalendar();
 
   return (
     <div className="space-y-6">

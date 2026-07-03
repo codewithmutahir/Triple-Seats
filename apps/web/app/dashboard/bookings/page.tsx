@@ -3,7 +3,7 @@
 import { format } from "date-fns";
 import { BookCheck, Download, Inbox } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,10 +19,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type BookingsListResponse, type BookingsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 type ListResponse = BookingsListResponse;
 type StatsResponse = BookingsStats;
@@ -117,6 +119,13 @@ function yearOptions() {
 }
 
 export default function BookingsPage() {
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("bookings");
+    perfRef.current.step("mount");
+  }
+
   const [searchInput, setSearchInput] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [status, setStatus] = useState<(typeof STATUS_TABS)[number]["value"]>("all");
@@ -162,6 +171,7 @@ export default function BookingsPage() {
     const store = useAppStore.getState();
     const key = cacheKey;
     setError(null);
+    perfRef.current?.step("fetch:start");
 
     await loadWithCache({
       peek: () => store.peekBookingsCache(key),
@@ -172,7 +182,10 @@ export default function BookingsPage() {
         if ("error" in result) throw new Error(result.error);
         return result;
       },
-      onData: setData,
+      onData: (data) => {
+        setData(data);
+        perfRef.current?.step("fetch:done");
+      },
       setLoading,
       setRefreshing
     }).catch((e) => {
@@ -205,6 +218,15 @@ export default function BookingsPage() {
   useEffect(() => {
     void loadStats();
   }, [loadStats]);
+
+  useEffect(() => {
+    if (perfEndedRef.current || loading) return;
+    if (data || error) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [data, loading, error]);
 
   useEffect(() => {
     setPage(1);
@@ -283,13 +305,13 @@ export default function BookingsPage() {
           <Card key={label}>
             <CardContent className="px-4 py-3">
               <p className="text-xs font-medium text-muted-foreground">{label}</p>
-              <p className="font-heading text-2xl font-semibold text-[#1B2A4A]">
+              <div className="font-heading text-2xl font-semibold text-[#1B2A4A]">
                 {statsLoading && stats == null ? (
                   <Skeleton className="mt-1 h-8 w-16" />
                 ) : (
                   fmt(value ?? 0)
                 )}
-              </p>
+              </div>
             </CardContent>
           </Card>
         ))}
@@ -404,7 +426,8 @@ export default function BookingsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Guest</TableHead>
-                    <TableHead className="hidden sm:table-cell">Event Type</TableHead>
+                    <TableHead className="hidden sm:table-cell">Event</TableHead>
+                    <TableHead>Type</TableHead>
                     <TableHead>Event Date</TableHead>
                     <TableHead className="hidden md:table-cell">Location</TableHead>
                     <TableHead className="text-right">Guests</TableHead>
@@ -418,7 +441,7 @@ export default function BookingsPage() {
                   {loading && !(data?.items.length)
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 9 }).map((__, j) => (
+                          {Array.from({ length: 10 }).map((__, j) => (
                             <TableCell key={j}>
                               <Skeleton className="h-8 w-full" />
                             </TableCell>
@@ -434,13 +457,26 @@ export default function BookingsPage() {
                             ) : null}
                             <div className="mt-1 sm:hidden">
                               <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
-                                {row.eventType}
+                                {row.eventTypeLabel ?? formatEventType(row.eventType)}
                               </Badge>
                             </div>
                           </TableCell>
                           <TableCell className="hidden sm:table-cell">
                             <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
-                              {row.eventType}
+                              {row.eventTypeLabel ?? formatEventType(row.eventType)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "font-semibold",
+                                row.customerType === "b2b"
+                                  ? "border-blue-300 bg-blue-50 text-blue-800"
+                                  : "border-slate-300 bg-slate-100 text-slate-700"
+                              )}
+                            >
+                              {formatCustomerType(row.customerType)}
                             </Badge>
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-sm">

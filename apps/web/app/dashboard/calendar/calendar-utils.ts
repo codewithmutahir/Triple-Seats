@@ -20,6 +20,31 @@ export function adjacentMonthRanges(anchor: Date) {
   ] as const;
 }
 
+/** Group events by yyyy-MM month key for Zustand cache seeding */
+export function groupEventsByMonth(events: CalendarEvent[]): Record<string, CalendarEvent[]> {
+  const grouped: Record<string, CalendarEvent[]> = {};
+  for (const ev of events) {
+    const key = monthKey(new Date(ev.start));
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(ev);
+  }
+  return grouped;
+}
+
+export async function fetchCalendarInit(): Promise<{
+  data?: CalendarEvent[];
+  error?: string;
+}> {
+  const res = await fetch("/api/calendar/init", { credentials: "include" });
+  const body = (await res.json().catch(() => null)) as
+    | { error?: string; events?: CalendarEvent[] }
+    | null;
+  if (!res.ok) {
+    return { error: parseApiError(body, res.status, res.statusText) };
+  }
+  return { data: body?.events ?? [] };
+}
+
 export async function fetchCalendarEvents(
   start: Date,
   end: Date

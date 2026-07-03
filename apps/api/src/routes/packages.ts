@@ -2,7 +2,9 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
+import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
 
 const router = Router();
 
@@ -15,8 +17,10 @@ function handleSessionError(res: Response, e: unknown) {
 }
 
 function serializePackage(
-  pkg: Awaited<ReturnType<typeof loadPackages>>[number]
+  pkg: Awaited<ReturnType<typeof loadPackages>>[number],
+  customerType: CustomerTypeValue
 ) {
+  const tiers = pkg.tiers.filter((t) => t.customerType === customerType);
   return {
     id: pkg.id,
     catererId: pkg.catererId,
@@ -24,8 +28,9 @@ function serializePackage(
     description: pkg.description,
     sortOrder: pkg.sortOrder,
     minGuests: pkg.minGuests,
-    tiers: pkg.tiers.map((t) => ({
+    tiers: tiers.map((t) => ({
       id: t.id,
+      customerType: t.customerType,
       minGuests: t.minGuests,
       maxGuests: t.maxGuests,
       pricePerHead: t.pricePerHead
@@ -52,15 +57,23 @@ async function loadPackages(catererId: string) {
 
 router.get("/", async (req: Request, res: Response) => {
   try {
+    const perf = timer("packages");
+
     const { caterer } = await getSession(req);
+    perf.step("session");
+
+    const raw = typeof req.query.customerType === "string" ? req.query.customerType : "b2c";
+    const customerType: CustomerTypeValue = isCustomerType(raw) ? raw : "b2c";
 
     let packages = await loadPackages(caterer.id);
     if (packages.length === 0) {
       await seedPackagesForCaterer(caterer.id);
       packages = await loadPackages(caterer.id);
     }
+    perf.step("db:packages+tiers+items");
 
-    return res.json({ items: packages.map(serializePackage) });
+    perf.end();
+    return res.json({ items: packages.map((p) => serializePackage(p, customerType)) });
   } catch (e) {
     return handleSessionError(res, e);
   }

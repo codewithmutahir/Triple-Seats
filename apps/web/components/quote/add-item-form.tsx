@@ -37,6 +37,7 @@ type AddItemFormProps = {
   category: ItemCategory;
   existingItems?: QuoteLineItem[];
   onAdd: (payload: AddItemPayload) => void;
+  catalogItems?: MenuItem[];
 };
 
 async function fetchMenuItems(category: ItemCategory): Promise<{ items: MenuItem[]; error?: string }> {
@@ -96,8 +97,13 @@ function HighlightedName({ name, query }: { name: string; query: string }) {
   );
 }
 
-export function AddItemForm({ category, existingItems = [], onAdd }: AddItemFormProps) {
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+export function AddItemForm({
+  category,
+  existingItems = [],
+  onAdd,
+  catalogItems
+}: AddItemFormProps) {
+  const [menuItems, setMenuItems] = useState<MenuItem[]>(catalogItems ?? []);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
@@ -112,6 +118,12 @@ export function AddItemForm({ category, existingItems = [], onAdd }: AddItemForm
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (catalogItems) {
+      setMenuItems(catalogItems);
+      setCatalogError(null);
+      return;
+    }
+
     let cancelled = false;
     fetchMenuItems(category).then(({ items, error }) => {
       if (cancelled) return;
@@ -121,7 +133,7 @@ export function AddItemForm({ category, existingItems = [], onAdd }: AddItemForm
     return () => {
       cancelled = true;
     };
-  }, [category]);
+  }, [category, catalogItems]);
 
   const allSearchable = useMemo(() => {
     const seen = new Set<string>();

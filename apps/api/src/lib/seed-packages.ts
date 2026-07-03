@@ -1,5 +1,18 @@
 import { prisma } from "@tripeseats/database";
 
+type TierSeed = {
+  minGuests: number;
+  maxGuests: number | null;
+  pricePerHead: number;
+};
+
+function expandTiers(tiers: TierSeed[]) {
+  return [
+    ...tiers.map((tier) => ({ ...tier, customerType: "b2c" as const })),
+    ...tiers.map((tier) => ({ ...tier, customerType: "b2b" as const }))
+  ];
+}
+
 const PACKAGES = [
   {
     name: "Package 1",
@@ -17,12 +30,12 @@ const PACKAGES = [
       { label: "Raita", quantity: 1 },
       { label: "Mirchi Ka Salan", quantity: 1 }
     ],
-    tiers: [
+    tiers: expandTiers([
       { minGuests: 200, maxGuests: 250, pricePerHead: 19 },
       { minGuests: 251, maxGuests: 350, pricePerHead: 16 },
       { minGuests: 351, maxGuests: 450, pricePerHead: 15 },
       { minGuests: 451, maxGuests: null, pricePerHead: 15 }
-    ]
+    ])
   },
   {
     name: "Package 2",
@@ -41,12 +54,12 @@ const PACKAGES = [
       { label: "Raita", quantity: 1 },
       { label: "Mirchi Ka Salan", quantity: 1 }
     ],
-    tiers: [
+    tiers: expandTiers([
       { minGuests: 200, maxGuests: 250, pricePerHead: 20 },
       { minGuests: 251, maxGuests: 350, pricePerHead: 17 },
       { minGuests: 351, maxGuests: 450, pricePerHead: 16 },
       { minGuests: 451, maxGuests: null, pricePerHead: 16 }
-    ]
+    ])
   },
   {
     name: "Package 3",
@@ -65,12 +78,12 @@ const PACKAGES = [
       { label: "Raita", quantity: 1 },
       { label: "Mirchi Ka Salan", quantity: 1 }
     ],
-    tiers: [
+    tiers: expandTiers([
       { minGuests: 200, maxGuests: 250, pricePerHead: 21 },
       { minGuests: 251, maxGuests: 350, pricePerHead: 18 },
       { minGuests: 351, maxGuests: 450, pricePerHead: 18 },
       { minGuests: 451, maxGuests: null, pricePerHead: 18 }
-    ]
+    ])
   }
 ];
 

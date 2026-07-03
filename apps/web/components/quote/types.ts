@@ -13,6 +13,7 @@ export type QuoteStatus = "draft" | "sent" | "accepted" | "declined";
 
 export type PackagePriceTier = {
   id: string;
+  customerType?: "b2b" | "b2c";
   minGuests: number;
   maxGuests: number | null;
   pricePerHead: number;
@@ -74,6 +75,9 @@ export type MenuItem = {
 export type QuoteEvent = {
   id: string;
   title: string;
+  eventType?: string;
+  eventTypeLabel?: string;
+  customerType?: "b2b" | "b2c";
   eventDate: string;
   guestCountEstimate: number;
   venueAddress: string | null;

@@ -10,7 +10,7 @@ import {
   UserPlus
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,12 +21,13 @@ import { RefreshingBadge } from "@/components/refreshing-badge";
 import { BookingLinkCard } from "@/components/dashboard/booking-link-card";
 import {
   useAppStore,
+  type DashboardAllResponse,
   type DashboardRecentRow,
   type DashboardStats,
   type DashboardUpcomingRow
 } from "@/lib/stores/app-store";
-import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 type StatsResponse = DashboardStats;
 type RecentRow = DashboardRecentRow;
@@ -79,6 +80,13 @@ async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok:
 }
 
 export default function DashboardPage() {
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("dashboard");
+    perfRef.current.step("mount");
+  }
+
   const [stats, setStats] = useState<StatsResponse | null>(() =>
     useAppStore.getState().peekDashboardStats()
   );
@@ -103,84 +111,76 @@ export default function DashboardPage() {
   const load = useCallback(async (force = false) => {
     const store = useAppStore.getState();
     setError(null);
+    perfRef.current?.step("fetch:start");
 
-    const run = async <T,>(
-      peek: () => T | null,
-      getFresh: () => T | null,
-      setCache: (data: T) => void,
-      fetchData: () => Promise<T>,
-      onData: (data: T) => void,
-      setLoading: (v: boolean) => void
-    ) => {
-      if (force) {
-        setLoading(true);
-        const data = await fetchData();
-        setCache(data);
-        onData(data);
-        setLoading(false);
-        return;
-      }
-      await loadWithCache({
-        peek,
-        getFresh,
-        set: setCache,
-        fetch: fetchData,
-        onData,
-        setLoading,
-        setRefreshing
-      });
+    const applyAll = (data: DashboardAllResponse) => {
+      store.setDashboardStats(data.stats);
+      store.setRecentLeads(data.recent.items);
+      store.setUpcomingEvents(data.upcoming.items);
+      setStats(data.stats);
+      setRecent(data.recent.items);
+      setUpcoming(data.upcoming.items);
+      setStatsLoading(false);
+      setRecentLoading(false);
+      setUpcomingLoading(false);
     };
 
     try {
-      await Promise.all([
-        run(
-          () => store.peekDashboardStats(),
-          () => store.getDashboardStats(),
-          (d) => store.setDashboardStats(d),
-          async () => {
-            const res = await fetchJson<StatsResponse>("/api/dashboard/stats");
-            if (!res.ok) throw new Error(res.message);
-            return res.data;
-          },
-          setStats,
-          setStatsLoading
-        ),
-        run(
-          () => store.peekRecentLeads(),
-          () => store.getRecentLeads(),
-          (d) => store.setRecentLeads(d),
-          async () => {
-            const res = await fetchJson<{ items: RecentRow[] }>("/api/dashboard/recent-leads");
-            if (!res.ok) throw new Error(res.message);
-            return res.data.items;
-          },
-          setRecent,
-          setRecentLoading
-        ),
-        run(
-          () => store.peekUpcomingEvents(),
-          () => store.getUpcomingEvents(),
-          (d) => store.setUpcomingEvents(d),
-          async () => {
-            const res = await fetchJson<{ items: UpcomingRow[] }>("/api/dashboard/upcoming-events");
-            if (!res.ok) throw new Error(res.message);
-            return res.data.items;
-          },
-          setUpcoming,
-          setUpcomingLoading
-        )
-      ]);
+      if (!force) {
+        const cachedStats = store.getDashboardStats();
+        const cachedRecent = store.getRecentLeads();
+        const cachedUpcoming = store.getUpcomingEvents();
+        if (cachedStats && cachedRecent && cachedUpcoming) {
+          setStats(cachedStats);
+          setRecent(cachedRecent);
+          setUpcoming(cachedUpcoming);
+          setStatsLoading(false);
+          setRecentLoading(false);
+          setUpcomingLoading(false);
+          perfRef.current?.step("fetch:done");
+          // Stale-while-revalidate: show cache instantly, refresh in background
+          void (async () => {
+            const res = await fetchJson<DashboardAllResponse>("/api/dashboard/all");
+            if (res.ok) applyAll(res.data);
+          })();
+          return;
+        }
+      }
+
+      setStatsLoading(stats == null);
+      setRecentLoading(recent == null);
+      setUpcomingLoading(upcoming == null);
+      setRefreshing(force);
+
+      const res = await fetchJson<DashboardAllResponse>("/api/dashboard/all");
+      if (!res.ok) throw new Error(res.message);
+      applyAll(res.data);
+      perfRef.current?.step("fetch:done");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed.");
       setStats(null);
       setRecent(null);
       setUpcoming(null);
+      setStatsLoading(false);
+      setRecentLoading(false);
+      setUpcomingLoading(false);
+    } finally {
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (perfEndedRef.current) return;
+    if (!statsLoading && !recentLoading && !upcomingLoading) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [statsLoading, recentLoading, upcomingLoading]);
 
   if (error) {
     return (

@@ -4,7 +4,7 @@ import { format } from "date-fns";
 import { CalendarIcon, Download, Inbox, Share2 } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,11 +22,14 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type LeadsListResponse } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { tenantUrls } from "@/lib/tenant-host";
+import { fetchCatererProfile, type CatererProfile } from "@/lib/caterer-profile";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 type ListResponse = LeadsListResponse;
 
@@ -63,17 +66,19 @@ async function fetchLeads(params: URLSearchParams): Promise<ListResponse | { err
   return (await res.json()) as ListResponse;
 }
 
-type CatererProfile = {
-  slug: string;
-  bookUrl: string | null;
-};
-
 function resolveBookUrl(profile: CatererProfile | null): string | null {
   if (!profile?.slug) return profile?.bookUrl ?? null;
   return tenantUrls(profile.slug).bookUrl ?? profile.bookUrl;
 }
 
 export default function LeadsPage() {
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("leads");
+    perfRef.current.step("mount");
+  }
+
   const [searchInput, setSearchInput] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [status, setStatus] = useState("all");
@@ -107,10 +112,8 @@ export default function LeadsPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await fetch("/api/dashboard/profile", { credentials: "include" });
-      if (!res.ok || cancelled) return;
-      const profile = (await res.json()) as CatererProfile;
-      if (!cancelled) setBookUrl(resolveBookUrl(profile));
+      const profile = await fetchCatererProfile();
+      if (!cancelled && profile) setBookUrl(resolveBookUrl(profile));
     })();
     return () => {
       cancelled = true;
@@ -136,6 +139,7 @@ export default function LeadsPage() {
     const store = useAppStore.getState();
     const key = cacheKey;
     setError(null);
+    perfRef.current?.step("fetch:start");
 
     await loadWithCache({
       peek: () => store.peekLeadsCache(key),
@@ -149,6 +153,7 @@ export default function LeadsPage() {
       onData: (result) => {
         setData(result);
         setIntakeWarning(result.intakeMismatchWarning ?? null);
+        perfRef.current?.step("fetch:done");
       },
       setLoading,
       setRefreshing
@@ -161,6 +166,15 @@ export default function LeadsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (perfEndedRef.current || loading) return;
+    if (data || error) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [data, loading, error]);
 
   useEffect(() => {
     setPage(1);
@@ -178,7 +192,8 @@ export default function LeadsPage() {
       "Guest Name",
       "Email",
       "Phone",
-      "Event Type",
+      "Event",
+      "Customer Type",
       "Event Date",
       "Location",
       "Guests",
@@ -190,7 +205,8 @@ export default function LeadsPage() {
         r.guestName,
         r.guestEmail ?? "",
         r.contactNumber ?? "",
-        r.eventType,
+        r.eventTypeLabel ?? formatEventType(r.eventType),
+        formatCustomerType(r.customerType),
         r.eventDate,
         r.location,
         r.guestCount ?? "",
@@ -348,6 +364,7 @@ export default function LeadsPage() {
                     <TableHead>Guest</TableHead>
                     <TableHead className="hidden md:table-cell">Contact</TableHead>
                     <TableHead>Event</TableHead>
+                    <TableHead>Type</TableHead>
                     <TableHead className="hidden sm:table-cell">Date</TableHead>
                     <TableHead className="hidden lg:table-cell">Location</TableHead>
                     <TableHead className="text-right">Guests</TableHead>
@@ -359,7 +376,7 @@ export default function LeadsPage() {
                   {loading && !(data?.items.length)
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 8 }).map((__, j) => (
+                          {Array.from({ length: 9 }).map((__, j) => (
                             <TableCell key={j}>
                               <Skeleton className="h-8 w-full" />
                             </TableCell>
@@ -379,7 +396,20 @@ export default function LeadsPage() {
                           </TableCell>
                           <TableCell>
                             <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
-                              {row.eventType}
+                              {row.eventTypeLabel ?? formatEventType(row.eventType)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "font-semibold",
+                                row.customerType === "b2b"
+                                  ? "border-blue-300 bg-blue-50 text-blue-800"
+                                  : "border-slate-300 bg-slate-100 text-slate-700"
+                              )}
+                            >
+                              {formatCustomerType(row.customerType)}
                             </Badge>
                           </TableCell>
                           <TableCell className="hidden sm:table-cell whitespace-nowrap text-sm">

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,10 +39,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import {
+  CUSTOMER_TYPE_LABELS,
+  EVENT_TYPE_LABELS,
+  EVENT_TYPE_VALUES,
+  formatCustomerType,
+  formatEventType,
+  type CustomerTypeValue,
+  type EventTypeValue
+} from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -104,6 +114,9 @@ type TaskPayload = {
 export type EventDetailPayload = {
   id: string;
   title: string;
+  eventType: EventTypeValue;
+  eventTypeLabel: string;
+  customerType: CustomerTypeValue;
   status: string;
   eventDate: string;
   venueName: string | null;
@@ -118,6 +131,20 @@ export type EventDetailPayload = {
   primaryGuest: GuestPayload | null;
   tasks: TaskPayload[];
 };
+
+function customerTypeBadgeClass(type: string) {
+  return type === "b2b"
+    ? "border-blue-300 bg-blue-50 text-blue-800"
+    : "border-slate-300 bg-slate-100 text-slate-700";
+}
+
+function CustomerTypeBadge({ type }: { type: string }) {
+  return (
+    <Badge variant="outline" className={cn("font-semibold", customerTypeBadgeClass(type))}>
+      {formatCustomerType(type)}
+    </Badge>
+  );
+}
 
 function statusVariant(
   status: string
@@ -323,7 +350,8 @@ function EventsListView() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Guest Name</TableHead>
-                    <TableHead>Event Type</TableHead>
+                    <TableHead>Event</TableHead>
+                    <TableHead>Type</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead className="hidden sm:table-cell">Location</TableHead>
                     <TableHead className="text-right">Guests</TableHead>
@@ -335,7 +363,7 @@ function EventsListView() {
                   {loading && !(data?.items.length)
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 7 }).map((__, j) => (
+                          {Array.from({ length: 8 }).map((__, j) => (
                             <TableCell key={j}>
                               <Skeleton className="h-8 w-full" />
                             </TableCell>
@@ -345,7 +373,12 @@ function EventsListView() {
                     : (data?.items ?? []).map((row) => (
                         <TableRow key={row.id}>
                           <TableCell className="font-medium">{row.guestName}</TableCell>
-                          <TableCell>{row.eventType}</TableCell>
+                          <TableCell>
+                            {row.eventTypeLabel ?? formatEventType(row.eventType)}
+                          </TableCell>
+                          <TableCell>
+                            <CustomerTypeBadge type={row.customerType} />
+                          </TableCell>
                           <TableCell className="whitespace-nowrap text-sm">
                             {formatTableDate(row.eventDate)}
                           </TableCell>
@@ -432,6 +465,13 @@ function EventDetailInner() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get("eventId");
 
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("event-page");
+    perfRef.current.step("component:mount");
+  }
+
   const [event, setEvent] = useState<EventDetailPayload | null>(null);
   const [loading, setLoading] = useState(Boolean(eventId));
   const [error, setError] = useState<string | null>(null);
@@ -447,6 +487,7 @@ function EventDetailInner() {
 
   const [additionalNotes, setAdditionalNotes] = useState("");
   const [statusSaving, setStatusSaving] = useState(false);
+  const [fieldSaving, setFieldSaving] = useState(false);
   const [notesSaving, setNotesSaving] = useState(false);
 
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -462,12 +503,15 @@ function EventDetailInner() {
     }
     setLoading(true);
     setError(null);
+    perfRef.current?.step("fetch:start");
     const res = await fetchEvent(eventId);
+    perfRef.current?.step("fetch:complete");
     if ("error" in res) {
       setError(res.error);
       setEvent(null);
     } else {
       setEvent(res.event);
+      perfRef.current?.step("state:set");
       const g = res.event.primaryGuest;
       setGuestEdit({
         firstName: g?.firstName ?? "",
@@ -485,6 +529,18 @@ function EventDetailInner() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (perfEndedRef.current || loading) return;
+    if (event) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    } else if (error) {
+      perfEndedRef.current = true;
+      perfRef.current?.end();
+    }
+  }, [event, loading, error]);
+
   const locationDisplay = useMemo(() => {
     if (!event) return "—";
     return event.venueAddress || event.venueName || event.eventLocationFromNotes || "—";
@@ -494,6 +550,26 @@ function EventDetailInner() {
     if (!event) return [];
     return [...event.activity].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   }, [event]);
+
+  async function patchEvent(patch: { eventType?: EventTypeValue; customerType?: CustomerTypeValue }) {
+    if (!eventId || !event) return;
+    setFieldSaving(true);
+    try {
+      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(patch)
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
+      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
+      if (body.event) setEvent(body.event);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update event");
+    } finally {
+      setFieldSaving(false);
+    }
+  }
 
   async function patchStatus(next: string) {
     if (!eventId || !event) return;
@@ -669,13 +745,29 @@ function EventDetailInner() {
               </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">{event.title}</h1>
+                  <h1 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A]">
+                    {event.eventTypeLabel ?? formatEventType(event.eventType)}
+                  </h1>
                   <p className="mt-1 text-xs text-muted-foreground">Created {formatShortDateTime(event.createdAt)}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={statusVariant(event.status)} className="capitalize">
                     {event.status}
                   </Badge>
+                  <CustomerTypeBadge type={event.customerType} />
+                  <Select
+                    value={event.customerType}
+                    disabled={fieldSaving}
+                    onValueChange={(v) => void patchEvent({ customerType: v as CustomerTypeValue })}
+                  >
+                    <SelectTrigger className="w-[120px] bg-white">
+                      <SelectValue placeholder="Customer type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="b2c">{CUSTOMER_TYPE_LABELS.b2c}</SelectItem>
+                      <SelectItem value="b2b">{CUSTOMER_TYPE_LABELS.b2b}</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <div className="flex items-center gap-2">
                     <Select
                       value={event.status}
@@ -815,9 +907,24 @@ function EventDetailInner() {
                     <p>{locationDisplay}</p>
                   </div>
                 </div>
-                <div className="sm:col-span-2">
-                  <p className="text-xs font-medium text-muted-foreground">Event type</p>
-                  <p>{event.title}</p>
+                <div className="sm:col-span-2 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Event</p>
+                  <Select
+                    value={event.eventType}
+                    disabled={fieldSaving}
+                    onValueChange={(v) => void patchEvent({ eventType: v as EventTypeValue })}
+                  >
+                    <SelectTrigger className="max-w-xs bg-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {EVENT_TYPE_VALUES.map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {EVENT_TYPE_LABELS[value]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               {event.preferredSlots.length > 0 ? (

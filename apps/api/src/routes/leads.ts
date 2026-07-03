@@ -4,8 +4,17 @@ import { Router, type Request, type Response } from "express";
 
 import { getIntakeCatererId } from "../lib/intake-caterer";
 import { CatererResolveError, resolveLeadCatererId } from "../lib/caterer-resolver";
+import {
+  eventTypeTitle,
+  isCustomerType,
+  isEventType,
+  type CustomerTypeValue,
+  type EventTypeValue
+} from "../lib/event-customer-types";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
+import { leadFormLimiter } from "../lib/rate-limit";
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
 
 const router = Router();
 
@@ -16,7 +25,8 @@ type LeadPayload = {
   guestName: string;
   contactNumber: string;
   email: string;
-  eventType: string;
+  eventType: EventTypeValue;
+  customerType: CustomerTypeValue;
   eventLocation: string;
   eventDate: string;
   numberOfGuests: number;
@@ -45,12 +55,22 @@ function parsePayload(body: unknown): LeadPayload | null {
     typeof value.additionalNotes === "string" ? value.additionalNotes.trim() : undefined;
   const catererSlug =
     typeof value.catererSlug === "string" ? value.catererSlug.trim().toLowerCase() : undefined;
+  const customerTypeRaw =
+    typeof value.customerType === "string" ? value.customerType.trim().toLowerCase() : "b2c";
+  const customerType: CustomerTypeValue = isCustomerType(customerTypeRaw) ? customerTypeRaw : "b2c";
+  const eventTypeRaw =
+    typeof value.eventType === "string" ? value.eventType.trim().toLowerCase() : "";
+
+  if (!isEventType(eventTypeRaw)) {
+    return null;
+  }
 
   const payload: LeadPayload = {
     guestName: value.guestName.trim(),
     contactNumber: value.contactNumber.trim(),
     email: value.email.trim(),
-    eventType: value.eventType.trim(),
+    eventType: eventTypeRaw,
+    customerType,
     eventLocation: value.eventLocation.trim(),
     eventDate: value.eventDate,
     numberOfGuests: value.numberOfGuests,
@@ -93,7 +113,7 @@ function isMissingLeadContactEmailColumn(e: unknown): boolean {
 }
 
 /** Public: submit lead from marketing site */
-router.post("/", async (req: Request, res: Response) => {
+router.post("/", leadFormLimiter, async (req: Request, res: Response) => {
   const payload = parsePayload(req.body);
   if (!payload) {
     return res.status(400).json({ error: "Invalid lead payload." });
@@ -150,7 +170,8 @@ router.post("/", async (req: Request, res: Response) => {
           guestId: guest.id,
           ...(storeContactEmail ? { contactEmail: payload.email } : {}),
           source: "public_form",
-          title: payload.eventType,
+          title: eventTypeTitle(payload.eventType),
+          customerType: payload.customerType,
           notes: `Preferred time slots: ${preferredSlots || "Not provided"}\nEvent location: ${payload.eventLocation}${notesExtra}`,
           estimatedGuests: payload.numberOfGuests,
           expectedEventAt: eventDate
@@ -162,7 +183,9 @@ router.post("/", async (req: Request, res: Response) => {
           catererId,
           leadId: createdLead.id,
           primaryGuestId: guest.id,
-          title: payload.eventType,
+          title: eventTypeTitle(payload.eventType),
+          eventType: payload.eventType,
+          customerType: payload.customerType,
           status: "lead",
           eventDate,
           venueAddress: payload.eventLocation,
@@ -194,7 +217,7 @@ router.post("/", async (req: Request, res: Response) => {
         to: payload.email,
         subject: "We received your catering inquiry",
         html: `<p>Hi ${escapeHtml(payload.guestName)},</p>
-               <p>Thanks for your inquiry for <strong>${escapeHtml(payload.eventType)}</strong> on <strong>${escapeHtml(eventDate.toDateString())}</strong>.</p>
+               <p>Thanks for your inquiry for <strong>${escapeHtml(eventTypeTitle(payload.eventType))}</strong> on <strong>${escapeHtml(eventDate.toDateString())}</strong>.</p>
                <p>Location: ${escapeHtml(payload.eventLocation)}<br/>Guests: ${payload.numberOfGuests}<br/>Preferred slots: ${escapeHtml(preferredSlots || "Not provided")}</p>
                <p>Our team will contact you shortly.</p>`
       });
@@ -211,21 +234,15 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
-const eventListInclude = {
-  primaryGuest: true,
-  lead: {
-    select: {
-      contactEmail: true,
-      title: true,
-      notes: true
-    }
-  }
-} satisfies Prisma.EventInclude;
 
 /** Authenticated: paginated events (lead pipeline) for dashboard */
 router.get("/", async (req: Request, res: Response) => {
   try {
+    const perf = timer("leads:list");
+
     const { caterer } = await getSession(req);
+    perf.step("session");
+
     const catererId = caterer.id;
     const intakeCatererId = process.env.LEAD_INTAKE_CATERER_ID?.trim();
 
@@ -289,12 +306,40 @@ router.get("/", async (req: Request, res: Response) => {
       prisma.event.count({ where }),
       prisma.event.findMany({
         where,
+        select: {
+          id: true,
+          leadId: true,
+          title: true,
+          status: true,
+          eventType: true,
+          customerType: true,
+          eventDate: true,
+          venueAddress: true,
+          venueName: true,
+          guestCountEstimate: true,
+          createdAt: true,
+          primaryGuest: {
+            select: {
+              firstName: true,
+              lastName: true,
+              email: true,
+              phone: true
+            }
+          },
+          lead: {
+            select: {
+              contactEmail: true,
+              title: true
+            }
+          }
+        },
         orderBy: { createdAt: "desc" },
         skip: offset,
-        take: pageSize,
-        include: eventListInclude
+        take: pageSize
       })
     ]);
+    perf.step("db:count");
+    perf.step("db:findMany");
     console.log(`[leads] query took ${Date.now() - start}ms (caterer=${catererId}, page=${page})`);
 
     const items = events.map((ev) => {
@@ -306,7 +351,9 @@ router.get("/", async (req: Request, res: Response) => {
         guestName,
         guestEmail: g?.email ?? null,
         contactNumber: g?.phone ?? null,
-        eventType: ev.title,
+        eventType: ev.eventType,
+        eventTypeLabel: eventTypeTitle(ev.eventType),
+        customerType: ev.customerType,
         eventDate: ev.eventDate.toISOString(),
         location: ev.venueAddress ?? ev.venueName ?? "—",
         guestCount: ev.guestCountEstimate,
@@ -332,6 +379,7 @@ router.get("/", async (req: Request, res: Response) => {
       }
     }
 
+    perf.end();
     return res.json({
       items,
       total,

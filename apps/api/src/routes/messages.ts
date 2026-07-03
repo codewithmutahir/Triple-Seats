@@ -3,6 +3,7 @@ import { Router, type Request, type Response } from "express";
 
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
 
 const router = Router();
 
@@ -88,14 +89,20 @@ async function loadEventForCaterer(eventId: string, catererId: string) {
 /** Authenticated: all messages for an event, oldest first */
 router.get("/event/:eventId", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
     const eventId = String(req.params.eventId ?? "").trim();
+    const perf = timer(`messages:${eventId}`);
+
+    const { caterer } = await getSession(req);
+    perf.step("session");
+
     if (!eventId) {
+      perf.end();
       return res.status(400).json({ error: "Event id is required." });
     }
 
     const event = await loadEventForCaterer(eventId, caterer.id);
     if (!event) {
+      perf.end();
       return res.status(404).json({ error: "Event not found." });
     }
 
@@ -103,10 +110,12 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
       where: { catererId: caterer.id, eventId },
       orderBy: { createdAt: "asc" }
     });
+    perf.step("db:messages");
 
     const g = event.primaryGuest;
     const guestName = g ? [g.firstName, g.lastName].filter(Boolean).join(" ") : "—";
 
+    perf.end();
     return res.json({
       event: {
         id: event.id,
@@ -199,61 +208,52 @@ router.post("/", async (req: Request, res: Response) => {
 /** Authenticated: conversation list for discussions sidebar */
 router.get("/conversations", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const perf = timer("messages:conversations");
 
-    const groups = await prisma.message.groupBy({
-      by: ["eventId"],
+    const { caterer } = await getSession(req);
+    perf.step("session");
+
+    const latestPerEvent = await prisma.message.findMany({
       where: { catererId: caterer.id, eventId: { not: null } },
-      _max: { createdAt: true }
+      distinct: ["eventId"],
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        body: true,
+        direction: true,
+        createdAt: true,
+        eventId: true,
+        event: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            primaryGuest: {
+              select: { firstName: true, lastName: true, email: true }
+            }
+          }
+        }
+      }
     });
 
-    const sorted = groups
-      .filter((g): g is typeof g & { eventId: string } => g.eventId != null)
-      .sort((a, b) => {
-        const aTime = a._max.createdAt?.getTime() ?? 0;
-        const bTime = b._max.createdAt?.getTime() ?? 0;
-        return bTime - aTime;
+    const conversations = latestPerEvent
+      .filter((m): m is typeof m & { eventId: string } => m.eventId != null)
+      .map((m) => {
+        const g = m.event?.primaryGuest;
+        const guestName = g ? [g.firstName, g.lastName].filter(Boolean).join(" ") : "—";
+
+        return {
+          eventId: m.eventId,
+          guestName,
+          eventType: m.event?.title ?? "—",
+          lastMessage: truncate(m.body),
+          lastMessageAt: m.createdAt.toISOString(),
+          unreadCount: 0
+        };
       });
 
-    if (!sorted.length) {
-      return res.json({ conversations: [] });
-    }
-
-    const eventIds = sorted.map((g) => g.eventId);
-
-    const [events, latestMessages] = await Promise.all([
-      prisma.event.findMany({
-        where: { id: { in: eventIds }, catererId: caterer.id },
-        include: { primaryGuest: true }
-      }),
-      prisma.message.findMany({
-        where: { catererId: caterer.id, eventId: { in: eventIds } },
-        orderBy: { createdAt: "desc" },
-        distinct: ["eventId"]
-      })
-    ]);
-
-    const eventMap = new Map(events.map((e) => [e.id, e]));
-    const messageMap = new Map(
-      latestMessages.filter((m) => m.eventId).map((m) => [m.eventId!, m])
-    );
-
-    const conversations = sorted.map((g) => {
-      const ev = eventMap.get(g.eventId);
-      const lastMsg = messageMap.get(g.eventId);
-      const gGuest = ev?.primaryGuest;
-      const guestName = gGuest ? [gGuest.firstName, gGuest.lastName].filter(Boolean).join(" ") : "—";
-
-      return {
-        eventId: g.eventId,
-        guestName,
-        eventType: ev?.title ?? "—",
-        lastMessage: lastMsg ? truncate(lastMsg.body) : "",
-        lastMessageAt: (g._max.createdAt ?? lastMsg?.createdAt ?? new Date()).toISOString(),
-        unreadCount: 0
-      };
-    });
-
+    perf.step("db:conversations");
+    perf.end();
     return res.json({ conversations });
   } catch (e) {
     return handleSessionError(res, e);

@@ -2,6 +2,7 @@ import type { Request } from "express";
 
 import { auth } from "./auth";
 import { prisma, type Prisma } from "@tripeseats/database";
+import { timer } from "./perf";
 import { seedMenuItemsForCaterer } from "./seed-menu-items";
 import { seedPackagesForCaterer } from "./seed-packages";
 import { ensureCatererSlug, uniqueSlugForName } from "./slug";
@@ -11,6 +12,16 @@ type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 const catererCache = new Map<string, { caterer: Caterer; ts: number }>();
 const CATERER_TTL = 30_000;
 
+interface SessionCacheEntry {
+  session: { id: string; [key: string]: unknown };
+  user: { id: string; email: string | null; name: string | null };
+  caterer: Caterer;
+  ts: number;
+}
+
+const sessionCache = new Map<string, SessionCacheEntry>();
+const SESSION_TTL = 30_000;
+
 export class SessionError extends Error {
   constructor(
     message: string,
@@ -18,6 +29,18 @@ export class SessionError extends Error {
   ) {
     super(message);
     this.name = "SessionError";
+  }
+}
+
+function extractSessionToken(req: Request): string | undefined {
+  const cookieHeader = req.headers.cookie ?? "";
+  const tokenMatch = cookieHeader.match(/better-auth\.session_token(?:\.\d+)?=([^;]+)/);
+  const raw = tokenMatch?.[1];
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
   }
 }
 
@@ -176,11 +199,39 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
   return withSlug;
 }
 
+export function invalidateSessionCache(token: string) {
+  sessionCache.delete(token);
+}
+
+/** Invalidate cached session for the request's auth cookie (e.g. on sign-out). */
+export function invalidateSessionCacheForRequest(req: Request) {
+  const token = extractSessionToken(req);
+  if (token) invalidateSessionCache(token);
+}
+
 /**
  * Validates Better Auth session and resolves (or creates) the caterer for this user.
  */
 export async function getSession(req: Request) {
+  const perf = timer("session");
+  const token = extractSessionToken(req);
+
+  if (token) {
+    const cached = sessionCache.get(token);
+    if (cached && Date.now() - cached.ts < SESSION_TTL) {
+      perf.step("cache hit");
+      perf.end();
+      return {
+        session: cached.session,
+        user: cached.user,
+        caterer: cached.caterer
+      };
+    }
+  }
+
   const data = await auth.api.getSession({ headers: requestToHeaders(req) });
+  perf.step("auth.api.getSession");
+
   if (!data?.user || !data?.session) {
     throw new SessionError("Unauthorized", 401);
   }
@@ -190,6 +241,28 @@ export async function getSession(req: Request) {
     email: data.user.email ?? null,
     name: data.user.name ?? null
   });
+  perf.step("ensureCaterer");
 
+  if (token) {
+    sessionCache.set(token, {
+      session: data.session,
+      user: {
+        id: data.user.id,
+        email: data.user.email ?? null,
+        name: data.user.name ?? null
+      },
+      caterer,
+      ts: Date.now()
+    });
+
+    if (sessionCache.size > 100) {
+      const now = Date.now();
+      for (const [k, v] of sessionCache.entries()) {
+        if (now - v.ts > SESSION_TTL) sessionCache.delete(k);
+      }
+    }
+  }
+
+  perf.end();
   return { session: data.session, user: data.user, caterer };
 }
