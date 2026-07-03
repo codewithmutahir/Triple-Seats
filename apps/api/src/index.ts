@@ -14,7 +14,6 @@ import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-sch
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { getResend } from "./lib/mail";
 import { authLimiter, generalLimiter } from "./lib/rate-limit";
-import { invalidateSessionCacheForRequest } from "./lib/session";
 import { bookingsRouter } from "./routes/bookings";
 import { calendarRouter } from "./routes/calendar";
 import { caterersRouter } from "./routes/caterers";
@@ -131,12 +130,7 @@ function createApp() {
     }
   });
 
-  app.use("/api/auth", authLimiter, (req, res, next) => {
-    if (req.method === "POST" && (req.path === "/sign-out" || req.path.endsWith("/sign-out"))) {
-      invalidateSessionCacheForRequest(req);
-    }
-    next();
-  }, toNodeHandler(auth));
+  app.use("/api/auth", authLimiter, toNodeHandler(auth));
 
   app.use("/api", generalLimiter);
   app.use("/api/caterers", caterersRouter);
