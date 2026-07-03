@@ -11,7 +11,6 @@ const out = path.join(root, "tripeseats-api-hostinger-v2.zip");
 
 const copyItems = [
   "tsconfig.base.json",
-  "pnpm-lock.yaml",
   "apps/api/src",
   "apps/api/dist",
   "apps/api/package.json",
@@ -26,22 +25,19 @@ const copyItems = [
 const rootPkg = `{
   "name": "tripeseats-api-hostinger",
   "private": true,
-  "packageManager": "pnpm@9.12.0",
-  "pnpm": {
-    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma"]
-  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "build": "pnpm exec prisma generate --schema packages/database/prisma/schema.prisma",
+    "build": "npx prisma@5.22.0 generate --schema packages/database/prisma/schema.prisma",
     "start": "node app.js"
   },
   "engines": {
     "node": "20"
   },
   "dependencies": {
-    "prisma": "^5.22.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.6.3"
+    "prisma": "5.22.0"
   }
 }
 `;
@@ -124,10 +120,6 @@ function main() {
   }
 
   writeUtf8(path.join(staging, "package.json"), rootPkg);
-  writeUtf8(
-    path.join(staging, "pnpm-workspace.yaml"),
-    "packages:\n  - apps/*\n  - packages/*\n"
-  );
   writeUtf8(path.join(staging, "app.js"), "require('./apps/api/dist/index.js');\n");
 
   const apiPkgPath = path.join(staging, "apps/api/package.json");
