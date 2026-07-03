@@ -25,6 +25,13 @@ import { cn } from "@/lib/utils";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
+import {
+  CLIENT_LIST_FETCH_SIZE,
+  fetchAllListPages,
+  filterLeadsItems,
+  LIST_PAGE_SIZE,
+  paginateItems
+} from "@/lib/client-list-filter";
 import { useAppStore, type LeadsListResponse } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { tenantUrls } from "@/lib/tenant-host";
@@ -33,6 +40,9 @@ import { parseApiError } from "@/lib/user-facing-error";
 import { browserTimer } from "@/lib/perf";
 
 type ListResponse = LeadsListResponse;
+type LeadRow = ListResponse["items"][number];
+
+const ALL_LEADS_CACHE_KEY = "__all__";
 
 function statusVariant(
   status: string
@@ -94,18 +104,16 @@ export default function LeadsPage() {
       ? format(dateRange.from, "yyyy-MM-dd")
       : undefined;
 
-  const cacheKey = JSON.stringify({ page, status, search: searchDebounced, dateFrom, dateTo });
-
-  const [data, setData] = useState<ListResponse | null>(() =>
-    useAppStore.getState().peekLeadsCache(cacheKey)
+  const [allLeads, setAllLeads] = useState<LeadRow[]>(
+    () => useAppStore.getState().peekLeadsCache(ALL_LEADS_CACHE_KEY)?.items ?? []
   );
   const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekLeadsCache(cacheKey) == null
+    () => useAppStore.getState().peekLeadsCache(ALL_LEADS_CACHE_KEY) == null
   );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [intakeWarning, setIntakeWarning] = useState<string | null>(
-    () => useAppStore.getState().peekLeadsCache(cacheKey)?.intakeMismatchWarning ?? null
+    () => useAppStore.getState().peekLeadsCache(ALL_LEADS_CACHE_KEY)?.intakeMismatchWarning ?? null
   );
   const [bookUrl, setBookUrl] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -126,33 +134,58 @@ export default function LeadsPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const queryParams = useMemo(() => {
-    const p = new URLSearchParams();
-    p.set("page", String(page));
-    p.set("status", status);
-    if (searchDebounced) p.set("search", searchDebounced);
-    if (dateFrom) p.set("dateFrom", dateFrom);
-    if (dateTo) p.set("dateTo", dateTo);
-    return p;
-  }, [page, status, searchDebounced, dateFrom, dateTo]);
+  const filteredLeads = useMemo(
+    () =>
+      filterLeadsItems(allLeads, {
+        status,
+        search: searchDebounced,
+        dateFrom,
+        dateTo
+      }),
+    [allLeads, status, searchDebounced, dateFrom, dateTo]
+  );
 
-  const load = useCallback(async () => {
+  const data = useMemo(
+    () => paginateItems(filteredLeads, page, LIST_PAGE_SIZE),
+    [filteredLeads, page]
+  );
+
+  const loadAllLeads = useCallback(async () => {
     const store = useAppStore.getState();
-    const key = cacheKey;
     setError(null);
     perfRef.current?.step("fetch:start");
 
     await loadWithCache({
-      peek: () => store.peekLeadsCache(key),
-      getFresh: () => store.getLeadsCache(key),
-      set: (result) => store.setLeadsCache(key, result),
+      peek: () => store.peekLeadsCache(ALL_LEADS_CACHE_KEY),
+      getFresh: () => store.getLeadsCache(ALL_LEADS_CACHE_KEY),
+      set: (result) => store.setLeadsCache(ALL_LEADS_CACHE_KEY, result),
       fetch: async () => {
-        const result = await fetchLeads(queryParams);
+        let intakeMismatchWarning: string | undefined;
+        const result = await fetchAllListPages<LeadRow>(
+          async (pageNum) => {
+            const p = new URLSearchParams();
+            p.set("page", String(pageNum));
+            p.set("status", "all");
+            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
+            const res = await fetchLeads(p);
+            if ("error" in res) return res;
+            if (pageNum === 1) intakeMismatchWarning = res.intakeMismatchWarning;
+            return res;
+          },
+          CLIENT_LIST_FETCH_SIZE
+        );
         if ("error" in result) throw new Error(result.error);
-        return result;
+        return {
+          items: result.items,
+          total: result.total,
+          page: 1,
+          pageSize: LIST_PAGE_SIZE,
+          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE)),
+          ...(intakeMismatchWarning ? { intakeMismatchWarning } : {})
+        };
       },
       onData: (result) => {
-        setData(result);
+        setAllLeads(result.items);
         setIntakeWarning(result.intakeMismatchWarning ?? null);
         perfRef.current?.step("fetch:done");
       },
@@ -160,22 +193,22 @@ export default function LeadsPage() {
       setRefreshing
     }).catch((e) => {
       setError(e instanceof Error ? e.message : "Request failed.");
-      setData(null);
+      setAllLeads([]);
     });
-  }, [cacheKey, queryParams]);
+  }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadAllLeads();
+  }, [loadAllLeads]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading) return;
-    if (data || error) {
+    if (data.items.length || error) {
       perfEndedRef.current = true;
       perfRef.current?.step("render:complete");
       perfRef.current?.end();
     }
-  }, [data, loading, error]);
+  }, [data.items.length, loading, error]);
 
   useEffect(() => {
     setPage(1);
@@ -188,7 +221,7 @@ export default function LeadsPage() {
   }, [dateRange]);
 
   function exportCsv() {
-    if (!data?.items.length) return;
+    if (!data.items.length) return;
     const headers = [
       "Guest Name",
       "Email",
@@ -238,7 +271,7 @@ export default function LeadsPage() {
     }
   }
 
-  const empty = !loading && data && data.total === 0;
+  const empty = !loading && data.total === 0;
 
   return (
     <div className="space-y-8">
@@ -326,7 +359,7 @@ export default function LeadsPage() {
               variant="outline"
               className="shrink-0 bg-white"
               onClick={exportCsv}
-              disabled={!data?.items.length}
+              disabled={!data.items.length}
             >
               <Download className="mr-2 h-4 w-4" />
               Export CSV
@@ -379,7 +412,7 @@ export default function LeadsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loading && !(data?.items.length)
+                  {loading && allLeads.length === 0
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
                           {Array.from({ length: 9 }).map((__, j) => (
@@ -389,7 +422,7 @@ export default function LeadsPage() {
                           ))}
                         </TableRow>
                       ))
-                    : (data?.items ?? []).map((row) => (
+                    : data.items.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell>
                             <div className="font-medium">{row.guestName}</div>
@@ -442,12 +475,12 @@ export default function LeadsPage() {
             </div>
 
             <ListPagination
-              page={data?.page ?? page}
-              totalPages={data?.totalPages ?? 1}
-              total={data?.total ?? 0}
-              pageSize={data?.pageSize ?? 20}
+              page={data.page}
+              totalPages={data.totalPages}
+              total={data.total}
+              pageSize={data.pageSize}
               itemLabel="lead"
-              loading={loading}
+              loading={loading && allLeads.length === 0}
               onPageChange={setPage}
             />
           </CardContent>
