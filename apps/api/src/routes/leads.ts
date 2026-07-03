@@ -324,12 +324,6 @@ router.get("/", async (req: Request, res: Response) => {
               email: true,
               phone: true
             }
-          },
-          lead: {
-            select: {
-              contactEmail: true,
-              title: true
-            }
           }
         },
         orderBy: { createdAt: "desc" },
