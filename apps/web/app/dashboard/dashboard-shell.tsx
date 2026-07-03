@@ -13,10 +13,11 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { getApiFeatures } from "@/lib/api-features";
 import { signOut, useSession } from "@/lib/auth-client";
 import type { ServerAuthUser } from "@/lib/server-auth-session";
 import { cn } from "@/lib/utils";
@@ -134,6 +135,10 @@ export function DashboardShell({
     () => initialsFromUser(user.name, user.email ?? undefined),
     [user.name, user.email]
   );
+
+  useEffect(() => {
+    void getApiFeatures();
+  }, []);
 
   async function handleSignOut() {
     await signOut();

@@ -5,7 +5,7 @@
 - [ ] `pnpm build` passes locally
 - [ ] `pnpm typecheck` passes
 - [ ] `pnpm lint` passes
-- [ ] All env vars set in hosting platform
+- [ ] Web and API deployed from the same commit (batch routes require API `/api/meta`)
 - [ ] `LEAD_INTAKE_CATERER_ID` set to real caterer ID
 - [ ] `BETTER_AUTH_URL` set to production domain
 - [ ] `WEB_ORIGIN` set to production domain
@@ -30,7 +30,6 @@
 - [ ] `RESEND_API_KEY`
 - [ ] `RESEND_FROM_EMAIL`
 - [ ] `BETTER_AUTH_API_KEY`
-- [ ] `BETTER_AUTH_TRUSTED_ORIGINS`
 
 ### Web (required)
 

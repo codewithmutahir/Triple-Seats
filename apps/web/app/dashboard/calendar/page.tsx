@@ -5,6 +5,7 @@ import { endOfMonth, startOfMonth } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 
 import { CalendarShell } from "./calendar-shell";
+import { fetchCalendarInitServer } from "./calendar-utils";
 import type { CalendarEvent } from "./types";
 
 const CalendarClient = dynamic(() => import("./calendar-client"), { ssr: false });
@@ -27,18 +28,7 @@ async function fetchInitialCalendar(): Promise<CalendarEvent[]> {
     .join("; ");
 
   if (!cookieHeader) return [];
-
-  try {
-    const res = await fetch(`${internalApiOrigin()}/api/calendar/init`, {
-      headers: { cookie: cookieHeader },
-      next: { revalidate: 60 }
-    });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { events?: CalendarEvent[] };
-    return Array.isArray(data.events) ? data.events : [];
-  } catch {
-    return [];
-  }
+  return fetchCalendarInitServer(internalApiOrigin(), cookieHeader);
 }
 
 export default async function CalendarPage() {
