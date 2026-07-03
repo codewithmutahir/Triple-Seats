@@ -125,6 +125,9 @@ function main() {
   const apiPkgPath = path.join(staging, "apps/api/package.json");
   const apiPkg = JSON.parse(fs.readFileSync(apiPkgPath, "utf8"));
   apiPkg.scripts.build = "echo dist prebuilt";
+  if (apiPkg.dependencies?.["@tripeseats/database"]?.startsWith("workspace:")) {
+    apiPkg.dependencies["@tripeseats/database"] = "file:../../packages/database";
+  }
   writeUtf8(apiPkgPath, `${JSON.stringify(apiPkg, null, 2)}\n`);
 
   const dbPkgPath = path.join(staging, "packages/database/package.json");
