@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 
 declare global {
   var prismaGlobal: PrismaClient | undefined;
@@ -23,7 +23,7 @@ function createPrismaClient() {
   });
 
   if (!isProd) {
-    client.$on("query", (e) => {
+    client.$on("query", (e: Prisma.QueryEvent) => {
       const ms = Number(e.duration);
       if (ms > 100) {
         const emoji = ms > 1000 ? "🔴" : ms > 300 ? "🟡" : "🟢";
