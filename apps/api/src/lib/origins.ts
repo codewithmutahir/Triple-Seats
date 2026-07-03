@@ -1,3 +1,17 @@
+import { isLocalHostname } from "./is-local-hostname";
+
+const LOCAL_WEB_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"] as const;
+
+function authUrlIsLocal(): boolean {
+  const raw = process.env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "");
+  if (!raw) return false;
+  try {
+    return isLocalHostname(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Origins allowed for CORS and Better Auth `trustedOrigins`.
  * Set `WEB_ORIGIN` and `BETTER_AUTH_URL` to your production https origin.
@@ -6,8 +20,8 @@
 export function allowedWebOrigins(): string[] {
   const origins: string[] = [];
 
-  if (process.env.NODE_ENV !== "production") {
-    origins.push("http://localhost:3000", "http://127.0.0.1:3000");
+  if (process.env.NODE_ENV !== "production" || authUrlIsLocal()) {
+    origins.push(...LOCAL_WEB_ORIGINS);
   }
 
   for (const raw of [process.env.WEB_ORIGIN, process.env.BETTER_AUTH_URL]) {

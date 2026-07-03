@@ -7,6 +7,7 @@ export const EVENTS_TTL = 2 * 60 * 1000;
 export const DISCUSSIONS_TTL = 2 * 60 * 1000;
 export const TASKS_TTL = 60 * 1000;
 export const REPORTS_TTL = 5 * 60 * 1000;
+export const PROFILE_TTL = 5 * 60 * 1000;
 
 export interface CacheEntry<T> {
   data: T;
@@ -46,6 +47,8 @@ export type LeadsListResponse = {
     guestEmail: string | null;
     contactNumber: string | null;
     eventType: string;
+    eventTypeLabel?: string;
+    customerType: string;
     eventDate: string;
     location: string;
     guestCount: number | null;
@@ -64,6 +67,8 @@ export type BookingsListResponse = {
     guestName: string;
     guestEmail: string | null;
     eventType: string;
+    eventTypeLabel?: string;
+    customerType: string;
     eventDate: string;
     location: string;
     guestCount: number | null;
@@ -89,6 +94,8 @@ export type EventsListResponse = {
     id: string;
     guestName: string;
     eventType: string;
+    eventTypeLabel?: string;
+    customerType: string;
     eventDate: string;
     location: string;
     guestCount: number | null;
@@ -225,6 +232,19 @@ export type ReportsData = {
   timeline: ReportsTimeline;
 };
 
+export type CatererProfile = {
+  name: string;
+  slug: string;
+  bookUrl: string | null;
+  dashboardUrl: string | null;
+};
+
+export type DashboardAllResponse = {
+  stats: DashboardStats;
+  recent: { items: DashboardRecentRow[] };
+  upcoming: { items: DashboardUpcomingRow[] };
+};
+
 function isFresh<T>(entry: CacheEntry<T> | null | undefined, ttl: number): boolean {
   if (!entry) return false;
   return Date.now() - entry.fetchedAt < ttl;
@@ -244,6 +264,7 @@ interface AppStore {
   tasksCache: Record<string, CacheEntry<TasksListResponse>>;
   tasksStats: CacheEntry<TasksStats> | null;
   reportsCache: CacheEntry<ReportsData> | null;
+  catererProfile: CacheEntry<CatererProfile> | null;
 
   setDashboardStats: (data: DashboardStats) => void;
   setRecentLeads: (data: DashboardRecentRow[]) => void;
@@ -258,6 +279,7 @@ interface AppStore {
   setTasksCache: (key: string, data: TasksListResponse | null) => void;
   setTasksStats: (data: TasksStats | null) => void;
   setReportsCache: (data: ReportsData | null) => void;
+  setCatererProfile: (data: CatererProfile) => void;
 
   getDashboardStats: () => DashboardStats | null;
   getRecentLeads: () => DashboardRecentRow[] | null;
@@ -272,6 +294,7 @@ interface AppStore {
   getTasksCache: (key: string) => TasksListResponse | null;
   getTasksStats: () => TasksStats | null;
   getReportsCache: () => ReportsData | null;
+  getCatererProfile: () => CatererProfile | null;
 
   peekDashboardStats: () => DashboardStats | null;
   peekRecentLeads: () => DashboardRecentRow[] | null;
@@ -286,6 +309,7 @@ interface AppStore {
   peekTasksCache: (key: string) => TasksListResponse | null;
   peekTasksStats: () => TasksStats | null;
   peekReportsCache: () => ReportsData | null;
+  peekCatererProfile: () => CatererProfile | null;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -302,6 +326,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tasksCache: {},
   tasksStats: null,
   reportsCache: null,
+  catererProfile: null,
 
   setDashboardStats: (data) => set({ dashboardStats: { data, fetchedAt: Date.now() } }),
   setRecentLeads: (data) => set({ recentLeads: { data, fetchedAt: Date.now() } }),
@@ -343,6 +368,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ tasksStats: data === null ? null : { data, fetchedAt: Date.now() } }),
   setReportsCache: (data) =>
     set({ reportsCache: data === null ? null : { data, fetchedAt: Date.now() } }),
+  setCatererProfile: (data) =>
+    set({ catererProfile: { data, fetchedAt: Date.now() } }),
 
   getDashboardStats: () => {
     const entry = get().dashboardStats;
@@ -396,6 +423,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const entry = get().reportsCache;
     return isFresh(entry, REPORTS_TTL) ? (entry?.data ?? null) : null;
   },
+  getCatererProfile: () => {
+    const entry = get().catererProfile;
+    return isFresh(entry, PROFILE_TTL) ? (entry?.data ?? null) : null;
+  },
 
   peekDashboardStats: () => get().dashboardStats?.data ?? null,
   peekRecentLeads: () => get().recentLeads?.data ?? null,
@@ -409,5 +440,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   peekDiscussionsThread: (eventId) => get().discussionsThreads[eventId]?.data ?? null,
   peekTasksCache: (key) => get().tasksCache[key]?.data ?? null,
   peekTasksStats: () => get().tasksStats?.data ?? null,
-  peekReportsCache: () => get().reportsCache?.data ?? null
+  peekReportsCache: () => get().reportsCache?.data ?? null,
+  peekCatererProfile: () => get().catererProfile?.data ?? null
 }));

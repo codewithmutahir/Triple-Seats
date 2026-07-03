@@ -4,6 +4,7 @@ import { Router, type Request, type Response } from "express";
 import { parseItemCategory, parseQuoteUnit } from "../lib/quote-serialize";
 import { ensureDefaultItemsForCategory } from "../lib/seed-menu-items";
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
 
 const router = Router();
 
@@ -44,11 +45,15 @@ function serializeMenuItem(item: {
 
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
     const category = parseItemCategory(req.query.category);
     if (!category) {
       return res.status(400).json({ error: "Valid category query param is required." });
     }
+
+    const perf = timer(`menu-items:${category}`);
+
+    const { caterer } = await getSession(req);
+    perf.step("session");
 
     await ensureDefaultItemsForCategory(caterer.id, category);
 
@@ -65,7 +70,9 @@ router.get("/", async (req: Request, res: Response) => {
       orderBy: [{ usageCount: "desc" }, { name: "asc" }],
       take: q ? 12 : undefined
     });
+    perf.step("db:items");
 
+    perf.end();
     return res.json({ items: items.map(serializeMenuItem) });
   } catch (e) {
     return handleSessionError(res, e);

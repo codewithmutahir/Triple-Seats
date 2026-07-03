@@ -1,6 +1,6 @@
 "use client";
 
-import { addMonths, endOfMonth, format, startOfMonth, subMonths } from "date-fns";
+import { endOfMonth, format, startOfMonth } from "date-fns";
 import { CalendarDays, Loader2, MapPin, RefreshCw, Users } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -19,9 +19,10 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { browserTimer } from "@/lib/perf";
 import { useCalendarStore } from "@/lib/stores/calendar-store";
 
-import { adjacentMonthRanges, fetchCalendarEvents, monthKey } from "./calendar-utils";
+import { adjacentMonthRanges, fetchCalendarEvents, fetchCalendarInit, groupEventsByMonth, monthKey } from "./calendar-utils";
 import type { CalendarEvent } from "./types";
 
 const CalendarWidget = dynamic(
@@ -79,10 +80,18 @@ function resolveInitialEvents(
 }
 
 export default function CalendarClient({ initialEvents, initialRange }: CalendarClientProps) {
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("calendar");
+    perfRef.current.step("mount");
+  }
+
   const isLoading = useCalendarStore((s) => s.isLoading);
   const setLoading = useCalendarStore((s) => s.setLoading);
   const getMonthEvents = useCalendarStore((s) => s.getMonthEvents);
   const setMonthEvents = useCalendarStore((s) => s.setMonthEvents);
+  const seedEventsByMonth = useCalendarStore((s) => s.seedEventsByMonth);
   const isFresh = useCalendarStore((s) => s.isFresh);
 
   const [events, setEvents] = useState<CalendarEvent[]>(() =>
@@ -101,13 +110,18 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
   const activeRangeRef = useRef<{ start: Date; end: Date } | null>(null);
   const requestIdRef = useRef(0);
   const seededRef = useRef(false);
+  const initLoadedRef = useRef(false);
 
   if (!seededRef.current) {
     seededRef.current = true;
-    const key = monthKey(new Date(initialRange.start));
     const store = useCalendarStore.getState();
-    if (!store.isFresh(key)) {
-      store.setMonthEvents(key, initialEvents);
+    if (initialEvents.length > 0) {
+      store.seedEventsByMonth(groupEventsByMonth(initialEvents));
+    } else {
+      const key = monthKey(new Date(initialRange.start));
+      if (!store.isFresh(key)) {
+        store.setMonthEvents(key, initialEvents);
+      }
     }
   }
 
@@ -116,6 +130,48 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
     setInitialView(mq.matches ? "timeGridWeek" : "dayGridMonth");
     requestAnimationFrame(() => setEventsVisible(true));
   }, []);
+
+  useEffect(() => {
+    if (initLoadedRef.current) return;
+    initLoadedRef.current = true;
+
+    const key = monthKey(new Date(initialRange.start));
+    if (isFresh(key)) {
+      const cached = getMonthEvents(key);
+      if (cached) {
+        setEvents(cached);
+        setEventsVisible(true);
+        return;
+      }
+    }
+
+    if (initialEvents.length > 0) {
+      setEvents(getMonthEvents(key) ?? initialEvents.filter((e) => monthKey(new Date(e.start)) === key));
+      setEventsVisible(true);
+      return;
+    }
+
+    void (async () => {
+      setLoading(true);
+      perfRef.current?.step("fetch:init");
+      const result = await fetchCalendarInit();
+      perfRef.current?.step("fetch:done");
+
+      if (result.error) {
+        setError(result.error);
+        setLoading(false);
+        return;
+      }
+
+      const all = result.data ?? [];
+      seedEventsByMonth(groupEventsByMonth(all));
+      const current = getMonthEvents(key) ?? all.filter((e) => monthKey(new Date(e.start)) === key);
+      setEvents(current);
+      setEventsVisible(true);
+      setError(null);
+      setLoading(false);
+    })();
+  }, [getMonthEvents, initialEvents, initialRange.start, isFresh, seedEventsByMonth, setLoading]);
 
   const loadMonthEvents = useCallback(
     async (start: Date, end: Date, silent = false) => {
@@ -142,7 +198,9 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
         setError(null);
       }
 
+      perfRef.current?.step("fetch:start");
       const result = await fetchCalendarEvents(start, end);
+      perfRef.current?.step("fetch:done");
       if (requestId !== requestIdRef.current) return;
 
       if (result.error) {
@@ -179,17 +237,6 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
     [isFresh, loadMonthEvents]
   );
 
-  useEffect(() => {
-    const prev = subMonths(currentViewStart, 1);
-    const next = addMonths(currentViewStart, 1);
-    for (const month of [prev, next]) {
-      const key = monthKey(month);
-      if (!isFresh(key)) {
-        void loadMonthEvents(startOfMonth(month), endOfMonth(month), true);
-      }
-    }
-  }, [currentViewStart, isFresh, loadMonthEvents]);
-
   const handleDatesChange = useCallback(
     (start: Date, end: Date) => {
       setCurrentViewStart(startOfMonth(start));
@@ -198,6 +245,15 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
     },
     [loadMonthEvents, prefetchAdjacent]
   );
+
+  useEffect(() => {
+    if (perfEndedRef.current || isLoading) return;
+    if (eventsVisible) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [isLoading, eventsVisible]);
 
   const handleRetry = useCallback(() => {
     if (activeRangeRef.current) {

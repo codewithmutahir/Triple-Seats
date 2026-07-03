@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 type PackagesSectionProps = {
   packages: CateringPackage[];
   guestCount: number;
+  customerType?: "b2b" | "b2c";
   packageLineItem: QuoteLineItem | null;
   loading?: boolean;
   guestCountSaving?: boolean;
@@ -41,6 +42,7 @@ function formatIncludedItems(items: CateringPackage["items"]): string {
 function PackageCard({
   pkg,
   guestCount,
+  customerType,
   isAdded,
   disabled,
   onAdd,
@@ -50,6 +52,7 @@ function PackageCard({
 }: {
   pkg: CateringPackage;
   guestCount: number;
+  customerType: "b2b" | "b2c";
   isAdded: boolean;
   disabled: boolean;
   onAdd: () => void;
@@ -59,7 +62,7 @@ function PackageCard({
 }) {
   const [tiersOpen, setTiersOpen] = useState(false);
   const [itemsOpen, setItemsOpen] = useState(false);
-  const activeTier = getActiveTier(pkg.tiers, guestCount);
+  const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
   const itemCount = pkg.items.reduce((sum, i) => sum + i.quantity, 0);
 
   return (
@@ -178,6 +181,7 @@ function PackageCard({
 export function PackagesSection({
   packages,
   guestCount,
+  customerType = "b2c",
   packageLineItem,
   loading,
   guestCountSaving,
@@ -262,8 +266,8 @@ export function PackagesSection({
               />
               {guestCountSaving ? (
                 <p className="text-xs text-muted-foreground">Updating tiers…</p>
-              ) : activeTierLabel(guestCount, packages) ? (
-                <p className="text-xs text-muted-foreground">{activeTierLabel(guestCount, packages)}</p>
+              ) : activeTierLabel(guestCount, packages, customerType) ? (
+                <p className="text-xs text-muted-foreground">{activeTierLabel(guestCount, packages, customerType)}</p>
               ) : guestCount > 0 ? (
                 <p className="text-xs text-amber-700">No package tier matches this guest count.</p>
               ) : (
@@ -289,6 +293,7 @@ export function PackagesSection({
                     key={pkg.id}
                     pkg={pkg}
                     guestCount={guestCount}
+                    customerType={customerType}
                     isAdded={addedPackageId === pkg.id}
                     disabled={belowMinimum || guestCount <= 0}
                     actionLoading={actionLoading}
@@ -349,9 +354,13 @@ export function packageSummaryLabel(item: QuoteLineItem, guestCount: number): st
   return `${item.name} · ${suffix} × ${guestCount} guests`;
 }
 
-function activeTierLabel(guestCount: number, packages: CateringPackage[]): string | null {
+function activeTierLabel(
+  guestCount: number,
+  packages: CateringPackage[],
+  customerType: "b2b" | "b2c"
+): string | null {
   if (guestCount <= 0 || packages.length === 0) return null;
-  const tier = getActiveTier(packages[0]!.tiers, guestCount);
+  const tier = getActiveTier(packages[0]!.tiers, guestCount, customerType);
   if (!tier) return null;
   return `Active tier: ${formatUsd(tier.pricePerHead)}/person (${formatTierRange(tier)} guests)`;
 }

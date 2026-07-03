@@ -12,8 +12,8 @@ import {
 import { escapeHtml } from "./mail";
 import {
   calculateQuoteTotals,
+  formatTaxRatePercent,
   formatTierLabel,
-  formatTierRange,
   formatUsd,
   getActiveTier,
   lineItemTotal
@@ -261,6 +261,38 @@ function packageLineItems(quote: QuoteWithRelations) {
   return quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
 }
 
+function buildLineItemRows(
+  itemsByCategory: Map<string, QuoteWithRelations["lineItems"]>,
+  guestCount: number
+) {
+  return CATEGORY_ORDER.flatMap((cat) => {
+    const items = itemsByCategory.get(cat) ?? [];
+    if (items.length === 0) return [];
+    return [
+      React.createElement(
+        View,
+        { key: `cat-${cat}`, style: styles.categoryHeader },
+        React.createElement(Text, null, CATEGORY_LABELS[cat])
+      ),
+      ...items.map((item) =>
+        React.createElement(
+          View,
+          { key: item.id, style: styles.tableRow },
+          React.createElement(Text, { style: styles.colName }, item.name),
+          React.createElement(Text, { style: styles.colQty }, qtyDisplay(item, guestCount)),
+          React.createElement(Text, { style: styles.colUnit }, UNIT_LABELS[item.unitType] ?? item.unitType),
+          React.createElement(Text, { style: styles.colPrice }, formatUsd(item.unitPrice)),
+          React.createElement(
+            Text,
+            { style: styles.colTotal },
+            formatUsd(lineItemTotal(item, guestCount))
+          )
+        )
+      )
+    ];
+  });
+}
+
 function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
   const totals = calculateQuoteTotals(
@@ -272,39 +304,17 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
   const g = quote.event?.primaryGuest;
   const itemsByCategory = groupItemsByCategory(quote);
   const packages = packageLineItems(quote);
+  const customerType = quote.event?.customerType ?? "b2c";
+  const lineItemRows = buildLineItemRows(itemsByCategory, guestCount);
+  const hasLineItems = lineItemRows.length > 0;
 
   const packageSections = packages.flatMap((item) => {
     const tiers = item.package?.tiers ?? [];
     const activeTier =
       item.appliedTier != null
         ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
-          getActiveTier(tiers, guestCount)
-        : getActiveTier(tiers, guestCount);
-
-    const tierTableHeader = React.createElement(
-      View,
-      { key: `tier-head-${item.id}`, style: { ...styles.tierTableRow, backgroundColor: "#eef1f6" } },
-      React.createElement(Text, { style: { width: "50%" } }, "Guest Range"),
-      React.createElement(Text, { style: { width: "50%", textAlign: "right" } }, "Per Person")
-    );
-
-    const tierRows = tiers.map((tier) => {
-      const isActive =
-        activeTier?.minGuests === tier.minGuests && activeTier?.maxGuests === tier.maxGuests;
-      return React.createElement(
-        View,
-        {
-          key: `tier-${item.id}-${tier.minGuests}`,
-          style: { ...styles.tierTableRow, ...(isActive ? styles.tierTableActive : {}) }
-        },
-        React.createElement(Text, { style: { width: "50%" } }, formatTierRange(tier)),
-        React.createElement(
-          Text,
-          { style: { width: "50%", textAlign: "right" } },
-          `${formatUsd(tier.pricePerHead)}${isActive ? "  ← Applied" : ""}`
-        )
-      );
-    });
+          getActiveTier(tiers, guestCount, customerType)
+        : getActiveTier(tiers, guestCount, customerType);
 
     const includes = item.package?.items?.length
       ? formatIncludedItems(item.package.items)
@@ -318,16 +328,14 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         React.createElement(
           Text,
           { style: styles.packageMeta },
-          `${packageTierLabel(item)} · ${guestCount} guests`
+          `${packageTierLabel(item)} · $${activeTier?.pricePerHead ?? item.unitPrice}/person × ${guestCount} guests`
         ),
         React.createElement(Text, { style: { fontSize: 9, marginBottom: 6 } }, `Includes: ${includes}`),
         React.createElement(
           Text,
-          { style: { fontSize: 9, fontFamily: "Helvetica-Bold", marginBottom: 4 } },
-          `Total: ${formatUsd(lineItemTotal(item, guestCount))}`
-        ),
-        tierTableHeader,
-        ...tierRows
+          { style: { fontSize: 9, fontFamily: "Helvetica-Bold", textAlign: "right" } },
+          formatUsd(lineItemTotal(item, guestCount))
+        )
       )
     ];
   });
@@ -410,42 +418,21 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         ? React.createElement(Text, { style: styles.sectionTitle }, "Packages")
         : null,
       ...packageSections,
-      React.createElement(Text, { style: styles.sectionTitle }, "Line Items"),
-      React.createElement(
-        View,
-        { style: styles.tableHeader },
-        React.createElement(Text, { style: styles.colName }, "Item"),
-        React.createElement(Text, { style: styles.colQty }, "Qty"),
-        React.createElement(Text, { style: styles.colUnit }, "Unit Type"),
-        React.createElement(Text, { style: styles.colPrice }, "Unit Price"),
-        React.createElement(Text, { style: styles.colTotal }, "Total")
-      ),
-      ...CATEGORY_ORDER.flatMap((cat) => {
-        const items = itemsByCategory.get(cat) ?? [];
-        if (items.length === 0) return [];
-        return [
-          React.createElement(
+      hasLineItems
+        ? React.createElement(Text, { style: styles.sectionTitle }, "Line Items")
+        : null,
+      hasLineItems
+        ? React.createElement(
             View,
-            { key: `cat-${cat}`, style: styles.categoryHeader },
-            React.createElement(Text, null, CATEGORY_LABELS[cat])
-          ),
-          ...items.map((item) =>
-            React.createElement(
-              View,
-              { key: item.id, style: styles.tableRow },
-              React.createElement(Text, { style: styles.colName }, item.name),
-              React.createElement(Text, { style: styles.colQty }, qtyDisplay(item, guestCount)),
-              React.createElement(Text, { style: styles.colUnit }, UNIT_LABELS[item.unitType] ?? item.unitType),
-              React.createElement(Text, { style: styles.colPrice }, formatUsd(item.unitPrice)),
-              React.createElement(
-                Text,
-                { style: styles.colTotal },
-                formatUsd(lineItemTotal(item, guestCount))
-              )
-            )
+            { style: styles.tableHeader },
+            React.createElement(Text, { style: styles.colName }, "Item"),
+            React.createElement(Text, { style: styles.colQty }, "Qty"),
+            React.createElement(Text, { style: styles.colUnit }, "Unit Type"),
+            React.createElement(Text, { style: styles.colPrice }, "Unit Price"),
+            React.createElement(Text, { style: styles.colTotal }, "Total")
           )
-        ];
-      }),
+        : null,
+      ...lineItemRows,
       React.createElement(
         View,
         { style: styles.totalsBox },
@@ -458,7 +445,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         React.createElement(
           View,
           { style: styles.totalsRow },
-          React.createElement(Text, null, `Tax (${(quote.taxRate * 100).toFixed(1)}%)`),
+          React.createElement(Text, null, `Tax (${formatTaxRatePercent(quote.taxRate)}%)`),
           React.createElement(Text, null, formatUsd(totals.tax))
         ),
         React.createElement(
@@ -514,6 +501,7 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
   const location = eventLocation(quote);
   const itemsByCategory = groupItemsByCategory(quote);
   const packages = packageLineItems(quote);
+  const customerType = quote.event?.customerType ?? "b2c";
 
   const packageHtml =
     packages.length > 0
@@ -524,37 +512,18 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
             const activeTier =
               item.appliedTier != null
                 ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
-                  getActiveTier(tiers, guestCount)
-                : getActiveTier(tiers, guestCount);
+                  getActiveTier(tiers, guestCount, customerType)
+                : getActiveTier(tiers, guestCount, customerType);
             const includes = item.package?.items?.length
               ? escapeHtml(formatIncludedItems(item.package.items))
               : "—";
-            const tierRows = tiers
-              .map((tier) => {
-                const isActive =
-                  activeTier?.minGuests === tier.minGuests &&
-                  activeTier?.maxGuests === tier.maxGuests;
-                const style = isActive
-                  ? "background:#1B2A4A;color:#fff;font-weight:bold;"
-                  : "";
-                return `<tr style="${style}">
-                  <td style="padding:2px 8px;">${escapeHtml(formatTierRange(tier))}</td>
-                  <td style="padding:2px 8px;text-align:right;">${escapeHtml(formatUsd(tier.pricePerHead))}${isActive ? " ← Applied" : ""}</td>
-                </tr>`;
-              })
-              .join("");
+            const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
             return `<tr>
               <td colspan="2" style="padding:8px;border-bottom:1px solid #eee;">
-                <strong>${escapeHtml(item.name)}</strong> (${escapeHtml(packageTierLabel(item))})<br/>
+                <strong>${escapeHtml(item.name)}</strong><br/>
+                ${escapeHtml(packageTierLabel(item))} · $${pricePerHead}/person × ${guestCount} guests<br/>
                 Includes: ${includes}<br/>
-                Total: ${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}
-                <table style="width:100%;margin-top:8px;border-collapse:collapse;font-size:12px;">
-                  <tr style="background:#eef1f6;font-weight:bold;">
-                    <td style="padding:4px 8px;">Guest Range</td>
-                    <td style="padding:4px 8px;text-align:right;">Per Person</td>
-                  </tr>
-                  ${tierRows}
-                </table>
+                <div style="text-align:right;font-weight:bold;margin-top:4px;">${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</div>
               </td>
             </tr>`;
           })

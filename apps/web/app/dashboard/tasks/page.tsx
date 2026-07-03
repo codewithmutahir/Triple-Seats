@@ -3,7 +3,7 @@
 import { format } from "date-fns";
 import { CheckSquare, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +29,7 @@ import {
 } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -85,6 +86,13 @@ async function fetchEventOptions(): Promise<EventOption[]> {
 }
 
 export default function TasksPage() {
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("tasks");
+    perfRef.current.step("mount");
+  }
+
   const [searchInput, setSearchInput] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [status, setStatus] = useState<string>("all");
@@ -140,6 +148,7 @@ export default function TasksPage() {
     const store = useAppStore.getState();
     const key = cacheKey;
     setError(null);
+    perfRef.current?.step("fetch:start");
 
     await Promise.all([
       loadWithCache({
@@ -151,7 +160,10 @@ export default function TasksPage() {
           if ("error" in result) throw new Error(result.error);
           return result;
         },
-        onData: (result) => setTasks(result.items),
+        onData: (result) => {
+          setTasks(result.items);
+          perfRef.current?.step("fetch:done");
+        },
         setLoading,
         setRefreshing
       }),
@@ -175,6 +187,15 @@ export default function TasksPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (perfEndedRef.current || loading) return;
+    if (tasks.length >= 0 || error) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [tasks, loading, error]);
 
   const pendingTasks = useMemo(
     () => tasks.filter((t) => t.status === "pending"),
@@ -468,9 +489,9 @@ export default function TasksPage() {
           <Card key={label}>
             <CardContent className="px-4 py-3">
               <p className="text-xs font-medium text-muted-foreground">{label}</p>
-              <p className="font-heading text-2xl font-semibold text-[#1B2A4A]">
+              <div className="font-heading text-2xl font-semibold text-[#1B2A4A]">
                 {loading && stats == null ? <Skeleton className="h-8 w-12" /> : (value ?? 0)}
-              </p>
+              </div>
             </CardContent>
           </Card>
         ))}

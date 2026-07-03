@@ -27,6 +27,7 @@ import { RefreshingBadge } from "@/components/refreshing-badge";
 import { useAppStore, type Conversation, type DiscussionThread } from "@/lib/stores/app-store";
 import { loadWithCache } from "@/lib/stores/cache-helpers";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 type EventThreadMeta = DiscussionThread["event"];
 type Message = DiscussionThread["messages"][number];
@@ -151,6 +152,13 @@ function DiscussionsInner() {
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
 
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("discussions");
+    perfRef.current.step("mount");
+  }
+
   const [conversations, setConversations] = useState<Conversation[]>(
     () => useAppStore.getState().peekDiscussionsConversations() ?? []
   );
@@ -186,6 +194,7 @@ function DiscussionsInner() {
   const loadConversations = useCallback(async () => {
     const store = useAppStore.getState();
     setError(null);
+    perfRef.current?.step("fetch:start");
     await loadWithCache({
       peek: () => store.peekDiscussionsConversations(),
       getFresh: () => store.getDiscussionsConversations(),
@@ -195,7 +204,10 @@ function DiscussionsInner() {
         if ("error" in result) throw new Error(result.error);
         return result.conversations;
       },
-      onData: setConversations,
+      onData: (data) => {
+        setConversations(data);
+        perfRef.current?.step("fetch:done");
+      },
       setLoading: setListLoading,
       setRefreshing: setListRefreshing
     }).catch((e) => {
@@ -232,6 +244,15 @@ function DiscussionsInner() {
   useEffect(() => {
     void loadConversations();
   }, [loadConversations]);
+
+  useEffect(() => {
+    if (perfEndedRef.current || listLoading) return;
+    if (conversations.length >= 0 || error) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [conversations, listLoading, error]);
 
   useEffect(() => {
     if (urlEventId) {

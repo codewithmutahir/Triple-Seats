@@ -24,6 +24,7 @@ import {
   MENU_SECTIONS,
   type ItemCategory,
   type CateringPackage,
+  type MenuItem,
   type Quote,
   type QuoteLineItem,
   type QuoteStatus,
@@ -42,11 +43,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   calculateQuoteTotals,
+  formatTaxRatePercent,
   formatUsd,
   lineItemTotal
 } from "@/lib/quote-totals";
+import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
+import { isPackageIncludedSection, packageItemsForSection } from "@/lib/package-sections";
 import { useDebouncedCallback } from "@/lib/use-debounce";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 import { cn } from "@/lib/utils";
 
 function statusBadgeVariant(status: QuoteStatus) {
@@ -105,6 +110,13 @@ function QuoteBuilderPage() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get("eventId");
 
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("quote-page");
+    perfRef.current.step("mount");
+  }
+
   const [quote, setQuote] = useState<Quote | null>(null);
   const [lineItems, setLineItems] = useState<QuoteLineItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,7 +129,7 @@ function QuoteBuilderPage() {
   const [tempItemIds, setTempItemIds] = useState<Set<string>>(new Set());
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
 
-  const [taxPct, setTaxPct] = useState("8.5");
+  const [taxPct, setTaxPct] = useState("8.75");
   const [depositPctInput, setDepositPctInput] = useState("50");
   const [notes, setNotes] = useState("");
   const [dueDate, setDueDate] = useState<Date | undefined>();
@@ -126,6 +138,9 @@ function QuoteBuilderPage() {
   const [deliveryRate, setDeliveryRate] = useState("");
 
   const [packages, setPackages] = useState<CateringPackage[]>([]);
+  const [menuItemsByCategory, setMenuItemsByCategory] = useState<
+    Partial<Record<ItemCategory, MenuItem[]>>
+  >({});
   const [packagesLoading, setPackagesLoading] = useState(true);
   const [packageActionLoading, setPackageActionLoading] = useState(false);
   const [guestCountSaving, setGuestCountSaving] = useState(false);
@@ -144,9 +159,19 @@ function QuoteBuilderPage() {
     [lineItems]
   );
 
+  const selectedPackage = useMemo(
+    () =>
+      packageLineItem?.packageId
+        ? (packages.find((p) => p.id === packageLineItem.packageId) ?? null)
+        : null,
+    [packageLineItem, packages]
+  );
+
+  const customerType = quote?.event?.customerType ?? "b2c";
+
   const taxRate = useMemo(() => {
     const t = parseFloat(taxPct) / 100;
-    return Number.isFinite(t) ? t : (quote?.taxRate ?? 0.085);
+    return Number.isFinite(t) ? t : (quote?.taxRate ?? 0.0875);
   }, [taxPct, quote?.taxRate]);
 
   const depositPct = useMemo(() => {
@@ -199,60 +224,42 @@ function QuoteBuilderPage() {
 
     (async () => {
       setLoading(true);
+      setPackagesLoading(true);
       setError(null);
 
-      const list = await apiJson<{ items: Quote[] }>(
-        `/api/quotes/event/${encodeURIComponent(eventId)}`
-      );
+      perfRef.current?.step("fetch:start");
+      const res = await fetch(`/api/quotes/builder/${encodeURIComponent(eventId)}`, {
+        credentials: "include"
+      });
+      const body = (await res.json().catch(() => null)) as {
+        error?: string;
+        quote?: Quote;
+        packages?: CateringPackage[];
+        menuItemsByCategory?: Partial<Record<ItemCategory, MenuItem[]>>;
+      } | null;
+
+      perfRef.current?.step("fetch:all-done");
       if (cancelled) return;
-      if (list.error) {
-        setError(list.error);
+
+      if (!res.ok || !body?.quote) {
+        setError(parseApiError(body, res.status, res.statusText));
         setLoading(false);
+        setPackagesLoading(false);
         return;
       }
 
-      let current = list.data?.items?.[0] ?? null;
-      if (!current) {
-        const created = await apiJson<{ quote: Quote }>("/api/quotes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ eventId })
-        });
-        if (cancelled) return;
-        if (created.error) {
-          setError(created.error);
-          setLoading(false);
-          return;
-        }
-        current = created.data?.quote ?? null;
-      }
-
-      if (current) applyQuote(current);
+      applyQuote(body.quote);
+      setPackages(body.packages ?? []);
+      setMenuItemsByCategory(body.menuItemsByCategory ?? {});
+      perfRef.current?.step("state:set");
       setLoading(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId, applyQuote]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      setPackagesLoading(true);
-      const res = await apiJson<{ items: CateringPackage[] }>("/api/packages");
-      if (cancelled) return;
-      if (res.data?.items) {
-        setPackages(res.data.items);
-      }
       setPackagesLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [eventId, applyQuote]);
 
   useEffect(() => {
     if (!toast) return;
@@ -299,6 +306,18 @@ function QuoteBuilderPage() {
   useEffect(() => {
     if (quote) settingsInitialized.current = true;
   }, [quote]);
+
+  useEffect(() => {
+    if (perfEndedRef.current || loading || packagesLoading) return;
+    if (quote) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    } else if (error) {
+      perfEndedRef.current = true;
+      perfRef.current?.end();
+    }
+  }, [quote, loading, packagesLoading, error]);
 
   useEffect(() => {
     if (!quote || !settingsInitialized.current) return;
@@ -640,7 +659,7 @@ function QuoteBuilderPage() {
               <span>{formatUsd(totals.subtotal)}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
-              <span>Tax ({(taxRate * 100).toFixed(1)}%)</span>
+              <span>Tax ({formatTaxRatePercent(taxRate)}%)</span>
               <span>{formatUsd(totals.tax)}</span>
             </div>
           </div>
@@ -757,7 +776,9 @@ function QuoteBuilderPage() {
   }
 
   const guestName = quote.event?.guestName ?? "Guest";
-  const eventType = quote.event?.title ?? "Event";
+  const eventTypeLabel =
+    quote.event?.eventTypeLabel ??
+    (quote.event?.eventType ? formatEventType(quote.event.eventType) : quote.event?.title ?? "Event");
   const location =
     [quote.event?.venueName, quote.event?.venueAddress].filter(Boolean).join(" · ") ||
     "Location TBD";
@@ -789,7 +810,18 @@ function QuoteBuilderPage() {
             </Link>
           </Button>
           <h1 className="font-heading text-2xl font-semibold tracking-tight md:text-3xl">
-            Quote for {guestName} — {eventType}
+            Quote for {guestName} — {eventTypeLabel}{" "}
+            <Badge
+              variant="outline"
+              className={cn(
+                "align-middle text-xs font-semibold",
+                customerType === "b2b"
+                  ? "border-blue-300 bg-blue-50 text-blue-800"
+                  : "border-slate-300 bg-slate-100 text-slate-700"
+              )}
+            >
+              {formatCustomerType(customerType)}
+            </Badge>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {formatEventDate(quote.event?.eventDate ?? "")} · {location}
@@ -805,6 +837,7 @@ function QuoteBuilderPage() {
           <PackagesSection
             packages={packages}
             guestCount={guestCount}
+            customerType={customerType}
             packageLineItem={packageLineItem}
             loading={packagesLoading}
             guestCountSaving={guestCountSaving}
@@ -814,25 +847,37 @@ function QuoteBuilderPage() {
             onRemove={removePackageFromQuote}
           />
 
-          {MENU_SECTIONS.map((section) => (
-            <QuoteSection
-              key={section.category}
-              category={section.category}
-              label={section.label}
-              borderClass={section.borderClass}
-              emptyMessage={section.emptyMessage}
-              items={itemsByCategory.get(section.category) ?? []}
-              guestCount={guestCount}
-              isOpen={openSections[section.category] ?? true}
-              onOpenChange={(open) =>
-                setOpenSections((prev) => ({ ...prev, [section.category]: open }))
-              }
-              onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
-              onUpdate={updateLineItemOptimistic}
-              onDelete={deleteLineItemOptimistic}
-              tempItemIds={tempItemIds}
-            />
-          ))}
+          {MENU_SECTIONS.map((section) => {
+            const includedItems =
+              selectedPackage && isPackageIncludedSection(section.category)
+                ? packageItemsForSection(selectedPackage.items, section.category)
+                : undefined;
+
+            return (
+              <QuoteSection
+                key={section.category}
+                category={section.category}
+                label={section.label}
+                borderClass={section.borderClass}
+                emptyMessage={section.emptyMessage}
+                items={itemsByCategory.get(section.category) ?? []}
+                guestCount={guestCount}
+                isOpen={openSections[section.category] ?? true}
+                onOpenChange={(open) =>
+                  setOpenSections((prev) => ({ ...prev, [section.category]: open }))
+                }
+                onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
+                onUpdate={updateLineItemOptimistic}
+                onDelete={deleteLineItemOptimistic}
+                tempItemIds={tempItemIds}
+                includedPackageName={
+                  includedItems !== undefined ? selectedPackage?.name : undefined
+                }
+                includedItems={includedItems}
+                catalogItems={menuItemsByCategory[section.category]}
+              />
+            );
+          })}
 
           <Card>
             <CardHeader className="pb-2">

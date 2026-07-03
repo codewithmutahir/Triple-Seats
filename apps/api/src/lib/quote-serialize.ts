@@ -1,6 +1,7 @@
 import type { Prisma } from "@tripeseats/database";
 
 import { calculateQuoteTotals } from "./quote-totals";
+import { eventTypeTitle } from "./event-customer-types";
 
 export const quoteInclude = {
   lineItems: {
@@ -44,6 +45,7 @@ export function serializeLineItem(item: QuoteLineItem) {
           minGuests: item.package.minGuests,
           tiers: item.package.tiers.map((t) => ({
             id: t.id,
+            customerType: t.customerType,
             minGuests: t.minGuests,
             maxGuests: t.maxGuests,
             pricePerHead: t.pricePerHead
@@ -89,6 +91,9 @@ export function serializeQuote(quote: QuoteWithRelations) {
       ? {
           id: quote.event.id,
           title: quote.event.title,
+          eventType: quote.event.eventType,
+          eventTypeLabel: eventTypeTitle(quote.event.eventType),
+          customerType: quote.event.customerType,
           eventDate: quote.event.eventDate.toISOString(),
           guestCountEstimate: quote.event.guestCountEstimate,
           venueAddress: quote.event.venueAddress,

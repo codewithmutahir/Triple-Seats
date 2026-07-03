@@ -2,6 +2,7 @@ import type { Request } from "express";
 
 import { auth } from "./auth";
 import { prisma, type Prisma } from "@tripeseats/database";
+import { timer } from "./perf";
 import { seedMenuItemsForCaterer } from "./seed-menu-items";
 import { seedPackagesForCaterer } from "./seed-packages";
 import { ensureCatererSlug, uniqueSlugForName } from "./slug";
@@ -178,9 +179,14 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
 
 /**
  * Validates Better Auth session and resolves (or creates) the caterer for this user.
+ * Session validity is always checked upstream; only the caterer lookup is cached.
  */
 export async function getSession(req: Request) {
+  const perf = timer("session");
+
   const data = await auth.api.getSession({ headers: requestToHeaders(req) });
+  perf.step("auth.api.getSession");
+
   if (!data?.user || !data?.session) {
     throw new SessionError("Unauthorized", 401);
   }
@@ -190,6 +196,8 @@ export async function getSession(req: Request) {
     email: data.user.email ?? null,
     name: data.user.name ?? null
   });
+  perf.step("ensureCaterer");
 
+  perf.end();
   return { session: data.session, user: data.user, caterer };
 }

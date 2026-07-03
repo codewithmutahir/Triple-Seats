@@ -1,7 +1,15 @@
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
+import {
+  eventTypeTitle,
+  isCustomerType,
+  isEventType,
+  type CustomerTypeValue,
+  type EventTypeValue
+} from "../lib/event-customer-types";
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
 
 const router = Router();
 
@@ -129,6 +137,9 @@ function serializeEvent(ev: LoadedEvent) {
     catererId: ev.catererId,
     leadId: ev.leadId,
     title: ev.title,
+    eventType: ev.eventType,
+    eventTypeLabel: eventTypeTitle(ev.eventType),
+    customerType: ev.customerType,
     status: ev.status,
     eventDate: ev.eventDate.toISOString(),
     startTime: ev.startTime?.toISOString() ?? null,
@@ -172,6 +183,64 @@ function serializeEvent(ev: LoadedEvent) {
     }))
   };
 }
+
+router.patch("/:id", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const id = paramId(req);
+    const body = req.body as { eventType?: string; customerType?: string };
+
+    const existing = await loadEventForCaterer(id, caterer.id);
+    if (!existing) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    const data: { eventType?: EventTypeValue; customerType?: CustomerTypeValue; title?: string } =
+      {};
+
+    if (body.eventType !== undefined) {
+      const next = body.eventType.trim().toLowerCase();
+      if (!isEventType(next)) {
+        return res.status(400).json({ error: "Invalid event type." });
+      }
+      data.eventType = next;
+      data.title = eventTypeTitle(next);
+    }
+
+    if (body.customerType !== undefined) {
+      const next = body.customerType.trim().toLowerCase();
+      if (!isCustomerType(next)) {
+        return res.status(400).json({ error: "Invalid customer type." });
+      }
+      data.customerType = next;
+    }
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: "No valid fields to update." });
+    }
+
+    const updated = await prisma.event.update({
+      where: { id },
+      data,
+      include: {
+        primaryGuest: true,
+        lead: true,
+        tasks: { orderBy: { createdAt: "asc" } }
+      }
+    });
+
+    if (data.customerType && existing.leadId) {
+      await prisma.lead.update({
+        where: { id: existing.leadId },
+        data: { customerType: data.customerType }
+      });
+    }
+
+    return res.json({ event: serializeEvent(updated as LoadedEvent) });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
 
 router.patch("/:id/status", async (req: Request, res: Response) => {
   try {
@@ -316,12 +385,24 @@ router.patch("/:id/guest", async (req: Request, res: Response) => {
 
 router.get("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
     const id = paramId(req);
+    const perf = timer(`event:${id}`);
+
+    const { caterer } = await getSession(req);
+    perf.step("session + caterer");
+
     const ev = await loadEventForCaterer(id, caterer.id);
+    perf.step("db:event+guest+tasks");
+
     if (!ev) {
+      perf.end();
       return res.status(404).json({ error: "Event not found." });
     }
+
+    parseNotes(ev.notes);
+    perf.step("notes:parse");
+
+    perf.end();
     return res.json({ event: serializeEvent(ev) });
   } catch (e) {
     return handleSessionError(res, e);

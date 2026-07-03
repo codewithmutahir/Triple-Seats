@@ -64,6 +64,18 @@ enum QuoteUnit {
   tiered_per_head
 }
 
+enum EventType {
+  delivery
+  pickup
+  order_by_tray
+  full_service
+}
+
+enum CustomerType {
+  b2b
+  b2c
+}
+
 model Caterer {
   id                String            @id @default(cuid())
   userId            String?           @unique
@@ -187,6 +199,7 @@ model Lead {
   estimatedBudget  Decimal?   @db.Decimal(12, 2)
   estimatedGuests  Int?
   expectedEventAt  DateTime?
+  customerType     CustomerType @default(b2c)
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
   caterer          Caterer    @relation(fields: [catererId], references: [id], onDelete: Cascade)
@@ -209,6 +222,8 @@ model Event {
   leadId             String?
   primaryGuestId     String?
   title              String
+  eventType          EventType         @default(full_service)
+  customerType       CustomerType      @default(b2c)
   status             EventStatus       @default(lead)
   eventDate          DateTime
   startTime          DateTime?
@@ -231,6 +246,7 @@ model Event {
   @@index([catererId, status])
   @@index([catererId, eventDate])
   @@index([catererId, status, eventDate])
+  @@index([catererId, createdAt])
   @@index([createdAt])
   @@index([leadId])
   @@index([primaryGuestId])
@@ -243,7 +259,7 @@ model Quote {
   eventId     String
   status      QuoteStatus     @default(draft)
   notes       String?
-  taxRate     Float           @default(0.085)
+  taxRate     Float           @default(0.0875)
   depositPct  Float           @default(0.5)
   dueDate     DateTime?
   totalAmount Float           @default(0)
@@ -304,12 +320,13 @@ model CateringPackage {
 model PackagePriceTier {
   id           String          @id @default(cuid())
   packageId    String
+  customerType CustomerType    @default(b2c)
   minGuests    Int
   maxGuests    Int?
   pricePerHead Float
   package      CateringPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
-  @@index([packageId])
+  @@index([packageId, customerType])
   @@map("package_price_tiers")
 }
 

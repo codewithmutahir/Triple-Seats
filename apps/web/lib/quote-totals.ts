@@ -2,6 +2,7 @@ export type PackagePriceTierLike = {
   minGuests: number;
   maxGuests: number | null;
   pricePerHead: number;
+  customerType?: "b2b" | "b2c";
 };
 
 export type QuoteLineItemLike = {
@@ -19,14 +20,20 @@ export type QuoteTotals = {
   balance: number;
 };
 
+/** Display tax rate without spurious rounding (e.g. 0.0875 → "8.75", not "8.8"). */
+export function formatTaxRatePercent(taxRate: number): string {
+  return (taxRate * 100).toFixed(2).replace(/\.?0+$/, "");
+}
+
 export function getActiveTier(
   tiers: PackagePriceTierLike[],
-  guestCount: number
+  guestCount: number,
+  customerType: "b2b" | "b2c" = "b2c"
 ): PackagePriceTierLike | null {
-  const sorted = [...tiers].sort((a, b) => a.minGuests - b.minGuests);
   return (
-    sorted.find(
+    tiers.find(
       (tier) =>
+        tier.customerType === customerType &&
         guestCount >= tier.minGuests &&
         (tier.maxGuests === null || guestCount <= tier.maxGuests)
     ) ?? null

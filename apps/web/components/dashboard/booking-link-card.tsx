@@ -8,13 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { tenantUrls } from "@/lib/tenant-host";
-
-type CatererProfile = {
-  name: string;
-  slug: string;
-  bookUrl: string | null;
-  dashboardUrl: string | null;
-};
+import { fetchCatererProfile, type CatererProfile } from "@/lib/caterer-profile";
+import { useAppStore } from "@/lib/stores/app-store";
 
 function resolveBookUrl(profile: CatererProfile | null): string | null {
   if (!profile?.slug) return profile?.bookUrl ?? null;
@@ -22,8 +17,10 @@ function resolveBookUrl(profile: CatererProfile | null): string | null {
 }
 
 export function BookingLinkCard() {
-  const [profile, setProfile] = useState<CatererProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<CatererProfile | null>(() =>
+    useAppStore.getState().peekCatererProfile()
+  );
+  const [loading, setLoading] = useState(() => useAppStore.getState().peekCatererProfile() == null);
   const [copied, setCopied] = useState(false);
 
   const bookUrl = useMemo(() => resolveBookUrl(profile), [profile]);
@@ -31,14 +28,9 @@ export function BookingLinkCard() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const res = await fetch("/api/dashboard/profile", { credentials: "include" });
-        if (!res.ok) return;
-        const data = (await res.json()) as CatererProfile;
-        if (!cancelled) setProfile(data);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      const data = await fetchCatererProfile();
+      if (!cancelled && data) setProfile(data);
+      if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;

@@ -4,12 +4,15 @@ import { prismaAdapter } from "better-auth/adapters/prisma";
 
 import { prisma } from "@tripeseats/database";
 
+import { isLocalHostname } from "./is-local-hostname";
 import { allowedWebOrigins } from "./origins";
 import { escapeHtml, getResend, resendFromEmail } from "./mail";
 
 const resend = getResend();
 
-const rootDomain = process.env.PUBLIC_ROOT_DOMAIN?.trim();
+const rootDomainRaw = process.env.PUBLIC_ROOT_DOMAIN?.trim();
+const rootDomain =
+  rootDomainRaw && !isLocalHostname(rootDomainRaw) ? rootDomainRaw : undefined;
 
 const authEmail =
   resend != null

@@ -3,8 +3,10 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { monthRange, monthRangeFromDate } from "../lib/date-ranges";
+import { eventTypeTitle } from "../lib/event-customer-types";
 import { pickBestQuote } from "../lib/quote-pick";
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
 
 const router = Router();
 
@@ -80,7 +82,11 @@ router.get("/stats", async (req: Request, res: Response) => {
 /** Authenticated: paginated confirmed bookings */
 router.get("/", async (req: Request, res: Response) => {
   try {
+    const perf = timer("bookings:list");
+
     const { caterer } = await getSession(req);
+    perf.step("session");
+
     const catererId = caterer.id;
 
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
@@ -159,7 +165,9 @@ router.get("/", async (req: Request, res: Response) => {
         eventId: ev.id,
         guestName,
         guestEmail: g?.email ?? null,
-        eventType: ev.title,
+        eventType: ev.eventType,
+        eventTypeLabel: eventTypeTitle(ev.eventType),
+        customerType: ev.customerType,
         eventDate: ev.eventDate.toISOString(),
         location: ev.venueAddress ?? ev.venueName ?? "—",
         guestCount: ev.guestCountEstimate,
@@ -172,6 +180,8 @@ router.get("/", async (req: Request, res: Response) => {
 
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+    perf.step("db:bookings");
+    perf.end();
     return res.json({
       items,
       total,

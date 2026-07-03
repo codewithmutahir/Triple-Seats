@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -15,10 +16,15 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  CUSTOMER_TYPE_LABELS,
+  EVENT_TYPE_LABELS,
+  EVENT_TYPE_VALUES,
+  type CustomerTypeValue
+} from "@/lib/event-customer-types";
 import { parseApiError } from "@/lib/user-facing-error";
 import { Check, CircleCheck, UtensilsCrossed } from "lucide-react";
 
-const EVENT_TYPES = ["Wedding", "Corporate", "Birthday", "Other"] as const;
 const TIME_SLOTS = ["Breakfast", "Lunch", "Evening", "Late Night"] as const;
 
 const TRUST_ITEMS = [
@@ -44,10 +50,13 @@ function validateStep2(
   eventLocation: string,
   numberOfGuests: string
 ): string | null {
-  if (!eventType) return "Please select an event type.";
+  if (!eventType) return "Please select an event.";
   if (!eventDate) return "Please choose an event date.";
   const d = new Date(eventDate);
   if (Number.isNaN(d.getTime())) return "Please enter a valid event date.";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (d < today) return "Event date must be in the future.";
   if (!eventLocation.trim()) return "Please enter the event location.";
   const n = Number(numberOfGuests);
   if (!Number.isFinite(n) || n < 1) return "Please enter the number of guests (at least 1).";
@@ -66,6 +75,7 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
   const [guestName, setGuestName] = useState("");
   const [contactNumber, setContactNumber] = useState("");
   const [email, setEmail] = useState("");
+  const [customerType, setCustomerType] = useState<CustomerTypeValue>("b2c");
 
   const [eventType, setEventType] = useState("");
   const [eventDate, setEventDate] = useState("");
@@ -150,6 +160,7 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
       contactNumber: contactNumber.trim(),
       email: email.trim(),
       eventType,
+      customerType,
       eventLocation: eventLocation.trim(),
       eventDate,
       numberOfGuests: Number(numberOfGuests),
@@ -175,6 +186,7 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
       setGuestName("");
       setContactNumber("");
       setEmail("");
+      setCustomerType("b2c");
       setEventType("");
       setEventDate("");
       setEventLocation("");
@@ -327,6 +339,33 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
                         placeholder="you@company.com"
                       />
                     </div>
+                    <div className="space-y-3">
+                      <Label>Customer Type</Label>
+                      <RadioGroup
+                        value={customerType}
+                        onValueChange={(v) => setCustomerType(v as CustomerTypeValue)}
+                        className="flex flex-col gap-3 sm:flex-row sm:gap-6"
+                      >
+                        <label className="flex cursor-pointer items-start gap-2 text-sm">
+                          <RadioGroupItem value="b2c" className="mt-0.5" />
+                          <span>
+                            <span className="font-medium">{CUSTOMER_TYPE_LABELS.b2c}</span>
+                            <span className="block text-muted-foreground">
+                              Individual / Personal event
+                            </span>
+                          </span>
+                        </label>
+                        <label className="flex cursor-pointer items-start gap-2 text-sm">
+                          <RadioGroupItem value="b2b" className="mt-0.5" />
+                          <span>
+                            <span className="font-medium">{CUSTOMER_TYPE_LABELS.b2b}</span>
+                            <span className="block text-muted-foreground">
+                              Business / Corporate client
+                            </span>
+                          </span>
+                        </label>
+                      </RadioGroup>
+                    </div>
                   </div>
                 ) : null}
 
@@ -334,15 +373,15 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
                   <div className="space-y-5">
                     <h3 className="font-heading text-lg font-semibold text-foreground">Event details</h3>
                     <div className="space-y-2">
-                      <Label>Event type</Label>
+                      <Label>Event</Label>
                       <Select value={eventType} onValueChange={setEventType}>
-                        <SelectTrigger aria-label="Event type">
-                          <SelectValue placeholder="Select event type" />
+                        <SelectTrigger aria-label="Event">
+                          <SelectValue placeholder="Select event" />
                         </SelectTrigger>
                         <SelectContent>
-                          {EVENT_TYPES.map((t) => (
+                          {EVENT_TYPE_VALUES.map((t) => (
                             <SelectItem key={t} value={t}>
-                              {t}
+                              {EVENT_TYPE_LABELS[t]}
                             </SelectItem>
                           ))}
                         </SelectContent>

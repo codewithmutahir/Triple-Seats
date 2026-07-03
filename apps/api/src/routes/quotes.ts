@@ -14,6 +14,10 @@ import {
 } from "../lib/quote-serialize";
 import { getResend, resendFromEmail } from "../lib/mail";
 import { getSession, SessionError } from "../lib/session";
+import { timer } from "../lib/perf";
+import { seedMenuItemsForCaterer } from "../lib/seed-menu-items";
+import { seedPackagesForCaterer } from "../lib/seed-packages";
+import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
 
 const router = Router();
 
@@ -52,10 +56,11 @@ async function persistQuoteTotals(quoteId: string) {
   if (!quote) return null;
 
   const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const customerType = quote.event?.customerType ?? "b2c";
 
   for (const item of quote.lineItems) {
     if (item.unitType === "tiered_per_head" && item.appliedTier == null && item.package) {
-      const activeTier = getActiveTier(item.package.tiers, guestCount);
+      const activeTier = getActiveTier(item.package.tiers, guestCount, customerType);
       if (activeTier) {
         await prisma.quoteLineItem.update({
           where: { id: item.id },
@@ -96,6 +101,8 @@ async function updateGuestCountAndPackageTiers(
   const quote = await loadQuoteForCaterer(quoteId, catererId);
   if (!quote?.eventId) return null;
 
+  const customerType = quote.event?.customerType ?? "b2c";
+
   await prisma.event.update({
     where: { id: quote.eventId },
     data: { guestCountEstimate: guestCount }
@@ -112,7 +119,7 @@ async function updateGuestCountAndPackageTiers(
       : null;
 
     const tiers = pkg?.tiers ?? item.package?.tiers ?? [];
-    const activeTier = tiers.length ? getActiveTier(tiers, guestCount) : null;
+    const activeTier = tiers.length ? getActiveTier(tiers, guestCount, customerType) : null;
     if (!activeTier) continue;
 
     await prisma.quoteLineItem.update({
@@ -129,16 +136,208 @@ async function updateGuestCountAndPackageTiers(
   return persistQuoteTotals(quoteId);
 }
 
+function serializeBuilderPackage(
+  pkg: {
+    id: string;
+    catererId: string;
+    name: string;
+    description: string | null;
+    sortOrder: number;
+    minGuests: number;
+    tiers: Array<{
+      id: string;
+      customerType: string;
+      minGuests: number;
+      maxGuests: number | null;
+      pricePerHead: number;
+    }>;
+    items: Array<{ id: string; label: string; quantity: number; sortOrder: number }>;
+  },
+  customerType: CustomerTypeValue
+) {
+  const tiers = pkg.tiers.filter((t) => t.customerType === customerType);
+  return {
+    id: pkg.id,
+    catererId: pkg.catererId,
+    name: pkg.name,
+    description: pkg.description,
+    sortOrder: pkg.sortOrder,
+    minGuests: pkg.minGuests,
+    tiers: tiers.map((t) => ({
+      id: t.id,
+      customerType: t.customerType,
+      minGuests: t.minGuests,
+      maxGuests: t.maxGuests,
+      pricePerHead: t.pricePerHead
+    })),
+    items: pkg.items.map((i) => ({
+      id: i.id,
+      label: i.label,
+      quantity: i.quantity,
+      sortOrder: i.sortOrder
+    }))
+  };
+}
+
+function serializeBuilderMenuItem(item: {
+  id: string;
+  catererId: string;
+  category: string;
+  name: string;
+  defaultPrice: number | null;
+  defaultUnit: string;
+  usageCount: number;
+  isDefault: boolean;
+}) {
+  return {
+    id: item.id,
+    catererId: item.catererId,
+    category: item.category,
+    name: item.name,
+    defaultPrice: item.defaultPrice,
+    defaultUnit: item.defaultUnit,
+    usageCount: item.usageCount,
+    isDefault: item.isDefault
+  };
+}
+
+/** Combined quote builder payload — register before `/event/:eventId` */
+router.get("/builder/:eventId", async (req: Request, res: Response) => {
+  try {
+    const eventId = paramId(req, "eventId");
+    const perf = timer(`builder:${eventId}`);
+
+    const { caterer } = await getSession(req);
+    perf.step("session");
+
+    const [event, quoteRow, packagesRaw, menuItemsRaw] = await Promise.all([
+      prisma.event.findFirst({
+        where: { id: eventId, catererId: caterer.id },
+        include: { primaryGuest: true }
+      }),
+      prisma.quote.findFirst({
+        where: { eventId, catererId: caterer.id },
+        orderBy: { createdAt: "desc" },
+        include: quoteInclude
+      }),
+      prisma.cateringPackage.findMany({
+        where: { catererId: caterer.id },
+        orderBy: { sortOrder: "asc" },
+        include: {
+          tiers: { orderBy: { minGuests: "asc" } },
+          items: { orderBy: { sortOrder: "asc" } }
+        }
+      }),
+      prisma.menuItem.findMany({
+        where: { catererId: caterer.id },
+        orderBy: [{ usageCount: "desc" }, { name: "asc" }]
+      })
+    ]);
+
+    if (!event) {
+      perf.end();
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    let packages = packagesRaw;
+    if (packages.length === 0) {
+      await seedPackagesForCaterer(caterer.id);
+      packages = await prisma.cateringPackage.findMany({
+        where: { catererId: caterer.id },
+        orderBy: { sortOrder: "asc" },
+        include: {
+          tiers: { orderBy: { minGuests: "asc" } },
+          items: { orderBy: { sortOrder: "asc" } }
+        }
+      });
+    }
+
+    let menuItems = menuItemsRaw;
+    if (menuItems.length === 0) {
+      await seedMenuItemsForCaterer(caterer.id);
+      menuItems = await prisma.menuItem.findMany({
+        where: { catererId: caterer.id },
+        orderBy: [{ usageCount: "desc" }, { name: "asc" }]
+      });
+    }
+
+    let quote = quoteRow;
+    if (!quote) {
+      quote = await prisma.quote.create({
+        data: {
+          catererId: caterer.id,
+          eventId: event.id,
+          status: "draft",
+          taxRate: 0.0875,
+          depositPct: 0.5,
+          totalAmount: 0
+        },
+        include: quoteInclude
+      });
+    }
+
+    perf.step("db:parallel-all");
+
+    const customerType: CustomerTypeValue = isCustomerType(event.customerType)
+      ? event.customerType
+      : "b2c";
+
+    const menuItemsByCategory = menuItems.reduce(
+      (acc, item) => {
+        const key = item.category;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(serializeBuilderMenuItem(item));
+        return acc;
+      },
+      {} as Record<string, ReturnType<typeof serializeBuilderMenuItem>[]>
+    );
+
+    perf.step("group:menuItems");
+    perf.end();
+
+    return res.json({
+      quote: serializeQuote(quote as QuoteWithRelations),
+      packages: packages.map((p) => serializeBuilderPackage(p, customerType)),
+      menuItemsByCategory,
+      event: {
+        id: event.id,
+        title: event.title,
+        eventType: event.eventType,
+        customerType: event.customerType,
+        eventDate: event.eventDate.toISOString(),
+        guestCountEstimate: event.guestCountEstimate,
+        venueName: event.venueName,
+        venueAddress: event.venueAddress,
+        primaryGuest: event.primaryGuest
+          ? {
+              id: event.primaryGuest.id,
+              firstName: event.primaryGuest.firstName,
+              lastName: event.primaryGuest.lastName,
+              email: event.primaryGuest.email,
+              phone: event.primaryGuest.phone
+            }
+          : null
+      }
+    });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
 /** List quotes for an event — register before `/:id` */
 router.get("/event/:eventId", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
     const eventId = paramId(req, "eventId");
+    const perf = timer(`quotes:event:${eventId}`);
+
+    const { caterer } = await getSession(req);
+    perf.step("session");
 
     const event = await prisma.event.findFirst({
       where: { id: eventId, catererId: caterer.id }
     });
     if (!event) {
+      perf.end();
       return res.status(404).json({ error: "Event not found." });
     }
 
@@ -147,7 +346,9 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
       orderBy: { createdAt: "desc" },
       include: quoteInclude
     });
+    perf.step("db:quote+lineItems");
 
+    perf.end();
     return res.json({ items: quotes.map((q) => serializeQuote(q as QuoteWithRelations)) });
   } catch (e) {
     return handleSessionError(res, e);
@@ -174,7 +375,7 @@ router.post("/", async (req: Request, res: Response) => {
         catererId: caterer.id,
         eventId: event.id,
         status: "draft",
-        taxRate: 0.085,
+        taxRate: 0.0875,
         depositPct: 0.5,
         totalAmount: 0
       },
@@ -466,13 +667,14 @@ router.post("/:id/package", async (req: Request, res: Response) => {
     }
 
     const guestCount = quote.event?.guestCountEstimate ?? 0;
+    const customerType = quote.event?.customerType ?? "b2c";
     if (guestCount < pkg.minGuests) {
       return res.status(400).json({
         error: `Minimum ${pkg.minGuests} guests required for this package.`
       });
     }
 
-    const activeTier = getActiveTier(pkg.tiers, guestCount);
+    const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
     if (!activeTier) {
       return res.status(400).json({ error: "No pricing tier matches the guest count." });
     }
@@ -613,6 +815,7 @@ router.post("/:id/send", async (req: Request, res: Response) => {
     }
 
     const guestCount = quote.event?.guestCountEstimate ?? 0;
+    const customerType = quote.event?.customerType ?? "b2c";
 
     for (const item of quote.lineItems) {
       if (item.unitType !== "tiered_per_head" || item.appliedTier != null) continue;
@@ -624,7 +827,7 @@ router.post("/:id/send", async (req: Request, res: Response) => {
           })
         : null;
 
-      const activeTier = pkg ? getActiveTier(pkg.tiers, guestCount) : null;
+      const activeTier = pkg ? getActiveTier(pkg.tiers, guestCount, customerType) : null;
       if (activeTier) {
         await prisma.quoteLineItem.update({
           where: { id: item.id },

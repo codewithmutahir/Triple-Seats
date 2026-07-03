@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAppStore, type ReportsData } from "@/lib/stores/app-store";
 import { parseApiError } from "@/lib/user-facing-error";
+import { browserTimer } from "@/lib/perf";
 
 const ReportsBarCharts = dynamic(
   () => import("./reports-charts").then((m) => m.ReportsBarCharts),
@@ -142,6 +143,13 @@ async function fetchReports(year: number, month: number): Promise<ReportsData | 
 }
 
 export default function ReportsPage() {
+  const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
+  const perfEndedRef = useRef(false);
+  if (!perfRef.current) {
+    perfRef.current = browserTimer("reports");
+    perfRef.current.step("mount");
+  }
+
   const now = new Date();
   const [year, setYear] = useState(String(now.getFullYear()));
   const [month, setMonth] = useState(String(now.getMonth() + 1));
@@ -171,6 +179,7 @@ export default function ReportsPage() {
         setReports(cached);
         setLoading(false);
         setRefreshing(false);
+        perfRef.current?.step("fetch:done");
       }
       return;
     }
@@ -190,7 +199,9 @@ export default function ReportsPage() {
       setRefreshing(stale?.filterKey === filterKey);
     }
     try {
+      perfRef.current?.step("fetch:start");
       const result = await fetchReports(parseInt(year, 10), parseInt(month, 10));
+      perfRef.current?.step("fetch:done");
       if (requestId !== requestIdRef.current) return;
       if ("error" in result) throw new Error(result.error);
       store.setReportsCache(result);
@@ -210,6 +221,15 @@ export default function ReportsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (perfEndedRef.current || loading) return;
+    if (reports || error) {
+      perfEndedRef.current = true;
+      perfRef.current?.step("render:complete");
+      perfRef.current?.end();
+    }
+  }, [reports, loading, error]);
 
   const summary = reports?.summary;
   const timeline = reports?.timeline ?? [];
@@ -405,9 +425,9 @@ export default function ReportsPage() {
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-medium text-muted-foreground">{label}</p>
-                <p className="font-heading text-2xl font-semibold text-[#1B2A4A]">
+                <div className="font-heading text-2xl font-semibold text-[#1B2A4A]">
                   {loading && value == null ? <Skeleton className="h-8 w-20" /> : (value ?? "—")}
-                </p>
+                </div>
                 {trend ? (
                   <p className="mt-0.5 text-xs text-muted-foreground">{trend}</p>
                 ) : null}
