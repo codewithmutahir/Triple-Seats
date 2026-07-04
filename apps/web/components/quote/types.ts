@@ -7,7 +7,7 @@ export type ItemCategory =
   | "delivery"
   | "other";
 
-export type QuoteUnit = "per_head" | "by_tray" | "flat" | "tiered_per_head";
+export type QuoteUnit = "per_head" | "by_tray" | "flat" | "per_piece" | "tiered_per_head";
 
 export type QuoteStatus = "draft" | "sent" | "accepted" | "declined";
 
@@ -158,6 +158,7 @@ export const UNIT_LABELS: Record<QuoteUnit, string> = {
   per_head: "Per Head",
   by_tray: "By Tray",
   flat: "Flat Rate",
+  per_piece: "Per Piece",
   tiered_per_head: "Package"
 };
 
@@ -165,5 +166,6 @@ export const UNIT_SHORT: Record<QuoteUnit, string> = {
   per_head: "per head",
   by_tray: "by tray",
   flat: "flat",
+  per_piece: "per piece",
   tiered_per_head: "per person"
 };

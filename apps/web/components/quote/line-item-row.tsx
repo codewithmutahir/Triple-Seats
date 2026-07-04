@@ -3,8 +3,7 @@
 import { Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { QuoteLineItem, QuoteUnit } from "@/components/quote/types";
-import { UNIT_LABELS } from "@/components/quote/types";
+import type { ItemCategory, QuoteLineItem, QuoteUnit } from "@/components/quote/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,12 +19,13 @@ import { cn } from "@/lib/utils";
 type LineItemRowProps = {
   item: QuoteLineItem;
   guestCount: number;
+  category?: ItemCategory;
   onUpdate: (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => void;
   onDelete: (itemId: string) => void;
   isTemp?: boolean;
 };
 
-export function LineItemRow({ item, guestCount, onUpdate, onDelete, isTemp }: LineItemRowProps) {
+export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, isTemp }: LineItemRowProps) {
   const [editingField, setEditingField] = useState<"quantity" | "unitPrice" | null>(null);
   const [qtyDraft, setQtyDraft] = useState(String(item.quantity));
   const [priceDraft, setPriceDraft] = useState(String(item.unitPrice));
@@ -62,13 +62,17 @@ export function LineItemRow({ item, guestCount, onUpdate, onDelete, isTemp }: Li
     setEditingField(null);
   }, [priceDraft, item.id, item.unitPrice, onUpdate]);
 
-  const total = lineItemTotal(item, guestCount);
+  const total = lineItemTotal(item, guestCount, category);
+  const effectiveUnit =
+    category === "equipment" && item.unitType === "per_head" ? "per_piece" : item.unitType;
   const calcHint =
-    item.unitType === "per_head"
+    effectiveUnit === "per_head"
       ? `${formatUsd(item.unitPrice)} × ${guestCount} guests = ${formatUsd(total)}`
-      : item.unitType === "by_tray"
+      : effectiveUnit === "by_tray"
         ? `${formatUsd(item.unitPrice)} × ${item.quantity} tray${item.quantity === 1 ? "" : "s"} = ${formatUsd(total)}`
-        : `${formatUsd(item.unitPrice)} × ${item.quantity} = ${formatUsd(total)}`;
+        : effectiveUnit === "per_piece"
+          ? `${formatUsd(item.unitPrice)} × ${item.quantity} pieces = ${formatUsd(total)}`
+          : `${formatUsd(item.unitPrice)} × ${item.quantity} = ${formatUsd(total)}`;
 
   return (
     <li
@@ -112,16 +116,25 @@ export function LineItemRow({ item, guestCount, onUpdate, onDelete, isTemp }: Li
         </div>
 
         <Select
-          value={item.unitType}
+          value={effectiveUnit === "per_piece" && item.unitType === "per_head" ? "per_piece" : item.unitType}
           onValueChange={(v) => onUpdate(item.id, { unitType: v as QuoteUnit })}
         >
           <SelectTrigger className="h-7 w-[110px] text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="per_head">Per Head</SelectItem>
-            <SelectItem value="by_tray">By Tray</SelectItem>
-            <SelectItem value="flat">Flat Rate</SelectItem>
+            {category === "equipment" ? (
+              <>
+                <SelectItem value="per_piece">Per Piece</SelectItem>
+                <SelectItem value="flat">Flat Rate</SelectItem>
+              </>
+            ) : (
+              <>
+                <SelectItem value="per_head">Per Head</SelectItem>
+                <SelectItem value="by_tray">By Tray</SelectItem>
+                <SelectItem value="flat">Flat Rate</SelectItem>
+              </>
+            )}
           </SelectContent>
         </Select>
 

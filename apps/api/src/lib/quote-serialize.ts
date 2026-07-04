@@ -143,6 +143,7 @@ export function parseQuoteUnit(value: unknown): QuoteUnit | null {
     value === "per_head" ||
     value === "by_tray" ||
     value === "flat" ||
+    value === "per_piece" ||
     value === "tiered_per_head"
   ) {
     return value;

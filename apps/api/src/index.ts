@@ -11,6 +11,7 @@ import helmet from "helmet";
 import { auth } from "./lib/auth";
 import { ensureCatererSlugSchema } from "./lib/ensure-caterer-slug-schema";
 import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-schema";
+import { ensureQuoteUnitEnum } from "./lib/ensure-quote-units";
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { getResend } from "./lib/mail";
 import { authLimiter, generalLimiter } from "./lib/rate-limit";
@@ -206,6 +207,7 @@ async function start() {
     await connectDB();
     await ensureCatererSlugSchema();
     await ensureCateringPackagesSchema();
+    await ensureQuoteUnitEnum();
     console.log("[db] Schema checks complete");
   } catch (err) {
     console.error("[db] Startup schema/connect failed — API still listening for /health/live:", err);

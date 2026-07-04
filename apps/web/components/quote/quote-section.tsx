@@ -63,7 +63,10 @@ export function QuoteSection({
   onPackageItemsChange
 }: QuoteSectionProps) {
   const Icon = SECTION_ICONS[category] ?? Package;
-  const sectionSubtotal = items.reduce((sum, item) => sum + lineItemTotal(item, guestCount), 0);
+  const sectionSubtotal = items.reduce(
+    (sum, item) => sum + lineItemTotal(item, guestCount, category),
+    0
+  );
   const isIncludedView = Boolean(includedPackageName && includedItems !== undefined);
   const isB2B = customerType === "b2b";
   const canAddItems = !isB2B || category === "equipment" || category === "delivery";
@@ -111,12 +114,12 @@ export function QuoteSection({
                   </p>
                 </div>
                 {includedItems!.length > 0 ? (
-                  selectedPackageItems && onPackageItemsChange && catalogItems ? (
+                  onPackageItemsChange ? (
                     <PackageItemsSection
                       includedItems={includedItems!}
-                      catalogItems={catalogItems}
+                      catalogItems={catalogItems ?? []}
                       packageName={includedPackageName!}
-                      selectedPackageItems={selectedPackageItems}
+                      selectedPackageItems={selectedPackageItems ?? {}}
                       onPackageItemsChange={onPackageItemsChange}
                     />
                   ) : (
@@ -150,6 +153,7 @@ export function QuoteSection({
                         key={item.id}
                         item={item}
                         guestCount={guestCount}
+                        category={category}
                         onUpdate={onUpdate}
                         onDelete={onDelete}
                         isTemp={tempItemIds.has(item.id)}

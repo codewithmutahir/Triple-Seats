@@ -85,8 +85,11 @@ function unitTypeSummary(item: QuoteLineItem, guestCount: number): string {
   if (item.unitType === "tiered_per_head") {
     return `× ${guestCount} guests`;
   }
-  if (item.unitType === "per_head") {
+  if (item.unitType === "per_head" && item.category !== "equipment") {
     return `× ${guestCount} guests`;
+  }
+  if (item.unitType === "per_piece" || (item.category === "equipment" && item.unitType === "per_head")) {
+    return `(${item.quantity} pieces)`;
   }
   if (item.unitType === "by_tray") {
     return item.quantity === 1 ? "(1 tray)" : `(${item.quantity} trays)`;
@@ -153,7 +156,7 @@ function QuoteBuilderPage() {
 
   const [packageItemSelections, setPackageItemSelections] = useState<
     Record<string, Record<string, string[]>>
-  >({});
+  >(() => Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
 
   const pendingSaves = useRef(0);
   const quoteIdRef = useRef<string | null>(null);
@@ -382,7 +385,10 @@ function QuoteBuilderPage() {
             next.delete(tempId);
             return next;
           });
-          setToast("Failed to add item");
+          if (process.env.NODE_ENV === "development") {
+            console.error("Add line item failed:", res.error);
+          }
+          setToast(res.error ?? "Failed to add item");
           endSave(false);
         }
       });
@@ -449,11 +455,15 @@ function QuoteBuilderPage() {
         }
       ).then((res) => {
         if (res.data?.quote) {
+          setLineItems(res.data.quote.lineItems);
           setQuote((prev) => (prev ? { ...prev, totalAmount: res.data!.quote.totalAmount } : prev));
           endSave(true);
         } else {
           setLineItems((prev) => prev.map((i) => (i.id === itemId ? prevItem : i)));
-          setToast("Failed to update item");
+          if (process.env.NODE_ENV === "development") {
+            console.error("Update line item failed:", res.error);
+          }
+          setToast(res.error ?? "Failed to update item");
           endSave(false);
         }
       });
@@ -652,7 +662,7 @@ function QuoteBuilderPage() {
                         {item.name} {unitTypeSummary(item, guestCount)}
                       </span>
                       <span className="shrink-0 font-medium">
-                        {formatUsd(lineItemTotal(item, guestCount))}
+                        {formatUsd(lineItemTotal(item, guestCount, item.category))}
                       </span>
                     </li>
                   ))}
@@ -729,7 +739,7 @@ function QuoteBuilderPage() {
                       {items.map((item) => (
                         <li key={item.id} className="flex justify-between gap-2">
                           <span className="text-muted-foreground">{item.name}</span>
-                          <span>{formatUsd(lineItemTotal(item, guestCount))}</span>
+                          <span>{formatUsd(lineItemTotal(item, guestCount, item.category))}</span>
                         </li>
                       ))}
                     </ul>

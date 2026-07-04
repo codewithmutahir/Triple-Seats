@@ -9,6 +9,7 @@ export type QuoteLineItemLike = {
   unitPrice: number;
   quantity: number;
   unitType: string;
+  category?: string;
   appliedTier?: number | null;
 };
 
@@ -78,15 +79,7 @@ export function calculateQuoteTotals(
   depositPct: number,
   guestCount: number
 ): QuoteTotals {
-  const guests = Math.max(0, guestCount);
-  const subtotal = lineItems.reduce((sum, item) => {
-    if (item.unitType === "per_head" || item.unitType === "tiered_per_head") {
-      const pricePerHead =
-        item.unitType === "tiered_per_head" ? tieredPricePerHead(item) : item.unitPrice;
-      return sum + pricePerHead * guests * item.quantity;
-    }
-    return sum + item.unitPrice * item.quantity;
-  }, 0);
+  const subtotal = lineItems.reduce((sum, item) => sum + lineItemTotal(item, guestCount), 0);
 
   const tax = subtotal * taxRate;
   const grandTotal = subtotal + tax;
@@ -97,10 +90,14 @@ export function calculateQuoteTotals(
 }
 
 export function lineItemTotal(item: QuoteLineItemLike, guestCount: number): number {
-  if (item.unitType === "per_head") {
+  let unitType = item.unitType;
+  if (item.category === "equipment" && unitType === "per_head") {
+    unitType = "per_piece";
+  }
+  if (unitType === "per_head") {
     return item.unitPrice * Math.max(0, guestCount) * item.quantity;
   }
-  if (item.unitType === "tiered_per_head") {
+  if (unitType === "tiered_per_head") {
     return tieredPricePerHead(item) * Math.max(0, guestCount) * item.quantity;
   }
   return item.unitPrice * item.quantity;

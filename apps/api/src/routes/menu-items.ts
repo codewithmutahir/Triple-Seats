@@ -169,7 +169,7 @@ router.put("/:id", async (req: Request, res: Response) => {
     const updateData: {
       name?: string;
       defaultPrice?: number | null;
-      defaultUnit?: "per_head" | "by_tray" | "flat" | "tiered_per_head";
+      defaultUnit?: "per_head" | "by_tray" | "flat" | "per_piece" | "tiered_per_head";
     } = {};
 
     if (body.name !== undefined) {
