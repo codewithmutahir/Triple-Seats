@@ -13,8 +13,6 @@ const catererCache = new Map<string, { caterer: Caterer; ts: number }>();
 const CATERER_TTL = 30_000;
 
 type SessionData = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
-const sessionCache = new Map<string, { data: SessionData; ts: number }>();
-const SESSION_TTL = 60_000;
 
 export class SessionError extends Error {
   constructor(
@@ -219,21 +217,8 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
 }
 
 async function resolveAuthSession(req: Request): Promise<SessionData> {
-  const token = extractSessionToken(req);
-  const isDev = process.env.NODE_ENV !== "production";
-
-  if (token) {
-    const cached = sessionCache.get(token);
-    if (cached && Date.now() - cached.ts < SESSION_TTL) {
-      if (isDev) {
-        console.log(`[session] CACHE HIT for token: ${token.slice(0, 8)}...`);
-      }
-      return cached.data;
-    }
-  }
-
-  if (isDev) {
-    console.log("[session] CACHE MISS — fetching from Better Auth");
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[session] Fetching session from Better Auth");
   }
 
   const data = await auth.api.getSession({ headers: requestToHeaders(req) });
@@ -241,19 +226,12 @@ async function resolveAuthSession(req: Request): Promise<SessionData> {
     throw new SessionError("Unauthorized", 401);
   }
 
-  if (token) {
-    sessionCache.set(token, { data, ts: Date.now() });
-    if (isDev) {
-      console.log(`[session] Cached session for token: ${token.slice(0, 8)}...`);
-    }
-  }
-
   return data;
 }
 
 /**
  * Validates Better Auth session and resolves (or creates) the caterer for this user.
- * Session validity is cached by token; caterer lookup is cached by user id.
+ * Session is revalidated with Better Auth on every request; caterer lookup is cached by user id.
  */
 export async function getSession(req: Request) {
   const perf = timer("session");
