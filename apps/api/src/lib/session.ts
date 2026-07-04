@@ -121,7 +121,7 @@ async function linkIntakeCatererForUser(user: AuthUser): Promise<Caterer | null>
  */
 export async function ensureCatererForAuthUser(user: AuthUser) {
   const cached = catererCache.get(user.id);
-  if (cached && Date.now() - cached.ts < CATERER_TTL) {
+  if (cached && Date.now() - cached.ts < CATERER_TTL && cached.caterer.slug?.trim()) {
     return cached.caterer;
   }
 
@@ -210,13 +210,32 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
     }
   }
 
-  catererCache.set(user.id, { caterer, ts: Date.now() });
+  if (caterer.slug?.trim()) {
+    catererCache.set(user.id, { caterer, ts: Date.now() });
+    return caterer;
+  }
+
   const withSlug = await ensureCatererSlug(caterer);
   catererCache.set(user.id, { caterer: withSlug, ts: Date.now() });
   return withSlug;
 }
 
+const sessionCache = new Map<string, { data: SessionData; ts: number }>();
+const SESSION_TTL = 15_000;
+
 async function resolveAuthSession(req: Request): Promise<SessionData> {
+  const token = extractSessionToken(req);
+  if (token) {
+    const cached = sessionCache.get(token);
+    if (cached && Date.now() - cached.ts < SESSION_TTL) {
+      const exp = cached.data.session?.expiresAt;
+      if (!exp || (exp instanceof Date ? exp.getTime() : new Date(exp as unknown as string).getTime()) > Date.now()) {
+        return cached.data;
+      }
+      sessionCache.delete(token);
+    }
+  }
+
   if (process.env.NODE_ENV !== "production") {
     console.log("[session] Fetching session from Better Auth");
   }
@@ -226,6 +245,9 @@ async function resolveAuthSession(req: Request): Promise<SessionData> {
     throw new SessionError("Unauthorized", 401);
   }
 
+  if (token) {
+    sessionCache.set(token, { data, ts: Date.now() });
+  }
   return data;
 }
 

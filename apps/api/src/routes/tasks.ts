@@ -274,22 +274,17 @@ router.patch("/:id", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "status must be pending or completed." });
     }
 
-    const existing = await prisma.task.findFirst({
-      where: { id, catererId: caterer.id }
+    const completedAt = status === "done" ? new Date() : null;
+    const result = await prisma.task.updateMany({
+      where: { id, catererId: caterer.id },
+      data: { status, completedAt }
     });
-    if (!existing) {
+    if (result.count === 0) {
       return res.status(404).json({ error: "Task not found." });
     }
 
-    const completedAt = status === "done" ? new Date() : null;
-    const task = await prisma.task.update({
-      where: { id },
-      data: {
-        status,
-        completedAt
-      }
-    });
-
+    const task = await prisma.task.findUnique({ where: { id } });
+    if (!task) return res.status(404).json({ error: "Task not found." });
     return res.json({ task: serializeTask(task) });
   } catch (e) {
     return handleSessionError(res, e);
@@ -301,14 +296,12 @@ router.delete("/:id", async (req: Request, res: Response) => {
     const { caterer } = await getSession(req);
     const id = paramId(req);
 
-    const existing = await prisma.task.findFirst({
+    const result = await prisma.task.deleteMany({
       where: { id, catererId: caterer.id }
     });
-    if (!existing) {
+    if (result.count === 0) {
       return res.status(404).json({ error: "Task not found." });
     }
-
-    await prisma.task.delete({ where: { id } });
     return res.status(204).send();
   } catch (e) {
     return handleSessionError(res, e);

@@ -57,6 +57,45 @@ export function normalizePackageSelections(value: unknown): PackageSelections {
   return parsePackageSelections(value) ?? {};
 }
 
+const SELECTION_CATEGORY_ORDER = ["appetizer", "main_course", "bbq", "dessert"] as const;
+
+const SELECTION_CATEGORY_LABELS: Record<(typeof SELECTION_CATEGORY_ORDER)[number], string> = {
+  appetizer: "Appetizer",
+  main_course: "Main Course",
+  bbq: "BBQ",
+  dessert: "Dessert"
+};
+
+export type PackageSelectionGroup = {
+  category: (typeof SELECTION_CATEGORY_ORDER)[number];
+  categoryLabel: string;
+  slotLabel: string;
+  items: PackageSelectionEntry[];
+};
+
+export function listPackageSelectionGroups(
+  selections: PackageSelections | null | undefined
+): PackageSelectionGroup[] {
+  const normalized = normalizePackageSelections(selections);
+  const groups: PackageSelectionGroup[] = [];
+
+  for (const category of SELECTION_CATEGORY_ORDER) {
+    const slots = normalized[category];
+    if (!slots) continue;
+    for (const [slotLabel, items] of Object.entries(slots)) {
+      if (!items.length) continue;
+      groups.push({
+        category,
+        categoryLabel: SELECTION_CATEGORY_LABELS[category],
+        slotLabel,
+        items
+      });
+    }
+  }
+
+  return groups;
+}
+
 function slotHasSelections(
   selections: PackageSelections | null | undefined,
   label: string

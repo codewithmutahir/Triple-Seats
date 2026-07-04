@@ -94,6 +94,60 @@ async function persistQuoteTotals(quoteId: string) {
   });
 }
 
+async function addPackageToQuote(quoteId: string, catererId: string, packageId: string) {
+  const quote = await loadQuoteForCaterer(quoteId, catererId);
+  if (!quote) return null;
+
+  const pkg = await prisma.cateringPackage.findFirst({
+    where: { id: packageId, catererId },
+    include: { tiers: { orderBy: { minGuests: "asc" } } }
+  });
+  if (!pkg) {
+    throw Object.assign(new Error("Package not found."), { status: 404 });
+  }
+
+  const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const customerType = quote.event?.customerType ?? "b2c";
+  const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
+  if (!activeTier) {
+    throw Object.assign(new Error("No pricing tier matches the guest count."), { status: 400 });
+  }
+
+  const existingPackageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
+  if (existingPackageLine) {
+    await prisma.quoteLineItem.delete({ where: { id: existingPackageLine.id } });
+  }
+
+  await prisma.quoteLineItem.create({
+    data: {
+      quoteId,
+      packageId: pkg.id,
+      category: "other",
+      name: pkg.name,
+      quantity: 1,
+      unitPrice: activeTier.pricePerHead,
+      unitType: "tiered_per_head",
+      appliedTier: activeTier.pricePerHead,
+      appliedTierLabel: formatTierLabel(activeTier),
+      notes: formatTierLabel(activeTier)
+    }
+  });
+
+  return persistQuoteTotals(quoteId);
+}
+
+async function removePackageFromQuote(quoteId: string, catererId: string) {
+  const quote = await loadQuoteForCaterer(quoteId, catererId);
+  if (!quote) return null;
+
+  const packageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
+  if (packageLine) {
+    await prisma.quoteLineItem.delete({ where: { id: packageLine.id } });
+  }
+
+  return persistQuoteTotals(quoteId);
+}
+
 async function updateGuestCountAndPackageTiers(
   quoteId: string,
   catererId: string,
@@ -102,70 +156,88 @@ async function updateGuestCountAndPackageTiers(
   const quote = await loadQuoteForCaterer(quoteId, catererId);
   if (!quote?.eventId) return null;
 
-  const customerType = quote.event?.customerType ?? "b2c";
+  await prisma.event.update({
+    where: { id: quote.eventId },
+    data: { guestCountEstimate: guestCount }
+  });
 
-  return prisma.$transaction(async (tx) => {
-    await tx.event.update({
-      where: { id: quote.eventId! },
-      data: { guestCountEstimate: guestCount }
-    });
+  const freshQuote = await loadQuoteForCaterer(quoteId, catererId);
+  if (!freshQuote) return null;
 
-    const packageLineItems = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
-    const packageIds = [
-      ...new Set(packageLineItems.map((item) => item.packageId).filter(Boolean))
-    ] as string[];
+  const customerType = freshQuote.event?.customerType ?? "b2c";
+  const packageLineItems = freshQuote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+  const packageIds = [
+    ...new Set(packageLineItems.map((item) => item.packageId).filter(Boolean))
+  ] as string[];
 
-    const packages =
-      packageIds.length > 0
-        ? await tx.cateringPackage.findMany({
-            where: { id: { in: packageIds }, catererId },
-            include: { tiers: { orderBy: { minGuests: "asc" } } }
-          })
-        : [];
-    const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
+  const packages =
+    packageIds.length > 0
+      ? await prisma.cateringPackage.findMany({
+          where: { id: { in: packageIds }, catererId },
+          include: { tiers: { orderBy: { minGuests: "asc" } } }
+        })
+      : [];
 
-    for (const item of packageLineItems) {
-      const pkg = item.packageId ? packageById.get(item.packageId) : null;
-      const tiers = pkg?.tiers ?? item.package?.tiers ?? [];
-      const activeTier = tiers.length ? getActiveTier(tiers, guestCount, customerType) : null;
+  const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
 
-      await tx.quoteLineItem.update({
-        where: { id: item.id },
-        data: activeTier
-          ? {
-              appliedTier: activeTier.pricePerHead,
-              appliedTierLabel: formatTierLabel(activeTier),
-              unitPrice: activeTier.pricePerHead,
-              notes: formatTierLabel(activeTier)
-            }
-          : {
-              appliedTier: null,
-              appliedTierLabel: null,
-              unitPrice: 0,
-              notes: null
-            }
-      });
-    }
+  const nextLineItems = freshQuote.lineItems.map((item) => {
+    if (item.unitType !== "tiered_per_head") return item;
+    const pkg = item.packageId ? packageById.get(item.packageId) : null;
+    const tiers = pkg?.tiers ?? item.package?.tiers ?? [];
+    const activeTier = tiers.length ? getActiveTier(tiers, guestCount, customerType) : null;
+    return activeTier
+      ? {
+          ...item,
+          appliedTier: activeTier.pricePerHead,
+          appliedTierLabel: formatTierLabel(activeTier),
+          unitPrice: activeTier.pricePerHead,
+          notes: formatTierLabel(activeTier)
+        }
+      : {
+          ...item,
+          appliedTier: null,
+          appliedTierLabel: null,
+          unitPrice: 0,
+          notes: null
+        };
+  });
 
-    const refreshed = await tx.quote.findUnique({
-      where: { id: quoteId },
-      include: { lineItems: true, event: true }
-    });
-    if (!refreshed) return null;
+  const { grandTotal } = calculateQuoteTotals(
+    nextLineItems,
+    freshQuote.taxRate,
+    freshQuote.depositPct,
+    guestCount
+  );
 
-    const { grandTotal } = calculateQuoteTotals(
-      refreshed.lineItems,
-      refreshed.taxRate,
-      refreshed.depositPct,
-      guestCount
-    );
-
-    return tx.quote.update({
-      where: { id: quoteId },
-      data: { totalAmount: grandTotal },
-      include: quoteInclude
+  const lineItemUpdates = packageLineItems.map((item) => {
+    const next = nextLineItems.find((n) => n.id === item.id)!;
+    return prisma.quoteLineItem.update({
+      where: { id: item.id },
+      data: {
+        appliedTier: next.appliedTier,
+        appliedTierLabel: next.appliedTierLabel,
+        unitPrice: next.unitPrice,
+        notes: next.notes
+      }
     });
   });
+
+  await Promise.all([
+    ...lineItemUpdates,
+    prisma.quote.update({
+      where: { id: quoteId },
+      data: { totalAmount: grandTotal }
+    })
+  ]);
+
+  return {
+    ...freshQuote,
+    totalAmount: grandTotal,
+    lineItems: nextLineItems as typeof freshQuote.lineItems,
+    event: freshQuote.event
+      ? { ...freshQuote.event, guestCountEstimate: guestCount }
+      : freshQuote.event
+  };
 }
 
 function serializeBuilderPackage(
@@ -446,11 +518,6 @@ router.patch("/:id/guest-count", async (req: Request, res: Response) => {
     }
 
     const guestCount = Math.floor(parsed);
-    const existing = await loadQuoteForCaterer(quoteId, caterer.id);
-    if (!existing) {
-      return res.status(404).json({ error: "Quote not found." });
-    }
-
     const updated = await updateGuestCountAndPackageTiers(quoteId, caterer.id, guestCount);
     if (!updated) {
       return res.status(404).json({ error: "Quote not found." });
@@ -654,80 +721,66 @@ router.patch("/:id/items/:itemId", async (req: Request, res: Response) => {
       category?: string;
     };
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const quote = await tx.quote.findFirst({
-        where: { id: quoteId, catererId: caterer.id },
-        select: { id: true, taxRate: true, depositPct: true, eventId: true }
-      });
-      if (!quote) {
-        throw Object.assign(new Error("Quote not found."), { status: 404 });
-      }
-
-      const existing = await tx.quoteLineItem.findFirst({
-        where: { id: itemId, quoteId }
-      });
-      if (!existing) {
-        throw Object.assign(new Error("Line item not found."), { status: 404 });
-      }
-
-      const data: Prisma.QuoteLineItemUpdateInput = {};
-
-      if (body.name !== undefined) {
-        if (!body.name.trim()) {
-          throw Object.assign(new Error("name cannot be empty."), { status: 400 });
-        }
-        data.name = body.name.trim();
-      }
-      if (typeof body.quantity === "number" && Number.isFinite(body.quantity)) {
-        data.quantity = Math.max(0, body.quantity);
-      }
-      if (typeof body.unitPrice === "number" && Number.isFinite(body.unitPrice)) {
-        data.unitPrice = Math.max(0, body.unitPrice);
-      }
-      if (body.unitType !== undefined) {
-        const unitType = parseQuoteUnit(body.unitType);
-        if (!unitType) {
-          throw Object.assign(new Error("Invalid unitType."), { status: 400 });
-        }
-        data.unitType = unitType;
-      }
-      if (body.notes !== undefined) {
-        data.notes = body.notes?.trim() || null;
-      }
-      if (body.category !== undefined) {
-        const category = parseItemCategory(body.category);
-        if (!category) {
-          throw Object.assign(new Error("Invalid category."), { status: 400 });
-        }
-        data.category = category;
-      }
-
-      await tx.quoteLineItem.update({ where: { id: itemId }, data });
-
-      const lineItems = await tx.quoteLineItem.findMany({ where: { quoteId } });
-      const event = quote.eventId
-        ? await tx.event.findUnique({
-            where: { id: quote.eventId },
-            select: { guestCountEstimate: true }
-          })
-        : null;
-      const guestCount = event?.guestCountEstimate ?? 0;
-
-      const { grandTotal } = calculateQuoteTotals(
-        lineItems,
-        quote.taxRate,
-        quote.depositPct,
-        guestCount
-      );
-
-      return tx.quote.update({
-        where: { id: quoteId },
-        data: { totalAmount: grandTotal },
-        include: quoteInclude
-      });
+    const quote = await prisma.quote.findFirst({
+      where: { id: quoteId, catererId: caterer.id },
+      select: { id: true }
     });
+    if (!quote) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
 
-    perf.step("db:transaction");
+    const existing = await prisma.quoteLineItem.findFirst({
+      where: { id: itemId, quoteId }
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Line item not found." });
+    }
+
+    const data: Prisma.QuoteLineItemUpdateInput = {};
+
+    if (body.name !== undefined) {
+      if (!body.name.trim()) {
+        return res.status(400).json({ error: "name cannot be empty." });
+      }
+      data.name = body.name.trim();
+    }
+    if (typeof body.quantity === "number" && Number.isFinite(body.quantity)) {
+      data.quantity = Math.max(0, body.quantity);
+    }
+    if (typeof body.unitPrice === "number" && Number.isFinite(body.unitPrice)) {
+      data.unitPrice = Math.max(0, body.unitPrice);
+    }
+    if (body.unitType !== undefined) {
+      const unitType = parseQuoteUnit(body.unitType);
+      if (!unitType) {
+        return res.status(400).json({ error: "Invalid unitType." });
+      }
+      data.unitType = unitType;
+    }
+    if (body.notes !== undefined) {
+      data.notes = body.notes?.trim() || null;
+    }
+    if (body.category !== undefined) {
+      const category = parseItemCategory(body.category);
+      if (!category) {
+        return res.status(400).json({ error: "Invalid category." });
+      }
+      data.category = category;
+    }
+
+    let updated: QuoteWithRelations | null;
+    if (Object.keys(data).length === 0) {
+      updated = (await loadQuoteForCaterer(quoteId, caterer.id)) as QuoteWithRelations | null;
+    } else {
+      await prisma.quoteLineItem.update({ where: { id: itemId }, data });
+      updated = (await persistQuoteTotals(quoteId)) as QuoteWithRelations | null;
+    }
+
+    if (!updated) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    perf.step("db:update");
     perf.end();
 
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
@@ -785,80 +838,12 @@ router.post("/:id/package", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "packageId is required." });
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const quote = await tx.quote.findFirst({
-        where: { id: quoteId, catererId: caterer.id },
-        include: {
-          lineItems: true,
-          event: { select: { guestCountEstimate: true, customerType: true } }
-        }
-      });
-      if (!quote) {
-        throw Object.assign(new Error("Quote not found."), { status: 404 });
-      }
+    const updated = await addPackageToQuote(quoteId, caterer.id, body.packageId!.trim());
+    if (!updated) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
 
-      const pkg = await tx.cateringPackage.findFirst({
-        where: { id: body.packageId!, catererId: caterer.id },
-        include: {
-          tiers: { orderBy: { minGuests: "asc" } },
-          items: { orderBy: { sortOrder: "asc" } }
-        }
-      });
-      if (!pkg) {
-        throw Object.assign(new Error("Package not found."), { status: 404 });
-      }
-
-      const guestCount = quote.event?.guestCountEstimate ?? 0;
-      const customerType = quote.event?.customerType ?? "b2c";
-      const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
-      if (!activeTier) {
-        throw Object.assign(new Error("No pricing tier matches the guest count."), { status: 400 });
-      }
-
-      const existingPackageLine = quote.lineItems.find(
-        (item) => item.unitType === "tiered_per_head"
-      );
-      if (existingPackageLine) {
-        await tx.quoteLineItem.delete({ where: { id: existingPackageLine.id } });
-      }
-
-      await tx.quoteLineItem.create({
-        data: {
-          quoteId,
-          packageId: pkg.id,
-          category: "other",
-          name: pkg.name,
-          quantity: 1,
-          unitPrice: activeTier.pricePerHead,
-          unitType: "tiered_per_head",
-          appliedTier: activeTier.pricePerHead,
-          appliedTierLabel: formatTierLabel(activeTier),
-          notes: formatTierLabel(activeTier)
-        }
-      });
-
-      const lineItems = await tx.quoteLineItem.findMany({
-        where: { quoteId },
-        include: {
-          package: { include: { tiers: { orderBy: { minGuests: "asc" } } } }
-        }
-      });
-
-      const { grandTotal } = calculateQuoteTotals(
-        lineItems,
-        quote.taxRate,
-        quote.depositPct,
-        guestCount
-      );
-
-      return tx.quote.update({
-        where: { id: quoteId },
-        data: { totalAmount: grandTotal },
-        include: quoteInclude
-      });
-    });
-
-    perf.step("db:transaction");
+    perf.step("db:add-package");
     perf.end();
 
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
@@ -881,42 +866,12 @@ router.delete("/:id/package", async (req: Request, res: Response) => {
     const quoteId = paramId(req);
     const perf = timer(`quote:remove-package:${quoteId}`);
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const quote = await tx.quote.findFirst({
-        where: { id: quoteId, catererId: caterer.id },
-        include: {
-          lineItems: true,
-          event: { select: { guestCountEstimate: true } }
-        }
-      });
-      if (!quote) {
-        throw Object.assign(new Error("Quote not found."), { status: 404 });
-      }
+    const updated = await removePackageFromQuote(quoteId, caterer.id);
+    if (!updated) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
 
-      const packageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
-      if (!packageLine) {
-        throw Object.assign(new Error("No package on this quote."), { status: 404 });
-      }
-
-      await tx.quoteLineItem.delete({ where: { id: packageLine.id } });
-
-      const lineItems = await tx.quoteLineItem.findMany({ where: { quoteId } });
-      const guestCount = quote.event?.guestCountEstimate ?? 0;
-      const { grandTotal } = calculateQuoteTotals(
-        lineItems,
-        quote.taxRate,
-        quote.depositPct,
-        guestCount
-      );
-
-      return tx.quote.update({
-        where: { id: quoteId },
-        data: { totalAmount: grandTotal },
-        include: quoteInclude
-      });
-    });
-
-    perf.step("db:transaction");
+    perf.step("db:remove-package");
     perf.end();
 
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });

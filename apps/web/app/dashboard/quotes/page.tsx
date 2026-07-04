@@ -122,6 +122,9 @@ function QuoteBuilderPage() {
     removePackageMutation,
     updateGuestCountMutation,
     duplicateMutation,
+    isPackageMutating,
+    isGuestCountMutating,
+    isQuoteSyncing,
     isSaving,
     isSaveSuccess,
     isSaveError
@@ -232,6 +235,16 @@ function QuoteBuilderPage() {
     }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]),
     400
   );
+
+  const flushPackageSelections = useCallback(async () => {
+    if (!packageSelectionsInitialized.current || !quote) return;
+    const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
+    if (packageSelectionsEqual(stored, quote.packageSelections)) return;
+    await updateQuoteMutation.mutateAsync({
+      quoteId: quote.id,
+      data: { packageSelections: stored }
+    });
+  }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]);
 
   const saveSettings = useDebouncedCallback(() => {
     if (!settingsInitialized.current || !quote) return;
@@ -698,7 +711,8 @@ function QuoteBuilderPage() {
             customerType={customerType}
             packageLineItem={packageLineItem}
             loading={packagesLoading}
-            guestCountUpdating={updateGuestCountMutation.isPending}
+            guestCountUpdating={isGuestCountMutating}
+            packageSaving={isQuoteSyncing}
             onGuestCountChange={updateGuestCount}
             onAdd={addPackageToQuote}
             onRemove={removePackageFromQuote}
@@ -898,6 +912,7 @@ function QuoteBuilderPage() {
                 setPdfLoading(true);
                 toast.message("Generating PDF — this can take up to a minute…");
                 try {
+                  await flushPackageSelections();
                   const res = await fetch(
                     `/api/quotes/${encodeURIComponent(quote.id)}/pdf`,
                     { method: "POST", credentials: "include" }
@@ -940,6 +955,7 @@ function QuoteBuilderPage() {
                 setSendLoading(true);
                 toast.message("Sending quote — generating PDF and email…");
                 try {
+                  await flushPackageSelections();
                   const res = await fetch(
                     `/api/quotes/${encodeURIComponent(quote.id)}/send`,
                     { method: "POST", credentials: "include" }

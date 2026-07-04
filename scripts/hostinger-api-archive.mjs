@@ -65,24 +65,59 @@ function removeNodeModules(dir) {
   }
 }
 
+function prismaClientExists() {
+  const candidates = [
+    path.join(
+      root,
+      "node_modules/.pnpm/@prisma+client@5.22.0_prisma@5.22.0/node_modules/.prisma/client/index.js"
+    ),
+    path.join(root, "node_modules/.prisma/client/index.js"),
+    path.join(root, "packages/database/node_modules/.prisma/client/index.js")
+  ];
+  return candidates.some((candidate) => fs.existsSync(candidate));
+}
+
+function runCommand(cmd, args, label) {
+  const result = spawnSync(cmd, args, {
+    cwd: root,
+    stdio: "inherit",
+    shell: process.platform === "win32"
+  });
+  if (result.status !== 0) {
+    console.error(`Pre-build failed: ${label ?? `${cmd} ${args.join(" ")}`}`);
+    process.exit(result.status ?? 1);
+  }
+}
+
 function runPrebuild() {
   console.log("Pre-building API dist locally...");
-  const steps = [
-    ["pnpm", ["--filter", "@tripeseats/database", "exec", "prisma", "generate"]],
-    ["pnpm", ["--filter", "@tripeseats/database", "build"]],
-    ["pnpm", ["--filter", "api", "build"]]
-  ];
-  for (const [cmd, args] of steps) {
-    const result = spawnSync(cmd, args, {
+
+  const generate = spawnSync(
+    "npx",
+    ["prisma@5.22.0", "generate", "--schema", "packages/database/prisma/schema.prisma"],
+    {
       cwd: root,
       stdio: "inherit",
       shell: process.platform === "win32"
-    });
-    if (result.status !== 0) {
-      console.error(`Pre-build failed: ${cmd} ${args.join(" ")}`);
-      process.exit(result.status ?? 1);
+    }
+  );
+
+  if (generate.status !== 0) {
+    if (prismaClientExists()) {
+      console.warn(
+        "prisma generate failed (Windows file lock). Using existing Prisma client.\n" +
+          "Stop `pnpm dev` / API servers and re-run for a clean generate."
+      );
+    } else {
+      console.error(
+        "Pre-build failed: npx prisma@5.22.0 generate --schema packages/database/prisma/schema.prisma"
+      );
+      process.exit(generate.status ?? 1);
     }
   }
+
+  runCommand("pnpm", ["--filter", "@tripeseats/database", "build"], "database build");
+  runCommand("pnpm", ["--filter", "api", "build"], "api build");
 }
 
 function createZip(sourceDir, zipPath) {

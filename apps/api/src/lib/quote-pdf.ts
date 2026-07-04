@@ -22,7 +22,9 @@ import type { QuoteWithRelations } from "./quote-serialize";
 import { formatEventType } from "./event-customer-types";
 import {
   formatPackageIncludesWithSelections,
-  normalizePackageSelections
+  listPackageSelectionGroups,
+  normalizePackageSelections,
+  type PackageSelectionGroup
 } from "./package-selections";
 
 function formatEventTime(iso: Date | string | null | undefined): string {
@@ -206,6 +208,18 @@ const styles = StyleSheet.create({
     color: "#444",
     marginBottom: 6
   },
+  selectionGroupTitle: {
+    fontSize: 10,
+    fontFamily: "Helvetica-Bold",
+    color: NAVY,
+    marginTop: 8,
+    marginBottom: 4
+  },
+  selectionItem: {
+    fontSize: 9,
+    marginLeft: 10,
+    marginBottom: 2
+  },
   tierTableRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
@@ -257,6 +271,62 @@ function formatIncludedItems(
   packageSelections: ReturnType<typeof normalizePackageSelections>
 ): string {
   return formatPackageIncludesWithSelections(items, packageSelections);
+}
+
+function buildPackageSelectionSections(
+  packageSelections: ReturnType<typeof normalizePackageSelections>
+): React.ReactElement[] {
+  const groups = listPackageSelectionGroups(packageSelections);
+  if (groups.length === 0) return [];
+
+  const sections: React.ReactElement[] = [
+    React.createElement(
+      Text,
+      { key: "selections-title", style: styles.sectionTitle },
+      "Your Menu Selections"
+    )
+  ];
+
+  let lastCategory: PackageSelectionGroup["category"] | null = null;
+
+  for (const group of groups) {
+    if (group.category !== lastCategory) {
+      sections.push(
+        React.createElement(
+          Text,
+          { key: `selection-cat-${group.category}`, style: styles.selectionGroupTitle },
+          group.categoryLabel.toUpperCase()
+        )
+      );
+      lastCategory = group.category;
+    }
+
+    const slotsInCategory = groups.filter((entry) => entry.category === group.category);
+    if (slotsInCategory.length > 1) {
+      sections.push(
+        React.createElement(
+          Text,
+          {
+            key: `selection-slot-${group.category}-${group.slotLabel}`,
+            style: { ...styles.selectionItem, fontFamily: "Helvetica-Bold", marginTop: 4 }
+          },
+          group.slotLabel
+        )
+      );
+    }
+
+    for (const entry of group.items) {
+      sections.push(
+        React.createElement(
+          Text,
+          { key: `selection-${group.category}-${group.slotLabel}-${entry.id}`, style: styles.selectionItem },
+          `• ${entry.name}`
+        )
+      );
+    }
+  }
+
+  return sections;
 }
 
 function packageTierLabel(item: QuoteWithRelations["lineItems"][number]): string {
@@ -467,6 +537,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         ? React.createElement(Text, { style: styles.sectionTitle }, "Packages")
         : null,
       ...packageSections,
+      ...buildPackageSelectionSections(packageSelections),
       hasLineItems
         ? React.createElement(Text, { style: styles.sectionTitle }, "Line Items")
         : null,
@@ -553,6 +624,40 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
   const customerType = quote.event?.customerType ?? "b2c";
   const packageSelections = normalizePackageSelections(quote.packageSelections);
 
+  const selectionHtml = (() => {
+    const groups = listPackageSelectionGroups(packageSelections);
+    if (groups.length === 0) return "";
+
+    let lastCategory: PackageSelectionGroup["category"] | null = null;
+    const rows: string[] = [
+      `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">YOUR MENU SELECTIONS</td></tr>`
+    ];
+
+    for (const group of groups) {
+      if (group.category !== lastCategory) {
+        rows.push(
+          `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;">${escapeHtml(group.categoryLabel.toUpperCase())}</td></tr>`
+        );
+        lastCategory = group.category;
+      }
+
+      const slotsInCategory = groups.filter((entry) => entry.category === group.category);
+      if (slotsInCategory.length > 1) {
+        rows.push(
+          `<tr><td colspan="2" style="padding:4px 8px;font-weight:bold;">${escapeHtml(group.slotLabel)}</td></tr>`
+        );
+      }
+
+      for (const entry of group.items) {
+        rows.push(
+          `<tr><td colspan="2" style="padding:2px 8px 2px 16px;border-bottom:1px solid #eee;">• ${escapeHtml(entry.name)}</td></tr>`
+        );
+      }
+    }
+
+    return rows.join("");
+  })();
+
   const packageHtml =
     packages.length > 0
       ? `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">PACKAGES</td></tr>` +
@@ -625,6 +730,7 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
     </tr>
     <tr><td colspan="2" style="padding:8px 0;border-top:2px solid #1B2A4A;"></td></tr>
     ${packageHtml}
+    ${selectionHtml}
     ${lineItemsHtml}
     <tr><td colspan="2" style="padding:8px 0;border-top:2px solid #1B2A4A;"></td></tr>
     <tr>
