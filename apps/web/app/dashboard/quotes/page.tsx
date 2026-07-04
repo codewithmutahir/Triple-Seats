@@ -116,8 +116,6 @@ function QuoteBuilderPage() {
   const { data: builderData, isLoading: loading, error: queryError } = useQuoteBuilderQuery(eventId);
   const {
     addItemMutation,
-    removeItemMutation,
-    updateItemMutation,
     updateQuoteMutation,
     addPackageMutation,
     removePackageMutation,
@@ -125,6 +123,8 @@ function QuoteBuilderPage() {
     duplicateMutation,
     selectPackageOptimistic,
     removePackageOptimistic,
+    updateLineItemOptimistic,
+    removeLineItemOptimistic,
     latestPackageIdRef,
     isGuestCountMutating,
     isSaving,
@@ -379,43 +379,6 @@ function QuoteBuilderPage() {
       });
     },
     [quote, addItemMutation]
-  );
-
-  const deleteLineItemOptimistic = useCallback(
-    (itemId: string) => {
-      if (!quote) return;
-      if (itemId.startsWith("temp_")) return;
-      removeItemMutation.mutate({ quoteId: quote.id, itemId });
-    },
-    [quote, removeItemMutation]
-  );
-
-  const updateLineItemOptimistic = useCallback(
-    (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => {
-      if (!quote || itemId.startsWith("temp_")) return;
-      const current = lineItems.find((item) => item.id === itemId);
-      if (!current) return;
-
-      const nextUnit =
-        patch.unitType && current.category === "equipment" && patch.unitType === "per_head"
-          ? "per_piece"
-          : patch.unitType;
-
-      if (
-        (patch.quantity === undefined || patch.quantity === current.quantity) &&
-        (patch.unitPrice === undefined || patch.unitPrice === current.unitPrice) &&
-        (nextUnit === undefined || nextUnit === current.unitType)
-      ) {
-        return;
-      }
-
-      updateItemMutation.mutate({
-        quoteId: quote.id,
-        itemId,
-        data: nextUnit !== undefined ? { ...patch, unitType: nextUnit } : patch
-      });
-    },
-    [quote, lineItems, updateItemMutation]
   );
 
   const addDeliveryLine = useCallback(() => {
@@ -825,7 +788,7 @@ function QuoteBuilderPage() {
                 }
                 onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
                 onUpdate={updateLineItemOptimistic}
-                onDelete={deleteLineItemOptimistic}
+                onDelete={removeLineItemOptimistic}
                 includedPackageName={
                   includedItems !== undefined ? selectedPackage?.name : undefined
                 }
@@ -899,7 +862,7 @@ function QuoteBuilderPage() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
-                          onClick={() => deleteLineItemOptimistic(item.id)}
+                          onClick={() => removeLineItemOptimistic(item.id)}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>

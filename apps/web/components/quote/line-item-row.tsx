@@ -24,6 +24,7 @@ type LineItemRowProps = {
 };
 
 export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: LineItemRowProps) {
+  const isEquipment = category === "equipment";
   const [editingField, setEditingField] = useState<"quantity" | "unitPrice" | null>(null);
   const [qtyDraft, setQtyDraft] = useState(String(item.quantity));
   const [priceDraft, setPriceDraft] = useState(String(item.unitPrice));
@@ -31,9 +32,9 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
   const priceRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setQtyDraft(String(item.quantity));
-    setPriceDraft(String(item.unitPrice));
-  }, [item.quantity, item.unitPrice]);
+    if (editingField !== "quantity") setQtyDraft(String(item.quantity));
+    if (editingField !== "unitPrice") setPriceDraft(String(item.unitPrice));
+  }, [item.quantity, item.unitPrice, editingField]);
 
   useEffect(() => {
     if (editingField === "quantity") qtyRef.current?.focus();
@@ -72,20 +73,23 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
           ? `${formatUsd(item.unitPrice)} × ${item.quantity} pieces = ${formatUsd(total)}`
           : `${formatUsd(item.unitPrice)} × ${item.quantity} = ${formatUsd(total)}`;
 
+  const showQtyInput = isEquipment || editingField === "quantity";
+  const showPriceInput = isEquipment || editingField === "unitPrice";
+
   return (
-    <li className="group rounded-md border bg-muted/20 px-3 py-2 text-sm">
+    <li className="rounded-md border bg-muted/20 px-3 py-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-[100px] flex-1 font-medium">{item.name}</span>
 
         <div className="flex items-center gap-1 text-muted-foreground">
-          <span>qty</span>
-          {editingField === "quantity" ? (
+          <span className="text-xs">qty</span>
+          {showQtyInput ? (
             <Input
               ref={qtyRef}
               type="number"
               min={0}
               step="any"
-              className="h-7 w-16 px-1 text-sm"
+              className="h-8 w-20 px-2 text-sm"
               value={qtyDraft}
               onChange={(e) => setQtyDraft(e.target.value)}
               onBlur={commitQty}
@@ -117,7 +121,7 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
             });
           }}
         >
-          <SelectTrigger className="h-7 w-[110px] text-xs">
+          <SelectTrigger className="h-8 w-[120px] text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -136,13 +140,13 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
           </SelectContent>
         </Select>
 
-        {editingField === "unitPrice" ? (
+        {showPriceInput ? (
           <Input
             ref={priceRef}
             type="number"
             min={0}
             step="0.01"
-            className="h-7 w-20 px-1 text-sm"
+            className="h-8 w-24 px-2 text-sm"
             value={priceDraft}
             onChange={(e) => setPriceDraft(e.target.value)}
             onBlur={commitPrice}
@@ -164,17 +168,17 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
           </button>
         )}
 
-        <span className="font-medium">{formatUsd(total)}</span>
+        <span className="min-w-[72px] text-right font-medium tabular-nums">{formatUsd(total)}</span>
 
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+          className="h-8 w-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={() => onDelete(item.id)}
-          aria-label="Remove item"
+          aria-label={`Remove ${item.name}`}
         >
-          <Trash2 className="h-4 w-4 text-destructive" />
+          <Trash2 className="h-4 w-4" />
         </Button>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{calcHint}</p>
