@@ -147,4 +147,100 @@ router.patch("/:id/increment", async (req: Request, res: Response) => {
   }
 });
 
+router.put("/:id", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const id = paramId(req);
+
+    const body = req.body as {
+      name?: string;
+      defaultPrice?: number | null;
+      defaultUnit?: string;
+      category?: string;
+    };
+
+    const existing = await prisma.menuItem.findFirst({
+      where: { id, catererId: caterer.id }
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Menu item not found." });
+    }
+
+    const updateData: {
+      name?: string;
+      defaultPrice?: number | null;
+      defaultUnit?: string;
+    } = {};
+
+    if (body.name !== undefined) {
+      const name = body.name?.trim();
+      if (!name) {
+        return res.status(400).json({ error: "Name cannot be empty." });
+      }
+      const duplicate = await prisma.menuItem.findFirst({
+        where: {
+          catererId: caterer.id,
+          category: existing.category,
+          name: { equals: name, mode: "insensitive" },
+          id: { not: id }
+        }
+      });
+      if (duplicate) {
+        return res.status(409).json({ error: "An item with this name already exists in this category." });
+      }
+      updateData.name = name;
+    }
+
+    if (body.defaultPrice !== undefined) {
+      updateData.defaultPrice =
+        body.defaultPrice !== null && Number.isFinite(body.defaultPrice)
+          ? Math.max(0, body.defaultPrice)
+          : null;
+    }
+
+    if (body.defaultUnit !== undefined) {
+      const unit = parseQuoteUnit(body.defaultUnit);
+      if (!unit) {
+        return res.status(400).json({ error: "Invalid defaultUnit." });
+      }
+      updateData.defaultUnit = unit;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update." });
+    }
+
+    const item = await prisma.menuItem.update({
+      where: { id },
+      data: updateData
+    });
+
+    return res.json({ item: serializeMenuItem(item) });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
+router.delete("/:id", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const id = paramId(req);
+
+    const existing = await prisma.menuItem.findFirst({
+      where: { id, catererId: caterer.id }
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Menu item not found." });
+    }
+
+    await prisma.menuItem.delete({
+      where: { id }
+    });
+
+    return res.json({ success: true });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
 export const menuItemsRouter = router;

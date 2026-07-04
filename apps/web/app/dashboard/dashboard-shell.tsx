@@ -9,6 +9,7 @@ import {
   CheckSquare,
   LayoutDashboard,
   MessageSquare,
+  Settings,
   UserPlus
 } from "lucide-react";
 import Link from "next/link";
@@ -30,7 +31,8 @@ const NAV = [
   { href: "/dashboard/discussions", label: "Discussions", icon: MessageSquare },
   { href: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/dashboard/calendar", label: "Calendar", icon: Calendar },
-  { href: "/dashboard/reports", label: "Reports", icon: BarChart3 }
+  { href: "/dashboard/reports", label: "Reports", icon: BarChart3 },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings }
 ] as const;
 
 const TITLE_MAP: Record<string, string> = {
@@ -42,7 +44,8 @@ const TITLE_MAP: Record<string, string> = {
   "/dashboard/tasks": "Tasks",
   "/dashboard/calendar": "Calendar",
   "/dashboard/reports": "Reports",
-  "/dashboard/quotes": "Quote Builder"
+  "/dashboard/quotes": "Quote Builder",
+  "/dashboard/settings": "Settings"
 };
 
 function initialsFromUser(name: string | null | undefined, email: string | undefined) {
