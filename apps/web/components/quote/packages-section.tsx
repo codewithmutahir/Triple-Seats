@@ -10,7 +10,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useDebouncedCallback } from "@/lib/use-debounce";
 import {
   formatTierRange,
   formatUsd,
@@ -28,6 +27,7 @@ type PackagesSectionProps = {
   packageLineItem: QuoteLineItem | null;
   loading?: boolean;
   guestCountUpdating?: boolean;
+  packageSaving?: boolean;
   onGuestCountChange: (guestCount: number) => void;
   onAdd: (packageId: string) => void;
   onRemove: () => void;
@@ -186,28 +186,28 @@ export function PackagesSection({
   packageLineItem,
   loading,
   guestCountUpdating = false,
+  packageSaving = false,
   onGuestCountChange,
   onAdd,
   onRemove
 }: PackagesSectionProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [guestInput, setGuestInput] = useState(String(guestCount || ""));
-  const pendingGuestCountRef = useRef<number | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const lastEmittedRef = useRef<number>(guestCount);
 
   const previewGuestCount = useMemo(() => {
     const parsed = parseGuestInput(guestInput);
     return parsed ?? guestCount;
   }, [guestInput, guestCount]);
 
-  const debouncedSaveGuestCount = useDebouncedCallback((nextGuestCount: number) => {
-    pendingGuestCountRef.current = null;
-    if (nextGuestCount !== guestCount) {
-      onGuestCountChange(nextGuestCount);
-    }
-  }, 400);
-
+  // Only reflect server-side guestCount into the input when the input isn't focused.
+  // Reflecting during typing/saving would drop digits the user has typed.
   useEffect(() => {
-    if (pendingGuestCountRef.current === null) {
+    const el = inputRef.current;
+    const isFocused = el && document.activeElement === el;
+    if (!isFocused) {
+      lastEmittedRef.current = guestCount;
       setGuestInput(String(guestCount || ""));
     }
   }, [guestCount]);
@@ -216,15 +216,18 @@ export function PackagesSection({
     const parsed = parseGuestInput(guestInput);
     if (parsed === null) {
       setGuestInput(String(guestCount || ""));
-      pendingGuestCountRef.current = null;
       return;
     }
-    pendingGuestCountRef.current = parsed;
-    if (parsed !== guestCount) {
+    if (parsed !== lastEmittedRef.current) {
+      lastEmittedRef.current = parsed;
       onGuestCountChange(parsed);
-    } else {
-      pendingGuestCountRef.current = null;
     }
+  }
+
+  function handleGuestCountChange(nextGuestCount: number) {
+    lastEmittedRef.current = nextGuestCount;
+    setGuestInput(String(nextGuestCount || ""));
+    onGuestCountChange(nextGuestCount);
   }
 
   return (
@@ -249,6 +252,12 @@ export function PackagesSection({
                   1
                 </Badge>
               ) : null}
+              {packageSaving ? (
+                <span className="ml-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Syncing
+                </span>
+              ) : null}
             </div>
             <ChevronDown
               className={cn("h-4 w-4 transition-transform duration-200", sectionOpen && "rotate-180")}
@@ -265,18 +274,12 @@ export function PackagesSection({
               <Label htmlFor="package-guest-count">Guest count</Label>
               <Input
                 id="package-guest-count"
+                ref={inputRef}
                 type="number"
                 min={0}
                 step={1}
                 value={guestInput}
-                onChange={(e) => {
-                  setGuestInput(e.target.value);
-                  const parsed = parseGuestInput(e.target.value);
-                  if (parsed !== null && parsed !== guestCount) {
-                    pendingGuestCountRef.current = parsed;
-                    debouncedSaveGuestCount(parsed);
-                  }
-                }}
+                onChange={(e) => setGuestInput(e.target.value)}
                 onBlur={commitGuestInput}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -316,7 +319,7 @@ export function PackagesSection({
                     customerType={customerType}
                     isAdded={(packageLineItem?.packageId ?? null) === pkg.id}
                     disabled={previewGuestCount <= 0}
-                    onSelectTier={onGuestCountChange}
+                    onSelectTier={handleGuestCountChange}
                     onAdd={() => onAdd(pkg.id)}
                     onRemove={onRemove}
                   />
