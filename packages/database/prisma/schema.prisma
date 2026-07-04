@@ -61,6 +61,7 @@ enum QuoteUnit {
   per_head
   by_tray
   flat
+  per_piece
   tiered_per_head
 }
 

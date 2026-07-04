@@ -98,7 +98,7 @@ function HighlightedName({ name, query }: { name: string; query: string }) {
 }
 
 function getDefaultUnitType(category: ItemCategory): QuoteUnit {
-  if (category === "equipment") return "flat";
+  if (category === "equipment") return "per_piece";
   return "per_head";
 }
 
@@ -184,12 +184,14 @@ export function AddItemForm({
   const selectItem = useCallback((item: SearchableMenuItem) => {
     setSelectedItem(item);
     setSearch(item.name);
-    setUnitType(item.defaultUnit as QuoteUnit);
+    const unit =
+      category === "equipment" ? "per_piece" : (item.defaultUnit as QuoteUnit);
+    setUnitType(unit);
     setUnitPrice(item.defaultPrice != null ? String(item.defaultPrice) : "");
     setShowForm(true);
     setShowDropdown(false);
     setActiveIndex(-1);
-  }, []);
+  }, [category]);
 
   const resetForm = useCallback(() => {
     setSearch("");
@@ -234,25 +236,27 @@ export function AddItemForm({
       (selectedItem && !selectedItem.id.startsWith("quote_") ? selectedItem.id : undefined);
 
     if (catalogId) {
+      const resolvedUnit = category === "equipment" ? "per_piece" : unitType;
       await submitItem(
-        { name, quantity: qty, unitPrice: price, unitType, menuItemId: catalogId },
+        { name, quantity: qty, unitPrice: price, unitType: resolvedUnit, menuItemId: catalogId },
         catalogId
       );
       return;
     }
 
+    const resolvedUnit = category === "equipment" ? "per_piece" : unitType;
     const res = await fetch("/api/menu-items", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ category, name, defaultPrice: price, defaultUnit: unitType })
+      body: JSON.stringify({ category, name, defaultPrice: price, defaultUnit: resolvedUnit })
     });
     if (res.ok) {
       const body = (await res.json()) as { item?: MenuItem };
       const newId = body.item?.id;
-      await submitItem({ name, quantity: qty, unitPrice: price, unitType, menuItemId: newId }, newId);
+      await submitItem({ name, quantity: qty, unitPrice: price, unitType: resolvedUnit, menuItemId: newId }, newId);
     } else {
-      await submitItem({ name, quantity: qty, unitPrice: price, unitType });
+      await submitItem({ name, quantity: qty, unitPrice: price, unitType: resolvedUnit });
     }
   }, [search, unitPrice, quantity, unitType, selectedItem, category, submitItem]);
 
@@ -260,18 +264,20 @@ export function AddItemForm({
     (item: SearchableMenuItem) => {
       const price = item.defaultPrice ?? 0;
       const menuItemId = item.menuItemId ?? (item.id.startsWith("quote_") ? undefined : item.id);
+      const unitType =
+        category === "equipment" ? "per_piece" : (item.defaultUnit as QuoteUnit);
       void submitItem(
         {
           name: item.name,
           quantity: 1,
           unitPrice: price,
-          unitType: item.defaultUnit as QuoteUnit,
+          unitType,
           menuItemId
         },
         menuItemId
       );
     },
-    [submitItem]
+    [category, submitItem]
   );
 
   const openCustomForm = useCallback(() => {
@@ -473,9 +479,18 @@ export function AddItemForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="per_head">Per Head</SelectItem>
-                <SelectItem value="by_tray">By Tray</SelectItem>
-                <SelectItem value="flat">Flat Rate</SelectItem>
+                {category === "equipment" ? (
+                  <>
+                    <SelectItem value="per_piece">Per Piece</SelectItem>
+                    <SelectItem value="flat">Flat Rate</SelectItem>
+                  </>
+                ) : (
+                  <>
+                    <SelectItem value="per_head">Per Head</SelectItem>
+                    <SelectItem value="by_tray">By Tray</SelectItem>
+                    <SelectItem value="flat">Flat Rate</SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
           </div>

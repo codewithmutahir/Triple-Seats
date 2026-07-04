@@ -64,6 +64,7 @@ const UNIT_LABELS: Record<string, string> = {
   per_head: "Per Head",
   by_tray: "By Tray",
   flat: "Flat Rate",
+  per_piece: "Per Piece",
   tiered_per_head: "Package"
 };
 
@@ -239,7 +240,9 @@ function eventLocation(quote: QuoteWithRelations): string {
 }
 
 function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: number): string {
-  if (item.unitType === "per_head" || item.unitType === "tiered_per_head") {
+  const unitType =
+    item.category === "equipment" && item.unitType === "per_head" ? "per_piece" : item.unitType;
+  if (unitType === "per_head" || unitType === "tiered_per_head") {
     return String(Math.max(0, guestCount) * item.quantity);
   }
   return String(item.quantity);

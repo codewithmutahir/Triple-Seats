@@ -350,8 +350,7 @@ export function PackagesSection({
 
 export function packageSummaryLabel(item: QuoteLineItem, guestCount: number): string {
   if (item.unitType !== "tiered_per_head") return item.name;
-  const suffix = item.appliedTierLabel ?? item.notes ?? `${formatUsd(item.unitPrice)}/person`;
-  return `${item.name} · ${suffix} × ${guestCount} guests`;
+  return `${item.name} × ${guestCount} guests`;
 }
 
 function activeTierLabel(
