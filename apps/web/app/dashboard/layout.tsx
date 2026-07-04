@@ -8,7 +8,7 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import { DashboardShell } from "./dashboard-shell";
 
 export const metadata: Metadata = {
-  title: "Dashboard — CaterPro",
+  title: "Dashboard",
   description: "Manage leads, bookings, and events."
 };
 

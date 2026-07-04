@@ -19,7 +19,7 @@ export default function GlobalError({
     <html lang="en">
       <body className="font-sans antialiased">
         <ErrorFallback
-          title="CaterPro ran into a problem"
+          title="Tripeseats ran into a problem"
           message="The app hit an unexpected error. Try again or return to the home page."
           onRetry={reset}
         />

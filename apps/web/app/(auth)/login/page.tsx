@@ -57,7 +57,7 @@ export default function LoginPage() {
     <div className="grid min-h-screen w-full font-sans lg:grid-cols-5">
       <aside
         className="relative flex w-full flex-col justify-between overflow-hidden bg-[#1B2A4A] px-8 py-10 text-white lg:col-span-2 lg:sticky lg:top-0 lg:min-h-screen lg:self-start lg:px-10 lg:py-12"
-        aria-label="CaterPro"
+        aria-label="Tripeseats"
       >
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.12]"
@@ -78,7 +78,7 @@ export default function LoginPage() {
               <UtensilsCrossed className="h-6 w-6 text-white" aria-hidden />
             </div>
             <div>
-              <p className="font-heading text-2xl font-semibold tracking-tight">CaterPro</p>
+              <p className="font-heading text-2xl font-semibold tracking-tight">Tripeseats</p>
               <p className="text-sm text-white/70">Catering partners</p>
             </div>
           </div>
@@ -97,7 +97,7 @@ export default function LoginPage() {
           </ul>
         </div>
         <p className="relative z-10 mt-10 text-xs text-white/50 lg:mt-0">
-          © {new Date().getFullYear()} CaterPro. All rights reserved.
+          © {new Date().getFullYear()} Tripeseats. All rights reserved.
         </p>
       </aside>
 
