@@ -122,9 +122,10 @@ function QuoteBuilderPage() {
     removePackageMutation,
     updateGuestCountMutation,
     duplicateMutation,
-    isPackageMutating,
+    selectPackageOptimistic,
+    removePackageOptimistic,
+    latestPackageIdRef,
     isGuestCountMutating,
-    isQuoteSyncing,
     isSaving,
     isSaveSuccess,
     isSaveError
@@ -163,21 +164,28 @@ function QuoteBuilderPage() {
   const skipSettingsSaveRef = useRef(true);
   const packageSelectionsInitialized = useRef(false);
   const skipPackageSelectionsSaveRef = useRef(true);
+  const quoteLoadedRef = useRef<string | null>(null);
+
+  const [selectedPkgId, setSelectedPkgId] = useState<string | null>(null);
 
   const guestCount = quote?.event?.guestCountEstimate ?? 0;
 
-  const packageLineItem = useMemo(
-    () => lineItems.find((item) => item.unitType === "tiered_per_head") ?? null,
-    [lineItems]
-  );
+  const packageLineItem = useMemo(() => {
+    const packageLines = lineItems.filter((item) => item.unitType === "tiered_per_head");
+    if (packageLines.length === 0) return null;
+    const inFlight = packageLines.find((item) => item.id.startsWith("temp_pkg_"));
+    return inFlight ?? packageLines[packageLines.length - 1]!;
+  }, [lineItems]);
 
   const selectedPackage = useMemo(
-    () =>
-      packageLineItem?.packageId
-        ? (packages.find((p) => p.id === packageLineItem.packageId) ?? null)
-        : null,
-    [packageLineItem, packages]
+    () => (selectedPkgId ? (packages.find((p) => p.id === selectedPkgId) ?? null) : null),
+    [selectedPkgId, packages]
   );
+
+  const savingPackageId =
+    addPackageMutation.isPending && addPackageMutation.variables?.packageId
+      ? addPackageMutation.variables.packageId
+      : null;
 
   const customerType = quote?.event?.customerType ?? "b2c";
 
@@ -202,6 +210,17 @@ function QuoteBuilderPage() {
     if (!Number.isFinite(d) || !Number.isFinite(r)) return 0;
     return d * r;
   }, [deliveryDistance, deliveryRate]);
+
+  useEffect(() => {
+    if (!quote?.id) return;
+    if (quoteLoadedRef.current === quote.id) return;
+    quoteLoadedRef.current = quote.id;
+
+    const initialPackageId =
+      quote.lineItems.find((item) => item.unitType === "tiered_per_head")?.packageId ?? null;
+    setSelectedPkgId(initialPackageId);
+    latestPackageIdRef.current = initialPackageId;
+  }, [quote?.id, quote?.lineItems, latestPackageIdRef]);
 
   useEffect(() => {
     if (!quote) return;
@@ -399,17 +418,45 @@ function QuoteBuilderPage() {
       if (!quote) return;
       const pkg = packages.find((p) => p.id === packageId);
       if (!pkg) return;
+      setSelectedPkgId(packageId);
+      selectPackageOptimistic(pkg, packages);
       clearPackageSelections();
-      addPackageMutation.mutate({ quoteId: quote.id, packageId, pkg });
+      addPackageMutation.mutate(
+        { quoteId: quote.id, packageId },
+        {
+          onError: () => {
+            setSelectedPkgId(latestPackageIdRef.current);
+          }
+        }
+      );
     },
-    [quote, packages, addPackageMutation, clearPackageSelections]
+    [
+      quote,
+      packages,
+      addPackageMutation,
+      clearPackageSelections,
+      selectPackageOptimistic,
+      latestPackageIdRef
+    ]
   );
 
   const removePackageFromQuote = useCallback(() => {
     if (!quote) return;
+    setSelectedPkgId(null);
+    removePackageOptimistic();
     clearPackageSelections();
-    removePackageMutation.mutate(quote.id);
-  }, [quote, removePackageMutation, clearPackageSelections]);
+    removePackageMutation.mutate(quote.id, {
+      onError: () => {
+        setSelectedPkgId(latestPackageIdRef.current);
+      }
+    });
+  }, [
+    quote,
+    removePackageMutation,
+    clearPackageSelections,
+    removePackageOptimistic,
+    latestPackageIdRef
+  ]);
 
   const updateGuestCount = useCallback(
     (nextGuestCount: number) => {
@@ -710,9 +757,10 @@ function QuoteBuilderPage() {
             guestCount={guestCount}
             customerType={customerType}
             packageLineItem={packageLineItem}
+            selectedPackageId={selectedPkgId}
+            savingPackageId={savingPackageId}
             loading={packagesLoading}
             guestCountUpdating={isGuestCountMutating}
-            packageSaving={isQuoteSyncing}
             onGuestCountChange={updateGuestCount}
             onAdd={addPackageToQuote}
             onRemove={removePackageFromQuote}
