@@ -1,6 +1,5 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
   ChevronDown,
@@ -9,24 +8,20 @@ import {
   Loader2,
   Plus,
   Trash2,
-  X,
+  X
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -36,28 +31,20 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialogTitle
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
-import { useSettingsPackagesQuery } from "@/hooks/use-reports-query";
+import {
+  useCreatePackageMutation,
+  useDeletePackageMutation,
+  useSettingsPackagesQuery,
+  useUpdatePackageMutation,
+  useUpdateTierPriceMutation,
+  type PackageWriteBody
+} from "@/hooks/use-settings-queries";
 import type { SettingsPackage } from "@/lib/settings-types";
-import { queryKeys } from "@/lib/query-keys";
-
-type PriceTier = {
-  id: string;
-  customerType: "b2b" | "b2c";
-  minGuests: number;
-  maxGuests: number | null;
-  pricePerHead: number;
-};
-
-type PackageItem = {
-  id: string;
-  label: string;
-  quantity: number;
-  sortOrder: number;
-};
+import { formatUsd } from "@/lib/quote-totals";
+import { cn } from "@/lib/utils";
 
 type Package = SettingsPackage;
 
@@ -76,7 +63,7 @@ const EMPTY_FORM: PackageFormData = {
   minGuests: 200,
   items: [{ label: "", quantity: 1 }],
   b2cTiers: [{ minGuests: 200, maxGuests: 250, pricePerHead: 0 }],
-  b2bTiers: [{ minGuests: 200, maxGuests: 250, pricePerHead: 0 }],
+  b2bTiers: [{ minGuests: 200, maxGuests: 250, pricePerHead: 0 }]
 };
 
 function packageToForm(pkg: Package): PackageFormData {
@@ -85,14 +72,14 @@ function packageToForm(pkg: Package): PackageFormData {
     .map((t) => ({
       minGuests: t.minGuests,
       maxGuests: t.maxGuests,
-      pricePerHead: t.pricePerHead,
+      pricePerHead: t.pricePerHead
     }));
   const b2bTiers = pkg.tiers
     .filter((t) => t.customerType === "b2b")
     .map((t) => ({
       minGuests: t.minGuests,
       maxGuests: t.maxGuests,
-      pricePerHead: t.pricePerHead,
+      pricePerHead: t.pricePerHead
     }));
 
   return {
@@ -101,14 +88,89 @@ function packageToForm(pkg: Package): PackageFormData {
     minGuests: pkg.minGuests,
     items: pkg.items.map((i) => ({ label: i.label, quantity: i.quantity })),
     b2cTiers: b2cTiers.length ? b2cTiers : EMPTY_FORM.b2cTiers,
-    b2bTiers: b2bTiers.length ? b2bTiers : EMPTY_FORM.b2bTiers,
+    b2bTiers: b2bTiers.length ? b2bTiers : EMPTY_FORM.b2bTiers
   };
+}
+
+function formToBody(data: PackageFormData): PackageWriteBody {
+  return {
+    name: data.name.trim(),
+    description: data.description.trim() || null,
+    minGuests: data.minGuests,
+    items: data.items
+      .filter((i) => i.label.trim())
+      .map((i, idx) => ({ label: i.label.trim(), quantity: i.quantity, sortOrder: idx })),
+    tiers: [
+      ...data.b2cTiers.map((t) => ({ ...t, customerType: "b2c" as const })),
+      ...data.b2bTiers.map((t) => ({ ...t, customerType: "b2b" as const }))
+    ]
+  };
+}
+
+function InlinePriceInput({
+  value,
+  onSave
+}: {
+  value: number;
+  onSave: (price: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    if (!editing) setDraft(String(value));
+  }, [value, editing]);
+
+  function commit() {
+    const parsed = parseFloat(draft);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed !== value) {
+      onSave(parsed);
+    } else {
+      setDraft(String(value));
+    }
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <Input
+        autoFocus
+        type="number"
+        min={0}
+        step={0.01}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+          if (e.key === "Escape") {
+            setDraft(String(value));
+            setEditing(false);
+          }
+        }}
+        className="h-7 w-24 tabular-nums"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="font-medium tabular-nums hover:underline"
+    >
+      {formatUsd(value)}/head
+    </button>
+  );
 }
 
 function TierEditor({
   label,
   tiers,
-  onChange,
+  onChange
 }: {
   label: string;
   tiers: { minGuests: number; maxGuests: number | null; pricePerHead: number }[];
@@ -131,7 +193,7 @@ function TierEditor({
     const nextMin = lastTier?.maxGuests ? lastTier.maxGuests + 1 : 200;
     onChange([
       ...tiers,
-      { minGuests: nextMin, maxGuests: nextMin + 100, pricePerHead: lastTier?.pricePerHead ?? 0 },
+      { minGuests: nextMin, maxGuests: nextMin + 100, pricePerHead: lastTier?.pricePerHead ?? 0 }
     ]);
   }
 
@@ -175,9 +237,7 @@ function TierEditor({
                 min={0}
                 step={0.01}
                 value={tier.pricePerHead}
-                onChange={(e) =>
-                  updateTier(i, "pricePerHead", parseFloat(e.target.value) || 0)
-                }
+                onChange={(e) => updateTier(i, "pricePerHead", parseFloat(e.target.value) || 0)}
                 className="w-24 pl-7"
                 placeholder="0.00"
               />
@@ -206,7 +266,7 @@ function TierEditor({
 
 function ItemsEditor({
   items,
-  onChange,
+  onChange
 }: {
   items: { label: string; quantity: number }[];
   onChange: (items: { label: string; quantity: number }[]) => void;
@@ -273,7 +333,7 @@ function PackageFormDialog({
   onOpenChange,
   initialData,
   editingId,
-  onSave,
+  onSave
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -358,10 +418,7 @@ function PackageFormDialog({
             />
           </div>
 
-          <ItemsEditor
-            items={form.items}
-            onChange={(items) => setForm((f) => ({ ...f, items }))}
-          />
+          <ItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} />
 
           <div className="space-y-4">
             <TierEditor
@@ -376,14 +433,13 @@ function PackageFormDialog({
             />
           </div>
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={saving}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editingId ? "Save Changes" : "Create Package"}
             </Button>
           </DialogFooter>
@@ -397,14 +453,17 @@ function PackageCard({
   pkg,
   onEdit,
   onDelete,
+  onTierPriceSave
 }: {
   pkg: Package;
   onEdit: () => void;
   onDelete: () => void;
+  onTierPriceSave: (tierId: string, price: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [tierView, setTierView] = useState<"b2c" | "b2b">("b2c");
   const itemCount = pkg.items.reduce((sum, i) => sum + i.quantity, 0);
-  const b2cTiers = pkg.tiers.filter((t) => t.customerType === "b2c");
+  const visibleTiers = pkg.tiers.filter((t) => t.customerType === tierView);
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
@@ -421,14 +480,12 @@ function PackageCard({
                   {itemCount} items
                 </Badge>
               </div>
-              {pkg.description && (
-                <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                  {pkg.description}
-                </p>
-              )}
+              {pkg.description ? (
+                <p className="mt-0.5 truncate text-sm text-muted-foreground">{pkg.description}</p>
+              ) : null}
               <p className="mt-1 text-sm text-muted-foreground">
-                Min {pkg.minGuests} guests • {b2cTiers.length} pricing tier
-                {b2cTiers.length !== 1 ? "s" : ""}
+                Min {pkg.minGuests} guests • {pkg.tiers.length} pricing tier
+                {pkg.tiers.length !== 1 ? "s" : ""}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -467,7 +524,7 @@ function PackageCard({
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          <div className="border-t px-4 py-3">
+          <div className="space-y-4 border-t px-4 py-3">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -477,27 +534,69 @@ function PackageCard({
                   {pkg.items.map((item) => (
                     <li key={item.id}>
                       {item.label}
-                      {item.quantity > 1 && (
+                      {item.quantity > 1 ? (
                         <span className="text-muted-foreground"> ×{item.quantity}</span>
-                      )}
+                      ) : null}
                     </li>
                   ))}
                 </ul>
               </div>
 
               <div>
-                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  B2C Pricing
-                </p>
-                <div className="space-y-1 text-sm">
-                  {b2cTiers.map((tier) => (
-                    <div key={tier.id} className="flex justify-between">
-                      <span className="text-muted-foreground">
-                        {tier.minGuests}–{tier.maxGuests ?? "∞"} guests
-                      </span>
-                      <span className="font-medium">${tier.pricePerHead}/head</span>
-                    </div>
-                  ))}
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Pricing Tiers
+                  </p>
+                  <div className="flex gap-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={tierView === "b2c" ? "default" : "outline"}
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setTierView("b2c")}
+                    >
+                      B2C
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={tierView === "b2b" ? "default" : "outline"}
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setTierView("b2b")}
+                    >
+                      B2B
+                    </Button>
+                  </div>
+                </div>
+                <div className="overflow-hidden rounded-md border text-sm">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2 text-left font-medium">Guests</th>
+                        <th className="px-3 py-2 text-right font-medium">Per Head</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleTiers.map((tier) => (
+                        <tr key={tier.id} className="border-b last:border-0">
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {tier.minGuests}–{tier.maxGuests ?? "∞"}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <InlinePriceInput
+                              value={tier.pricePerHead}
+                              onSave={(price) => onTierPriceSave(tier.id, price)}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {visibleTiers.length === 0 ? (
+                    <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+                      No {tierView.toUpperCase()} tiers configured
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -509,18 +608,21 @@ function PackageCard({
 }
 
 export function PackagesSection() {
-  const qc = useQueryClient();
   const {
     data: packages = [],
     isLoading: loading,
     isFetching: refreshing,
     error: queryError
   } = useSettingsPackagesQuery();
+  const createPackageMutation = useCreatePackageMutation();
+  const updatePackageMutation = useUpdatePackageMutation();
+  const deletePackageMutation = useDeletePackageMutation();
+  const updateTierPriceMutation = useUpdateTierPriceMutation();
+
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const loadError = queryError?.message ?? error;
 
@@ -529,53 +631,19 @@ export function PackagesSection() {
     : EMPTY_FORM;
 
   async function handleSave(data: PackageFormData, id: string | null) {
-    const body = {
-      name: data.name.trim(),
-      description: data.description.trim() || null,
-      minGuests: data.minGuests,
-      items: data.items
-        .filter((i) => i.label.trim())
-        .map((i, idx) => ({ label: i.label.trim(), quantity: i.quantity, sortOrder: idx })),
-      tiers: [
-        ...data.b2cTiers.map((t) => ({ ...t, customerType: "b2c" as const })),
-        ...data.b2bTiers.map((t) => ({ ...t, customerType: "b2b" as const })),
-      ],
-    };
-
-    const res = await fetch(id ? `/api/packages/${id}` : "/api/packages", {
-      method: id ? "PUT" : "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const errorBody = await res.json().catch(() => ({}));
-      throw new Error(errorBody.error || "Failed to save package");
+    const body = formToBody(data);
+    if (id) {
+      await updatePackageMutation.mutateAsync({ id, body });
+    } else {
+      await createPackageMutation.mutateAsync(body);
     }
-
-    await qc.invalidateQueries({ queryKey: queryKeys.settings.packages() });
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     if (!deleteId) return;
-    setDeleting(true);
-    try {
-      const res = await fetch(`/api/packages/${deleteId}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const errorBody = await res.json().catch(() => ({}));
-        throw new Error(errorBody.error || "Failed to delete");
-      }
-      await qc.invalidateQueries({ queryKey: queryKeys.settings.packages() });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete");
-    } finally {
-      setDeleting(false);
-      setDeleteId(null);
-    }
+    deletePackageMutation.mutate(deleteId, {
+      onSettled: () => setDeleteId(null)
+    });
   }
 
   if (loading && packages.length === 0) {
@@ -621,6 +689,9 @@ export function PackagesSection() {
                 setDialogOpen(true);
               }}
               onDelete={() => setDeleteId(pkg.id)}
+              onTierPriceSave={(tierId, price) =>
+                updateTierPriceMutation.mutate({ tierId, pricePerHead: price })
+              }
             />
           ))}
         </div>
@@ -639,18 +710,16 @@ export function PackagesSection() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Package</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this package? This action cannot be undone.
-              Existing quotes using this package will not be affected.
+              Are you sure you want to delete this package? This action cannot be undone. Existing
+              quotes using this package will not be affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
-              disabled={deleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>

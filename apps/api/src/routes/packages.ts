@@ -247,6 +247,46 @@ router.put("/:id", async (req: Request, res: Response) => {
   }
 });
 
+router.patch("/tiers/:tierId", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const tierId = paramId(req, "tierId");
+    const body = req.body as { pricePerHead?: unknown };
+
+    const pricePerHead =
+      typeof body.pricePerHead === "number" && Number.isFinite(body.pricePerHead)
+        ? Math.max(0, body.pricePerHead)
+        : null;
+    if (pricePerHead === null) {
+      return res.status(400).json({ error: "pricePerHead must be a non-negative number." });
+    }
+
+    const existing = await prisma.packagePriceTier.findFirst({
+      where: { id: tierId, package: { catererId: caterer.id } }
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Tier not found." });
+    }
+
+    const tier = await prisma.packagePriceTier.update({
+      where: { id: tierId },
+      data: { pricePerHead }
+    });
+
+    return res.json({
+      tier: {
+        id: tier.id,
+        customerType: tier.customerType,
+        minGuests: tier.minGuests,
+        maxGuests: tier.maxGuests,
+        pricePerHead: tier.pricePerHead
+      }
+    });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
     const perf = timer("packages:delete");

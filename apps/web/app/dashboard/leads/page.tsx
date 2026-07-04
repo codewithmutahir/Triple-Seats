@@ -29,6 +29,7 @@ import { ListPagination } from "@/components/dashboard/list-pagination";
 import { filterLeadsItems, LIST_PAGE_SIZE, paginateItems } from "@/lib/client-list-filter";
 import { useCatererProfileQuery } from "@/hooks/use-dashboard-query";
 import { useLeadsQuery } from "@/hooks/use-list-queries";
+import { useNewLeadNotification } from "@/hooks/use-new-lead-notification";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch";
 import type { LeadsListResponse } from "@/lib/stores/app-store";
 import { tenantUrls } from "@/lib/tenant-host";
@@ -91,6 +92,7 @@ export default function LeadsPage() {
   const { data: leadsData, isLoading: loading, isFetching: refreshing, error: queryError } =
     useLeadsQuery();
   const { data: profile } = useCatererProfileQuery();
+  const { hasNewLead, dismissNewLead } = useNewLeadNotification();
   const allLeads = leadsData?.items ?? [];
   const intakeWarning = leadsData?.intakeMismatchWarning ?? null;
   const error = queryError?.message ?? null;
@@ -208,6 +210,22 @@ export default function LeadsPage() {
         </div>
         {refreshing ? <RefreshingBadge /> : null}
       </header>
+
+      {hasNewLead ? (
+        <div className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+            <span className="text-sm font-medium text-green-700">New lead just came in!</span>
+          </div>
+          <button
+            type="button"
+            onClick={dismissNewLead}
+            className="text-xs text-green-600 hover:text-green-800"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       <Card>
         <CardContent className="space-y-4 p-4 md:p-6">

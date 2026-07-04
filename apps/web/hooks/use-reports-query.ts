@@ -11,26 +11,8 @@ export function useReportsQuery(year: number, month: number) {
   });
 }
 
-export function useSettingsProfileQuery() {
-  return useQuery({
-    queryKey: queryKeys.settings.profile(),
-    queryFn: api.profile.caterer,
-    staleTime: 5 * 60 * 1000
-  });
-}
-
-export function useSettingsPackagesQuery() {
-  return useQuery({
-    queryKey: queryKeys.settings.packages(),
-    queryFn: api.settings.packages,
-    staleTime: 5 * 60 * 1000
-  });
-}
-
-export function useSettingsMenuItemsQuery() {
-  return useQuery({
-    queryKey: queryKeys.settings.menuItems(),
-    queryFn: api.settings.menuItems,
-    staleTime: 5 * 60 * 1000
-  });
-}
+export {
+  useSettingsProfileQuery,
+  useSettingsPackagesQuery,
+  useSettingsMenuItemsQuery
+} from "./use-settings-queries";

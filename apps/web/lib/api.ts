@@ -282,7 +282,58 @@ export const api = {
   },
 
   settings: {
+    profile: () => api.profile.caterer(),
+    updateProfile: (data: {
+      name: string;
+      email: string;
+      phone: string | null;
+      timezone: string;
+      currencyCode: string;
+      websiteUrl: string | null;
+    }) =>
+      apiFetch<{ caterer: SettingsProfile }>("/api/caterer", {
+        method: "PATCH",
+        body: JSON.stringify(data)
+      }).then((r) => r.caterer),
     packages: () => apiFetch<{ items: SettingsPackage[] }>("/api/packages").then((r) => r.items),
+    createPackage: (body: Record<string, unknown>) =>
+      apiFetch<{ package: SettingsPackage }>("/api/packages", {
+        method: "POST",
+        body: JSON.stringify(body)
+      }).then((r) => r.package),
+    updatePackage: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ package: SettingsPackage }>(`/api/packages/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(body)
+      }).then((r) => r.package),
+    deletePackage: (id: string) =>
+      apiFetch<{ success: boolean }>(`/api/packages/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      }),
+    updateTierPrice: (tierId: string, pricePerHead: number) =>
+      apiFetch<{ tier: SettingsPackage["tiers"][number] }>(
+        `/api/packages/tiers/${encodeURIComponent(tierId)}`,
+        { method: "PATCH", body: JSON.stringify({ pricePerHead }) }
+      ).then((r) => r.tier),
+    menuItemsAll: async (): Promise<SettingsMenuItemsByCategory> => {
+      const grouped = await apiFetch<Partial<SettingsMenuItemsByCategory>>("/api/menu-items/all");
+      return { ...EMPTY_MENU_ITEMS_BY_CATEGORY, ...grouped };
+    },
+    createMenuItem: (body: Record<string, unknown>) =>
+      apiFetch<{ item: SettingsMenuItemsByCategory[keyof SettingsMenuItemsByCategory][number] }>(
+        "/api/menu-items",
+        { method: "POST", body: JSON.stringify(body) }
+      ).then((r) => r.item),
+    updateMenuItem: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ item: SettingsMenuItemsByCategory[keyof SettingsMenuItemsByCategory][number] }>(
+        `/api/menu-items/${encodeURIComponent(id)}`,
+        { method: "PUT", body: JSON.stringify(body) }
+      ).then((r) => r.item),
+    deleteMenuItem: (id: string) =>
+      apiFetch<{ success: boolean }>(`/api/menu-items/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      }),
+    /** @deprecated Use menuItemsAll — kept for legacy callers */
     menuItems: async (): Promise<SettingsMenuItemsByCategory> => {
       const { MENU_SECTIONS } = await import("@/components/quote/types");
       const grouped: SettingsMenuItemsByCategory = { ...EMPTY_MENU_ITEMS_BY_CATEGORY };
@@ -297,7 +348,6 @@ export const api = {
       for (const { category, items } of results) {
         grouped[category] = items;
       }
-      // Settings includes delivery/other — fetch if not covered by quote MENU_SECTIONS
       for (const category of ["delivery", "other"] as const) {
         if (grouped[category].length > 0) continue;
         const data = await apiFetch<{ items: SettingsMenuItemsByCategory[typeof category] }>(

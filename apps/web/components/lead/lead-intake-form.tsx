@@ -22,6 +22,7 @@ import {
   EVENT_TYPE_VALUES,
   type CustomerTypeValue
 } from "@/lib/event-customer-types";
+import { broadcastNewLead } from "@/lib/caterpro-events";
 import { parseApiError } from "@/lib/user-facing-error";
 import { Check, CircleCheck, UtensilsCrossed } from "lucide-react";
 
@@ -205,6 +206,8 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
         const body = (await response.json()) as { error?: string };
         throw new Error(parseApiError(body, response.status, response.statusText));
       }
+
+      broadcastNewLead();
 
       setSuccess(true);
       setGuestName("");

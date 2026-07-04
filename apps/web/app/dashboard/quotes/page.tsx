@@ -43,6 +43,7 @@ import {
   calculateQuoteTotals,
   formatTaxRatePercent,
   formatUsd,
+  getActiveTier,
   lineItemTotal
 } from "@/lib/quote-totals";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
@@ -168,7 +169,16 @@ function QuoteBuilderPage() {
 
   const [selectedPkgId, setSelectedPkgId] = useState<string | null>(null);
 
-  const guestCount = quote?.event?.guestCountEstimate ?? 0;
+  const cachedGuestCount = quote?.event?.guestCountEstimate ?? 0;
+  const [liveGuestCount, setLiveGuestCount] = useState(cachedGuestCount);
+
+  useEffect(() => {
+    setLiveGuestCount(quote?.event?.guestCountEstimate ?? 0);
+  }, [quote?.event?.guestCountEstimate]);
+
+  const handleGuestCountPreview = useCallback((count: number) => {
+    setLiveGuestCount(count);
+  }, []);
 
   const packageLineItem = useMemo(() => {
     const packageLines = lineItems.filter((item) => item.unitType === "tiered_per_head");
@@ -199,9 +209,23 @@ function QuoteBuilderPage() {
     return Number.isFinite(d) ? d : (quote?.depositPct ?? 0.5);
   }, [depositPctInput, quote?.depositPct]);
 
+  const displayLineItems = useMemo(() => {
+    return lineItems.map((item) => {
+      if (item.unitType !== "tiered_per_head") return item;
+      const tiers =
+        item.package?.tiers ?? packages.find((p) => p.id === item.packageId)?.tiers ?? [];
+      if (tiers.length === 0) return item;
+      const tier = getActiveTier(tiers, liveGuestCount, customerType);
+      if (!tier) {
+        return { ...item, unitPrice: 0, appliedTier: null };
+      }
+      return { ...item, unitPrice: tier.pricePerHead, appliedTier: tier.pricePerHead };
+    });
+  }, [lineItems, liveGuestCount, customerType, packages]);
+
   const totals = useMemo(
-    () => calculateQuoteTotals(lineItems, taxRate, depositPct, guestCount),
-    [lineItems, taxRate, depositPct, guestCount]
+    () => calculateQuoteTotals(displayLineItems, taxRate, depositPct, liveGuestCount),
+    [displayLineItems, taxRate, depositPct, liveGuestCount]
   );
 
   const deliveryTotal = useMemo(() => {
@@ -529,7 +553,7 @@ function QuoteBuilderPage() {
           <CardHeader>
             <CardTitle className="text-lg">Quote summary</CardTitle>
             <p className="text-sm text-muted-foreground">
-              Guest count: <span className="font-medium text-foreground">{guestCount}</span>
+              Guest count: <span className="font-medium text-foreground">{liveGuestCount}</span>
             </p>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
@@ -541,10 +565,15 @@ function QuoteBuilderPage() {
               <ul className="space-y-1">
                 <li className="flex justify-between gap-2">
                   <span className="text-muted-foreground">
-                    {packageSummaryLabel(packageLineItem, guestCount)}
+                    {packageSummaryLabel(packageLineItem, liveGuestCount)}
                   </span>
                   <span className="shrink-0 font-medium">
-                    {formatUsd(lineItemTotal(packageLineItem, guestCount))}
+                    {formatUsd(
+                      lineItemTotal(
+                        displayLineItems.find((i) => i.id === packageLineItem.id) ?? packageLineItem,
+                        liveGuestCount
+                      )
+                    )}
                   </span>
                 </li>
               </ul>
@@ -562,10 +591,10 @@ function QuoteBuilderPage() {
                   {items.map((item) => (
                     <li key={item.id} className="flex justify-between gap-2">
                       <span className="text-muted-foreground">
-                        {item.name} {unitTypeSummary(item, guestCount)}
+                        {item.name} {unitTypeSummary(item, liveGuestCount)}
                       </span>
                       <span className="shrink-0 font-medium">
-                        {formatUsd(lineItemTotal(item, guestCount, item.category))}
+                        {formatUsd(lineItemTotal(item, liveGuestCount, item.category))}
                       </span>
                     </li>
                   ))}
@@ -624,9 +653,17 @@ function QuoteBuilderPage() {
                   <ul className="space-y-1 text-sm">
                     <li className="flex justify-between gap-2">
                       <span className="text-muted-foreground">
-                        {packageSummaryLabel(packageLineItem, guestCount)}
+                        {packageSummaryLabel(packageLineItem, liveGuestCount)}
                       </span>
-                      <span>{formatUsd(lineItemTotal(packageLineItem, guestCount))}</span>
+                      <span>
+                        {formatUsd(
+                          lineItemTotal(
+                            displayLineItems.find((i) => i.id === packageLineItem.id) ??
+                              packageLineItem,
+                            liveGuestCount
+                          )
+                        )}
+                      </span>
                     </li>
                   </ul>
                 </div>
@@ -642,7 +679,7 @@ function QuoteBuilderPage() {
                       {items.map((item) => (
                         <li key={item.id} className="flex justify-between gap-2">
                           <span className="text-muted-foreground">{item.name}</span>
-                          <span>{formatUsd(lineItemTotal(item, guestCount, item.category))}</span>
+                          <span>{formatUsd(lineItemTotal(item, liveGuestCount, item.category))}</span>
                         </li>
                       ))}
                     </ul>
@@ -754,14 +791,15 @@ function QuoteBuilderPage() {
         <div className="space-y-4 lg:col-span-3">
           <PackagesSection
             packages={packages}
-            guestCount={guestCount}
+            guestCount={cachedGuestCount}
             customerType={customerType}
             packageLineItem={packageLineItem}
             selectedPackageId={selectedPkgId}
             savingPackageId={savingPackageId}
             loading={packagesLoading}
             guestCountUpdating={isGuestCountMutating}
-            onGuestCountChange={updateGuestCount}
+            onGuestCountPreview={handleGuestCountPreview}
+            onGuestCountCommit={updateGuestCount}
             onAdd={addPackageToQuote}
             onRemove={removePackageFromQuote}
           />
@@ -780,7 +818,7 @@ function QuoteBuilderPage() {
                 borderClass={section.borderClass}
                 emptyMessage={section.emptyMessage}
                 items={itemsByCategory.get(section.category) ?? []}
-                guestCount={guestCount}
+                guestCount={liveGuestCount}
                 isOpen={openSections[section.category] ?? true}
                 onOpenChange={(open) =>
                   setOpenSections((prev) => ({ ...prev, [section.category]: open }))
