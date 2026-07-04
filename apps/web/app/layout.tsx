@@ -10,8 +10,11 @@ const playfair = Playfair_Display({
 });
 
 export const metadata: Metadata = {
-  title: "CaterPro — Catering consultation",
-  description: "Book a professional catering consultation for your next event."
+  title: {
+    default: "Tripeseats — Catering business software",
+    template: "%s | Tripeseats"
+  },
+  description: "Run your catering business on one platform — bookings, quotes, and events."
 };
 
 export default function RootLayout({
