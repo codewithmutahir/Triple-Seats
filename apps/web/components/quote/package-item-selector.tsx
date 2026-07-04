@@ -10,15 +10,16 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { formatUsd } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 
-const CATEGORY_LABELS: Record<string, string> = {
+const PACKAGE_CATEGORY_LABELS: Record<string, string> = {
   Appetizer: "appetizer",
   "Main Course": "main_course",
   BBQ: "bbq",
+  Grill: "bbq",
   Dessert: "dessert"
 };
 
 function isCategoryLabel(label: string): boolean {
-  return label in CATEGORY_LABELS;
+  return label in PACKAGE_CATEGORY_LABELS;
 }
 
 type PackageItemSelectorProps = {

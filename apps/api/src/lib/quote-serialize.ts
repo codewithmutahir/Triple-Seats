@@ -2,6 +2,7 @@ import type { Prisma } from "@tripeseats/database";
 
 import { calculateQuoteTotals } from "./quote-totals";
 import { eventTypeTitle } from "./event-customer-types";
+import { normalizePackageSelections } from "./package-selections";
 
 export const quoteInclude = {
   lineItems: {
@@ -83,6 +84,7 @@ export function serializeQuote(quote: QuoteWithRelations) {
     depositPct: quote.depositPct,
     dueDate: quote.dueDate?.toISOString() ?? null,
     totalAmount: quote.totalAmount,
+    packageSelections: normalizePackageSelections(quote.packageSelections),
     createdAt: quote.createdAt.toISOString(),
     updatedAt: quote.updatedAt.toISOString(),
     lineItems: quote.lineItems.map(serializeLineItem),

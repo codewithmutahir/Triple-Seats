@@ -18,9 +18,11 @@ export function useEventDetailMutations(eventId: string | null) {
   const qc = useQueryClient();
   const detailKey = queryKeys.events.detail(eventId ?? "");
 
-  const invalidateLists = () => {
-    void qc.invalidateQueries({ queryKey: queryKeys.events.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
+  const invalidateListsLater = () => {
+    window.setTimeout(() => {
+      void qc.invalidateQueries({ queryKey: queryKeys.events.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
+    }, 0);
   };
 
   const patchCache = (updater: (old: EventDetailPayload) => EventDetailPayload) => {
@@ -33,7 +35,21 @@ export function useEventDetailMutations(eventId: string | null) {
     onMutate: async (status) => {
       await qc.cancelQueries({ queryKey: detailKey });
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
-      patchCache((old) => ({ ...old, status }));
+      patchCache((old) => ({
+        ...old,
+        status,
+        activity:
+          old.status === status
+            ? old.activity
+            : [
+                ...old.activity,
+                {
+                  at: new Date().toISOString(),
+                  type: "status",
+                  label: `Status changed to ${status}`
+                }
+              ]
+      }));
       return { prev };
     },
     onError: (_err, _status, ctx) => {
@@ -42,7 +58,7 @@ export function useEventDetailMutations(eventId: string | null) {
     },
     onSuccess: (event) => {
       qc.setQueryData(detailKey, event);
-      invalidateLists();
+      invalidateListsLater();
     }
   });
 
@@ -91,11 +107,25 @@ export function useEventDetailMutations(eventId: string | null) {
 
   const updateMutation = useMutation({
     mutationFn: (data: Record<string, unknown>) => api.events.update(eventId!, data),
+    onMutate: async (data) => {
+      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
+      patchCache((old) => ({
+        ...old,
+        ...(typeof data.eventType === "string" ? { eventType: data.eventType as EventDetailPayload["eventType"] } : {}),
+        ...(typeof data.customerType === "string"
+          ? { customerType: data.customerType as EventDetailPayload["customerType"] }
+          : {})
+      }));
+      return { prev };
+    },
     onSuccess: (event) => {
       qc.setQueryData(detailKey, event);
-      invalidateLists();
+      invalidateListsLater();
     },
-    onError: () => toast.error("Failed to update event")
+    onError: (_err, _data, ctx) => {
+      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+      toast.error("Failed to update event");
+    }
   });
 
   return {

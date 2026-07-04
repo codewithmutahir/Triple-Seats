@@ -20,6 +20,10 @@ import {
 } from "./quote-totals";
 import type { QuoteWithRelations } from "./quote-serialize";
 import { formatEventType } from "./event-customer-types";
+import {
+  formatPackageIncludesWithSelections,
+  normalizePackageSelections
+} from "./package-selections";
 
 function formatEventTime(iso: Date | string | null | undefined): string {
   if (!iso) return "";
@@ -249,11 +253,10 @@ function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: n
 }
 
 function formatIncludedItems(
-  items: NonNullable<QuoteWithRelations["lineItems"][number]["package"]>["items"]
+  items: NonNullable<QuoteWithRelations["lineItems"][number]["package"]>["items"],
+  packageSelections: ReturnType<typeof normalizePackageSelections>
 ): string {
-  return items
-    .map((item) => (item.quantity > 1 ? `${item.label} ×${item.quantity}` : item.label))
-    .join(", ");
+  return formatPackageIncludesWithSelections(items, packageSelections);
 }
 
 function packageTierLabel(item: QuoteWithRelations["lineItems"][number]): string {
@@ -326,6 +329,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
   const customerType = quote.event?.customerType ?? "b2c";
   const lineItemRows = buildLineItemRows(itemsByCategory, guestCount);
   const hasLineItems = lineItemRows.length > 0;
+  const packageSelections = normalizePackageSelections(quote.packageSelections);
 
   const packageSections = packages.flatMap((item) => {
     const tiers = item.package?.tiers ?? [];
@@ -336,7 +340,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         : getActiveTier(tiers, guestCount, customerType);
 
     const includes = item.package?.items?.length
-      ? formatIncludedItems(item.package.items)
+      ? formatIncludedItems(item.package.items, packageSelections)
       : "—";
 
     return [
@@ -547,6 +551,7 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
   const itemsByCategory = groupItemsByCategory(quote);
   const packages = packageLineItems(quote);
   const customerType = quote.event?.customerType ?? "b2c";
+  const packageSelections = normalizePackageSelections(quote.packageSelections);
 
   const packageHtml =
     packages.length > 0
@@ -560,7 +565,7 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
                   getActiveTier(tiers, guestCount, customerType)
                 : getActiveTier(tiers, guestCount, customerType);
             const includes = item.package?.items?.length
-              ? escapeHtml(formatIncludedItems(item.package.items))
+              ? escapeHtml(formatIncludedItems(item.package.items, packageSelections))
               : "—";
             const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
             return `<tr>

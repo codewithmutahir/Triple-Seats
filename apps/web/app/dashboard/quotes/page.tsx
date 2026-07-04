@@ -48,6 +48,12 @@ import {
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { formatEventDateWithTime } from "@/lib/event-datetime";
 import { isPackageIncludedSection, packageItemsForSection } from "@/lib/package-sections";
+import {
+  packageSelectionsEqual,
+  storedSelectionsToUi,
+  uiSelectionsToStored,
+  type UiPackageSelections
+} from "@/lib/package-selections";
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { useDebouncedCallback } from "@/lib/use-debounce";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -116,7 +122,6 @@ function QuoteBuilderPage() {
     removePackageMutation,
     updateGuestCountMutation,
     duplicateMutation,
-    isMutating,
     isSaving,
     isSaveSuccess,
     isSaveError
@@ -147,12 +152,14 @@ function QuoteBuilderPage() {
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, true]))
   );
 
-  const [packageItemSelections, setPackageItemSelections] = useState<
-    Record<string, Record<string, string[]>>
-  >(() => Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
+  const [packageItemSelections, setPackageItemSelections] = useState<UiPackageSelections>(() =>
+    Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}]))
+  );
 
   const settingsInitialized = useRef(false);
   const skipSettingsSaveRef = useRef(true);
+  const packageSelectionsInitialized = useRef(false);
+  const skipPackageSelectionsSaveRef = useRef(true);
 
   const guestCount = quote?.event?.guestCountEstimate ?? 0;
 
@@ -201,7 +208,30 @@ function QuoteBuilderPage() {
     setDepositPctInput(String(Math.round(quote.depositPct * 100)));
     setNotes(quote.notes ?? "");
     setDueDate(quote.dueDate ? new Date(quote.dueDate) : undefined);
+
+    skipPackageSelectionsSaveRef.current = true;
+    packageSelectionsInitialized.current = true;
+    setPackageItemSelections(storedSelectionsToUi(quote.packageSelections));
   }, [quote?.id]);
+
+  const savePackageSelections = useDebouncedCallback(
+    useCallback(() => {
+      if (!packageSelectionsInitialized.current || !quote) return;
+      if (skipPackageSelectionsSaveRef.current) {
+        skipPackageSelectionsSaveRef.current = false;
+        return;
+      }
+
+      const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
+      if (packageSelectionsEqual(stored, quote.packageSelections)) return;
+
+      updateQuoteMutation.mutate({
+        quoteId: quote.id,
+        data: { packageSelections: stored }
+      });
+    }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]),
+    400
+  );
 
   const saveSettings = useDebouncedCallback(() => {
     if (!settingsInitialized.current || !quote) return;
@@ -254,6 +284,11 @@ function QuoteBuilderPage() {
     saveSettings();
   }, [taxPct, depositPctInput, notes, dueDate, saveSettings]);
 
+  useEffect(() => {
+    if (!quote || !packageSelectionsInitialized.current) return;
+    savePackageSelections();
+  }, [packageItemSelections, savePackageSelections, quote]);
+
   const addLineItemOptimistic = useCallback(
     (category: ItemCategory, payload: AddItemPayload) => {
       if (!quote) return;
@@ -302,9 +337,29 @@ function QuoteBuilderPage() {
   const updateLineItemOptimistic = useCallback(
     (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => {
       if (!quote || itemId.startsWith("temp_")) return;
-      updateItemMutation.mutate({ quoteId: quote.id, itemId, data: patch });
+      const current = lineItems.find((item) => item.id === itemId);
+      if (!current) return;
+
+      const nextUnit =
+        patch.unitType && current.category === "equipment" && patch.unitType === "per_head"
+          ? "per_piece"
+          : patch.unitType;
+
+      if (
+        (patch.quantity === undefined || patch.quantity === current.quantity) &&
+        (patch.unitPrice === undefined || patch.unitPrice === current.unitPrice) &&
+        (nextUnit === undefined || nextUnit === current.unitType)
+      ) {
+        return;
+      }
+
+      updateItemMutation.mutate({
+        quoteId: quote.id,
+        itemId,
+        data: nextUnit !== undefined ? { ...patch, unitType: nextUnit } : patch
+      });
     },
-    [quote, updateItemMutation]
+    [quote, lineItems, updateItemMutation]
   );
 
   const addDeliveryLine = useCallback(() => {
@@ -321,18 +376,27 @@ function QuoteBuilderPage() {
     setDeliveryRate("");
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic]);
 
+  const clearPackageSelections = useCallback(() => {
+    skipPackageSelectionsSaveRef.current = false;
+    setPackageItemSelections(Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
+  }, []);
+
   const addPackageToQuote = useCallback(
     (packageId: string) => {
       if (!quote) return;
-      addPackageMutation.mutate({ quoteId: quote.id, packageId });
+      const pkg = packages.find((p) => p.id === packageId);
+      if (!pkg) return;
+      clearPackageSelections();
+      addPackageMutation.mutate({ quoteId: quote.id, packageId, pkg });
     },
-    [quote, addPackageMutation]
+    [quote, packages, addPackageMutation, clearPackageSelections]
   );
 
   const removePackageFromQuote = useCallback(() => {
     if (!quote) return;
+    clearPackageSelections();
     removePackageMutation.mutate(quote.id);
-  }, [quote, removePackageMutation]);
+  }, [quote, removePackageMutation, clearPackageSelections]);
 
   const updateGuestCount = useCallback(
     (nextGuestCount: number) => {
@@ -365,8 +429,6 @@ function QuoteBuilderPage() {
     duplicateMutation.mutate(quote.id);
   }, [quote, duplicateMutation]);
 
-  const packageActionLoading = addPackageMutation.isPending || removePackageMutation.isPending;
-  const guestCountSaving = updateGuestCountMutation.isPending;
   const duplicateLoading = duplicateMutation.isPending;
 
   useEffect(() => {
@@ -587,8 +649,8 @@ function QuoteBuilderPage() {
   return (
     <div className="relative p-4 pb-28 md:p-6 lg:pb-24">
       <SaveIndicator
-        isPending={isMutating || isSaving}
-        isSuccess={isSaveSuccess && !isMutating && !isSaving}
+        isPending={isSaving}
+        isSuccess={isSaveSuccess && !isSaving}
         isError={isSaveError}
       />
 
@@ -636,8 +698,7 @@ function QuoteBuilderPage() {
             customerType={customerType}
             packageLineItem={packageLineItem}
             loading={packagesLoading}
-            guestCountSaving={guestCountSaving}
-            actionLoading={packageActionLoading}
+            guestCountUpdating={updateGuestCountMutation.isPending}
             onGuestCountChange={updateGuestCount}
             onAdd={addPackageToQuote}
             onRemove={removePackageFromQuote}

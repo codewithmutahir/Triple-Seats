@@ -30,14 +30,18 @@ export function getActiveTier(
   guestCount: number,
   customerType: "b2b" | "b2c" = "b2c"
 ): PackagePriceTierLike | null {
-  return (
-    tiers.find(
-      (tier) =>
-        tier.customerType === customerType &&
-        guestCount >= tier.minGuests &&
-        (tier.maxGuests === null || guestCount <= tier.maxGuests)
-    ) ?? null
+  if (tiers.length === 0 || guestCount <= 0) return null;
+
+  const matchesGuest = (tier: PackagePriceTierLike) =>
+    guestCount >= tier.minGuests &&
+    (tier.maxGuests === null || guestCount <= tier.maxGuests);
+
+  const forCustomer = tiers.filter(
+    (tier) => tier.customerType === customerType || tier.customerType == null
   );
+  const pool = forCustomer.length > 0 ? forCustomer : tiers;
+
+  return pool.find(matchesGuest) ?? null;
 }
 
 export function formatTierLabel(tier: PackagePriceTierLike): string {
