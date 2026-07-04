@@ -9,6 +9,7 @@ export type QuoteLineItemLike = {
   unitPrice: number;
   quantity: number;
   unitType: string;
+  category?: string;
   appliedTier?: number | null;
 };
 
@@ -99,7 +100,8 @@ export function lineItemTotal(
   category?: string
 ): number {
   let unitType = item.unitType;
-  if (category === "equipment" && unitType === "per_head") {
+  const resolvedCategory = category ?? item.category;
+  if (resolvedCategory === "equipment" && unitType === "per_head") {
     unitType = "per_piece";
   }
   if (unitType === "per_head") {

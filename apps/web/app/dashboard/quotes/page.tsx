@@ -396,9 +396,11 @@ function QuoteBuilderPage() {
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic]);
 
   const clearPackageSelections = useCallback(() => {
-    skipPackageSelectionsSaveRef.current = false;
+    // Cancel any pending debounced save and skip the next auto-save after clearing.
+    savePackageSelections.cancel();
+    skipPackageSelectionsSaveRef.current = true;
     setPackageItemSelections(Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
-  }, []);
+  }, [savePackageSelections]);
 
   const addPackageToQuote = useCallback(
     (packageId: string) => {
@@ -411,8 +413,10 @@ function QuoteBuilderPage() {
       addPackageMutation.mutate(
         { quoteId: quote.id, packageId },
         {
-          onError: () => {
+          onError: (err) => {
             setSelectedPkgId(latestPackageIdRef.current);
+            const msg = err instanceof Error ? err.message : "Failed to add package. Check the guest count.";
+            toast.error(msg);
           }
         }
       );

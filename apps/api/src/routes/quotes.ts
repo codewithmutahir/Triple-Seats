@@ -115,7 +115,9 @@ async function addPackageToQuote(quoteId: string, catererId: string, packageId: 
 
   const existingPackageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
   if (existingPackageLine) {
-    await prisma.quoteLineItem.delete({ where: { id: existingPackageLine.id } });
+    await prisma.quoteLineItem.deleteMany({
+      where: { quoteId, unitType: "tiered_per_head" }
+    });
   }
 
   await prisma.quoteLineItem.create({
@@ -140,10 +142,9 @@ async function removePackageFromQuote(quoteId: string, catererId: string) {
   const quote = await loadQuoteForCaterer(quoteId, catererId);
   if (!quote) return null;
 
-  const packageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
-  if (packageLine) {
-    await prisma.quoteLineItem.delete({ where: { id: packageLine.id } });
-  }
+  await prisma.quoteLineItem.deleteMany({
+    where: { quoteId, unitType: "tiered_per_head" }
+  });
 
   return persistQuoteTotals(quoteId);
 }
@@ -259,7 +260,8 @@ function serializeBuilderPackage(
   },
   customerType: CustomerTypeValue
 ) {
-  const tiers = pkg.tiers.filter((t) => t.customerType === customerType);
+  // Include tiers for this customerType AND tiers with no customerType set (universal tiers)
+  const tiers = pkg.tiers.filter((t) => t.customerType === customerType || t.customerType == null);
   return {
     id: pkg.id,
     catererId: pkg.catererId,
