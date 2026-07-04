@@ -50,6 +50,31 @@ function mergeQuoteLineItem(
   };
 }
 
+/** Keep in-flight optimistic line items when a server snapshot omits them. */
+function preservePendingLineItems(
+  currentItems: QuoteLineItem[],
+  serverQuote: BuilderData["quote"]
+): QuoteLineItem[] {
+  const pending = currentItems.filter((item) => item.id.startsWith("temp_"));
+  if (pending.length === 0) return serverQuote.lineItems;
+
+  const serverIds = new Set(serverQuote.lineItems.map((item) => item.id));
+  const unmatched = pending.filter((item) => !serverIds.has(item.id));
+  return unmatched.length > 0
+    ? [...serverQuote.lineItems, ...unmatched]
+    : serverQuote.lineItems;
+}
+
+function mergeServerQuotePreservingLineItems(
+  old: BuilderData,
+  serverQuote: BuilderData["quote"]
+): BuilderData["quote"] {
+  return {
+    ...serverQuote,
+    lineItems: preservePendingLineItems(old.quote.lineItems, serverQuote)
+  };
+}
+
 function createWriteQueue() {
   let tail: Promise<void> = Promise.resolve();
   return <T,>(work: () => Promise<T>): Promise<T> => {
@@ -146,7 +171,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const qc = useQueryClient();
   const builderKey = queryKeys.quotes.builder(eventId ?? "");
   const latestGuestCountRef = useRef<number | null>(null);
-  const mutationSeqRef = useRef(0);
+  const lineItemSeqRef = useRef(0);
+  const quoteWriteSeqRef = useRef(0);
   const quoteWriteQueueRef = useRef(createWriteQueue());
   const guestCountWriterRef = useRef(
     createCoalescedGuestCountWriter(
@@ -154,8 +180,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       (quoteId, guestCount) => api.quotes.updateGuestCount(quoteId, guestCount)
     )
   );
-  const bumpOp = () => ++mutationSeqRef.current;
-  const isLatestOp = (opId: number) => opId === mutationSeqRef.current;
+  const bumpLineItemOp = () => ++lineItemSeqRef.current;
+  const isLatestLineItemOp = (opId: number) => opId === lineItemSeqRef.current;
+  const bumpQuoteWriteOp = () => ++quoteWriteSeqRef.current;
+  const isLatestQuoteWriteOp = (opId: number) => opId === quoteWriteSeqRef.current;
 
   const patchBuilder = (updater: (old: BuilderData) => BuilderData) => {
     qc.setQueryData<BuilderData>(builderKey, (old) => (old ? updater(old) : old));
@@ -171,7 +199,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       tempItem: QuoteLineItem;
     }) => api.quotes.addItem(quoteId, item),
     onMutate: async ({ tempItem }) => {
-      const opId = bumpOp();
+      const opId = bumpLineItemOp();
       await qc.cancelQueries({ queryKey: builderKey });
       const prev = qc.getQueryData<BuilderData>(builderKey);
       patchBuilder((old) => ({
@@ -184,7 +212,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, tempItem, opId };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx?.tempItem || !isLatestOp(ctx.opId)) return;
+      if (!ctx?.tempItem || !isLatestLineItemOp(ctx.opId)) return;
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -206,7 +234,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
     },
     onError: (_err, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
       toast.error("Failed to add item");
     }
@@ -216,7 +244,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, itemId }: { quoteId: string; itemId: string }) =>
       api.quotes.removeItem(quoteId, itemId),
     onMutate: async ({ itemId }) => {
-      const opId = bumpOp();
+      const opId = bumpLineItemOp();
       await qc.cancelQueries({ queryKey: builderKey });
       const prev = qc.getQueryData<BuilderData>(builderKey);
       patchBuilder((old) => ({
@@ -229,14 +257,18 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, opId };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       patchBuilder((old) => ({
         ...old,
-        quote: { ...old.quote, totalAmount: result.quote.totalAmount, lineItems: result.quote.lineItems }
+        quote: {
+          ...old.quote,
+          totalAmount: result.quote.totalAmount,
+          lineItems: preservePendingLineItems(old.quote.lineItems, result.quote)
+        }
       }));
     },
     onError: (_err, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
       toast.error("Failed to remove item");
     }
@@ -258,7 +290,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return api.quotes.updateItem(quoteId, itemId, normalizeItemPatch(current, data));
     },
     onMutate: async ({ itemId, data }) => {
-      const opId = bumpOp();
+      const opId = bumpLineItemOp();
       await qc.cancelQueries({ queryKey: builderKey });
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const current = prev?.quote.lineItems.find((item) => item.id === itemId);
@@ -275,11 +307,11 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, opId };
     },
     onSuccess: (result, vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       patchBuilder((old) => mergeQuoteLineItem(old, vars.quoteId, vars.itemId, result.quote));
     },
     onError: (err, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
       const message = err instanceof Error ? err.message : "Failed to update item";
       toast.error(message);
@@ -316,9 +348,12 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         ...old,
         quote: {
           ...old.quote,
-          ...result.quote,
-          lineItems: result.quote.lineItems ?? old.quote.lineItems,
-          event: result.quote.event ?? old.quote.event
+          taxRate: result.quote.taxRate,
+          depositPct: result.quote.depositPct,
+          notes: result.quote.notes,
+          dueDate: result.quote.dueDate,
+          status: result.quote.status,
+          packageSelections: result.quote.packageSelections ?? old.quote.packageSelections
         }
       }));
     },
@@ -337,7 +372,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       pkg: CateringPackage;
     }) => quoteWriteQueueRef.current(() => api.quotes.addPackage(quoteId, packageId)),
     onMutate: async ({ pkg }) => {
-      const opId = bumpOp();
+      const opId = bumpQuoteWriteOp();
       await qc.cancelQueries({ queryKey: builderKey });
       const prev = qc.getQueryData<BuilderData>(builderKey);
       if (!prev?.quote) return { prev, opId };
@@ -366,11 +401,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, tempLine, opId };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
-      patchBuilder((old) => ({ ...old, quote: result.quote }));
+      if (!ctx || !isLatestQuoteWriteOp(ctx.opId)) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: mergeServerQuotePreservingLineItems(old, result.quote)
+      }));
     },
     onError: (_err, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestQuoteWriteOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
       toast.error("Failed to add package");
     }
@@ -380,7 +418,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: (quoteId: string) =>
       quoteWriteQueueRef.current(() => api.quotes.removePackage(quoteId)),
     onMutate: async () => {
-      const opId = bumpOp();
+      const opId = bumpQuoteWriteOp();
       await qc.cancelQueries({ queryKey: builderKey });
       const prev = qc.getQueryData<BuilderData>(builderKey);
       patchBuilder((old) => ({
@@ -393,11 +431,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, opId };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
-      patchBuilder((old) => ({ ...old, quote: { ...old.quote, ...result.quote } }));
+      if (!ctx || !isLatestQuoteWriteOp(ctx.opId)) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: mergeServerQuotePreservingLineItems(old, { ...old.quote, ...result.quote })
+      }));
     },
     onError: (_err, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestQuoteWriteOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
       toast.error("Failed to remove package");
     }
@@ -407,7 +448,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, guestCount }: { quoteId: string; guestCount: number }) =>
       guestCountWriterRef.current(quoteId, guestCount),
     onMutate: async ({ guestCount }) => {
-      const opId = bumpOp();
+      const opId = bumpQuoteWriteOp();
       latestGuestCountRef.current = guestCount;
       await qc.cancelQueries({ queryKey: builderKey });
       const prev = qc.getQueryData<BuilderData>(builderKey);
@@ -451,12 +492,15 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, opId };
     },
     onSuccess: (result, { guestCount }, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestQuoteWriteOp(ctx.opId)) return;
       if (guestCount !== latestGuestCountRef.current) return;
-      patchBuilder((old) => ({ ...old, quote: result.quote }));
+      patchBuilder((old) => ({
+        ...old,
+        quote: mergeServerQuotePreservingLineItems(old, result.quote)
+      }));
     },
     onError: (_err, _vars, ctx) => {
-      if (!ctx || !isLatestOp(ctx.opId)) return;
+      if (!ctx || !isLatestQuoteWriteOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
       toast.error("Failed to update guest count");
     }
