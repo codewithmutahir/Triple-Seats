@@ -416,6 +416,9 @@ function EventDetailInner() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [taskSaving, setTaskSaving] = useState(false);
   const [showQuickTaskForm, setShowQuickTaskForm] = useState(false);
+  const taskMutationSeqRef = useRef(0);
+  const bumpTaskOp = () => ++taskMutationSeqRef.current;
+  const isLatestTaskOp = (opId: number) => opId === taskMutationSeqRef.current;
 
   useEffect(() => {
     if (!event) return;
@@ -503,10 +506,26 @@ function EventDetailInner() {
   }
 
   async function toggleTask(task: TaskPayload, completed: boolean) {
+    const opId = bumpTaskOp();
+    const nextStatus = completed ? "done" : "todo";
+    const prev = qc.getQueryData<EventDetailPayload>(detailKey);
+
+    qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+      old
+        ? {
+            ...old,
+            tasks: old.tasks.map((t) =>
+              t.id === task.id ? { ...t, status: nextStatus } : t
+            )
+          }
+        : old
+    );
+
     try {
       const { task: updated } = await api.tasks.update(task.id, {
         status: completed ? "completed" : "pending"
       });
+      if (!isLatestTaskOp(opId)) return;
       qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
         old
           ? {
@@ -519,18 +538,27 @@ function EventDetailInner() {
       );
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     } catch {
+      if (!isLatestTaskOp(opId)) return;
+      if (prev) qc.setQueryData(detailKey, prev);
       toast.error("Failed to update task");
     }
   }
 
   async function deleteTask(id: string) {
+    const opId = bumpTaskOp();
+    const prev = qc.getQueryData<EventDetailPayload>(detailKey);
+
+    qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+      old ? { ...old, tasks: old.tasks.filter((t) => t.id !== id) } : old
+    );
+
     try {
       await api.tasks.delete(id);
-      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
-        old ? { ...old, tasks: old.tasks.filter((t) => t.id !== id) } : old
-      );
+      if (!isLatestTaskOp(opId)) return;
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     } catch {
+      if (!isLatestTaskOp(opId)) return;
+      if (prev) qc.setQueryData(detailKey, prev);
       toast.error("Failed to delete task");
     }
   }

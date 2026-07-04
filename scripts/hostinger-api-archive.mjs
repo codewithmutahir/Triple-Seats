@@ -92,26 +92,20 @@ function runCommand(cmd, args, label) {
 function runPrebuild() {
   console.log("Pre-building API dist locally...");
 
-  const generate = spawnSync(
-    "npx",
-    ["prisma@5.22.0", "generate", "--schema", "packages/database/prisma/schema.prisma"],
-    {
-      cwd: root,
-      stdio: "inherit",
-      shell: process.platform === "win32"
-    }
-  );
+  const generate = spawnSync("pnpm", ["db:generate"], {
+    cwd: root,
+    stdio: "inherit",
+    shell: process.platform === "win32"
+  });
 
   if (generate.status !== 0) {
     if (prismaClientExists()) {
       console.warn(
         "prisma generate failed (Windows file lock). Using existing Prisma client.\n" +
-          "Stop `pnpm dev` / API servers and re-run for a clean generate."
+          "Stop `pnpm dev` / API servers (ports 3000 & 4000) and re-run for a clean generate."
       );
     } else {
-      console.error(
-        "Pre-build failed: npx prisma@5.22.0 generate --schema packages/database/prisma/schema.prisma"
-      );
+      console.error("Pre-build failed: pnpm db:generate");
       process.exit(generate.status ?? 1);
     }
   }
