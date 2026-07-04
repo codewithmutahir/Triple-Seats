@@ -360,7 +360,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         ctx?.snapshot?.quote.lineItems.find((i) => i.unitType === "tiered_per_head")?.packageId ??
         null;
       packageRemovedRef.current = false;
-      toast.error("Failed to add package — reverted");
+      // Note: the page-level onError callback shows the specific error message from the API.
     }
   });
 
