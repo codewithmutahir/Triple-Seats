@@ -316,8 +316,47 @@ export const api = {
         { method: "PATCH", body: JSON.stringify({ pricePerHead }) }
       ).then((r) => r.tier),
     menuItemsAll: async (): Promise<SettingsMenuItemsByCategory> => {
-      const grouped = await apiFetch<Partial<SettingsMenuItemsByCategory>>("/api/menu-items/all");
-      return { ...EMPTY_MENU_ITEMS_BY_CATEGORY, ...grouped };
+      const res = await fetch("/api/menu-items/all", {
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store"
+      });
+
+      if (res.ok) {
+        const text = await res.text();
+        const grouped = text.trim()
+          ? (JSON.parse(text) as Partial<SettingsMenuItemsByCategory>)
+          : {};
+        return { ...EMPTY_MENU_ITEMS_BY_CATEGORY, ...grouped };
+      }
+
+      // Older API deployments may not expose GET /all yet; per-category routes still work.
+      if (res.status === 404) {
+        const { MENU_SECTIONS } = await import("@/components/quote/types");
+        const grouped: SettingsMenuItemsByCategory = { ...EMPTY_MENU_ITEMS_BY_CATEGORY };
+        const results = await Promise.all(
+          MENU_SECTIONS.map(async (section) => {
+            const data = await apiFetch<{ items: SettingsMenuItemsByCategory[keyof SettingsMenuItemsByCategory] }>(
+              `/api/menu-items?category=${encodeURIComponent(section.category)}`
+            );
+            return { category: section.category, items: data.items ?? [] };
+          })
+        );
+        for (const { category, items } of results) {
+          grouped[category] = items;
+        }
+        for (const category of ["delivery", "other"] as const) {
+          if (grouped[category].length > 0) continue;
+          const data = await apiFetch<{ items: SettingsMenuItemsByCategory[typeof category] }>(
+            `/api/menu-items?category=${encodeURIComponent(category)}`
+          );
+          grouped[category] = data.items ?? [];
+        }
+        return grouped;
+      }
+
+      const error = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+      throw new Error(error.error ?? error.message ?? parseApiError(error, res.status, res.statusText));
     },
     createMenuItem: (body: Record<string, unknown>) =>
       apiFetch<{ item: SettingsMenuItemsByCategory[keyof SettingsMenuItemsByCategory][number] }>(

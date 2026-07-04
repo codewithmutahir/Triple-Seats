@@ -190,23 +190,29 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, tempItem, opId };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx?.tempItem || !isLatestLineItemOp(ctx.opId)) return;
+      if (!ctx?.tempItem) return;
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
-          lineItems: old.quote.lineItems.map((item) =>
-            item.id === ctx.tempItem.id
-              ? resolveCreatedLineItem(result.quote.lineItems, old.quote.lineItems, {
-                  category: item.category,
-                  name: item.name,
-                  quantity: item.quantity,
-                  unitPrice: item.unitPrice,
-                  unitType: item.unitType,
-                  menuItemId: item.menuItemId ?? undefined
-                }) ?? item
-              : item
-          )
+          lineItems: old.quote.lineItems.map((item) => {
+            if (item.id !== ctx.tempItem.id) return item;
+            const resolved = resolveCreatedLineItem(result.quote.lineItems, old.quote.lineItems, {
+              category: item.category,
+              name: item.name,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              unitType: item.unitType,
+              menuItemId: item.menuItemId ?? undefined
+            });
+            if (!resolved) return item;
+            return {
+              ...resolved,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              unitType: item.unitType
+            };
+          })
         }
       }));
     },
@@ -441,6 +447,56 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onError: () => toast.error("Failed to duplicate quote")
   });
 
+  const updateLineItemOptimistic = (
+    itemId: string,
+    patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>
+  ) => {
+    const current = qc.getQueryData<BuilderData>(builderKey)?.quote.lineItems.find(
+      (item) => item.id === itemId
+    );
+    if (!current) return;
+
+    const nextPatch = { ...patch };
+    if (nextPatch.unitType && current.category === "equipment" && nextPatch.unitType === "per_head") {
+      nextPatch.unitType = "per_piece";
+    }
+
+    patchBuilder((old) => ({
+      ...old,
+      quote: {
+        ...old.quote,
+        lineItems: old.quote.lineItems.map((item) =>
+          item.id === itemId ? { ...item, ...nextPatch } : item
+        )
+      }
+    }));
+
+    if (itemId.startsWith("temp_")) return;
+
+    updateItemMutation.mutate({
+      quoteId: current.quoteId,
+      itemId,
+      data: nextPatch
+    });
+  };
+
+  const removeLineItemOptimistic = (itemId: string) => {
+    const quoteId = qc.getQueryData<BuilderData>(builderKey)?.quote.id;
+    if (!quoteId) return;
+
+    patchBuilder((old) => ({
+      ...old,
+      quote: {
+        ...old.quote,
+        lineItems: old.quote.lineItems.filter((item) => item.id !== itemId)
+      }
+    }));
+
+    if (itemId.startsWith("temp_")) return;
+
+    removeItemMutation.mutate({ quoteId, itemId });
+  };
+
   const isItemMutating =
     addItemMutation.isPending || removeItemMutation.isPending || updateItemMutation.isPending;
   const isPackageMutating = addPackageMutation.isPending || removePackageMutation.isPending;
@@ -457,6 +513,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     duplicateMutation,
     selectPackageOptimistic,
     removePackageOptimistic,
+    updateLineItemOptimistic,
+    removeLineItemOptimistic,
     latestPackageIdRef,
     isItemMutating,
     isPackageMutating,
