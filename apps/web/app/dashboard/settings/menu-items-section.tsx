@@ -1,6 +1,5 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Edit2, Loader2, Plus, Trash2, X } from "lucide-react";
 
@@ -12,7 +11,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
 import {
   Dialog,
@@ -20,7 +19,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -30,18 +29,21 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialogTitle
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { useSettingsMenuItemsQuery } from "@/hooks/use-reports-query";
+import {
+  useCreateMenuItemMutation,
+  useDeleteMenuItemMutation,
+  useSettingsMenuItemsQuery,
+  useUpdateMenuItemMutation
+} from "@/hooks/use-settings-queries";
 import {
   EMPTY_MENU_ITEMS_BY_CATEGORY,
   type SettingsItemCategory,
-  type SettingsMenuItem,
-  type SettingsMenuItemsByCategory
+  type SettingsMenuItem
 } from "@/lib/settings-types";
-import { queryKeys } from "@/lib/query-keys";
 
 type ItemCategory = SettingsItemCategory;
 type MenuItem = SettingsMenuItem;
@@ -292,61 +294,43 @@ function CategorySection({
   category,
   label,
   items = [],
-  onRefresh,
+  onCreate,
+  onUpdate,
+  onDelete
 }: {
   category: ItemCategory;
   label: string;
   items?: MenuItem[];
-  onRefresh: () => void;
+  onCreate: ReturnType<typeof useCreateMenuItemMutation>["mutateAsync"];
+  onUpdate: ReturnType<typeof useUpdateMenuItemMutation>["mutateAsync"];
+  onDelete: ReturnType<typeof useDeleteMenuItemMutation>["mutate"];
 }) {
   const [expanded, setExpanded] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   async function handleSave(data: ItemFormData, id: string | null) {
     const body = {
       name: data.name.trim(),
       defaultPrice: data.defaultPrice ? parseFloat(data.defaultPrice) : null,
       defaultUnit: data.defaultUnit,
-      category: data.category,
+      category: data.category
     };
 
-    const res = await fetch(id ? `/api/menu-items/${id}` : "/api/menu-items", {
-      method: id ? "PUT" : "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const errorBody = await res.json().catch(() => ({}));
-      throw new Error(errorBody.error || "Failed to save item");
+    if (id) {
+      await onUpdate({ id, body });
+    } else {
+      await onCreate(body);
     }
-
-    onRefresh();
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     if (!deleteId) return;
-    setDeleting(true);
-    try {
-      const res = await fetch(`/api/menu-items/${deleteId}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const errorBody = await res.json().catch(() => ({}));
-        throw new Error(errorBody.error || "Failed to delete");
-      }
-      onRefresh();
-    } catch {
-      // Ignore error, will refresh anyway
-    } finally {
-      setDeleting(false);
-      setDeleteId(null);
-    }
+    onDelete(
+      { id: deleteId, category },
+      { onSettled: () => setDeleteId(null) }
+    );
   }
 
   return (
@@ -430,10 +414,8 @@ function CategorySection({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
-              disabled={deleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -444,20 +426,18 @@ function CategorySection({
 }
 
 export function MenuItemsSection() {
-  const qc = useQueryClient();
   const {
     data: itemsByCategory = EMPTY_MENU_ITEMS_BY_CATEGORY,
     isLoading: loading,
     isFetching: refreshing,
     error: queryError
   } = useSettingsMenuItemsQuery();
+  const createMenuItemMutation = useCreateMenuItemMutation();
+  const updateMenuItemMutation = useUpdateMenuItemMutation();
+  const deleteMenuItemMutation = useDeleteMenuItemMutation();
 
   const totalItems = Object.values(itemsByCategory).flat().length;
   const error = queryError?.message ?? null;
-
-  const refreshItems = () => {
-    void qc.invalidateQueries({ queryKey: queryKeys.settings.menuItems() });
-  };
 
   if (loading && totalItems === 0) {
     return (
@@ -485,7 +465,9 @@ export function MenuItemsSection() {
             category={cat.value}
             label={cat.label}
             items={itemsByCategory[cat.value] ?? []}
-            onRefresh={refreshItems}
+            onCreate={createMenuItemMutation.mutateAsync}
+            onUpdate={updateMenuItemMutation.mutateAsync}
+            onDelete={deleteMenuItemMutation.mutate}
           />
         ))}
       </div>

@@ -68,6 +68,7 @@ export const queryKeys = {
 
   menuItems: {
     all: ["menuItems"] as const,
+    allGrouped: () => [...queryKeys.menuItems.all, "grouped"] as const,
     byCategory: (category: string) => [...queryKeys.menuItems.all, "category", category] as const
   },
 

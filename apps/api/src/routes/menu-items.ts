@@ -43,6 +43,46 @@ function serializeMenuItem(item: {
   };
 }
 
+router.get("/all", async (req: Request, res: Response) => {
+  try {
+    const perf = timer("menu-items:all");
+
+    const { caterer } = await getSession(req);
+    perf.step("session");
+
+    const items = await prisma.menuItem.findMany({
+      where: { catererId: caterer.id },
+      orderBy: [{ usageCount: "desc" }, { name: "asc" }],
+      select: {
+        id: true,
+        catererId: true,
+        category: true,
+        name: true,
+        defaultPrice: true,
+        defaultUnit: true,
+        usageCount: true,
+        isDefault: true
+      }
+    });
+    perf.step("db:items");
+
+    const grouped = items.reduce(
+      (acc, item) => {
+        const key = item.category;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(serializeMenuItem(item));
+        return acc;
+      },
+      {} as Record<string, ReturnType<typeof serializeMenuItem>[]>
+    );
+
+    perf.end();
+    return res.json(grouped);
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
 router.get("/", async (req: Request, res: Response) => {
   try {
     const category = parseItemCategory(req.query.category);

@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, ChevronDown, Info, Loader2, Package } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Info, Package } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +29,8 @@ type PackagesSectionProps = {
   savingPackageId?: string | null;
   loading?: boolean;
   guestCountUpdating?: boolean;
-  onGuestCountChange: (guestCount: number) => void;
+  onGuestCountPreview?: (guestCount: number) => void;
+  onGuestCountCommit: (guestCount: number) => void;
   onAdd: (packageId: string) => void;
   onRemove: () => void;
 };
@@ -202,47 +203,102 @@ export function PackagesSection({
   savingPackageId = null,
   loading,
   guestCountUpdating = false,
-  onGuestCountChange,
+  onGuestCountPreview,
+  onGuestCountCommit,
   onAdd,
   onRemove
 }: PackagesSectionProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [guestInput, setGuestInput] = useState(String(guestCount || ""));
+  const [previewGuestCount, setPreviewGuestCount] = useState(guestCount);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const lastEmittedRef = useRef<number>(guestCount);
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const previewGuestCount = useMemo(() => {
-    const parsed = parseGuestInput(guestInput);
-    return parsed ?? guestCount;
-  }, [guestInput, guestCount]);
+  const selectedPackage = selectedPackageId
+    ? (packages.find((p) => p.id === selectedPackageId) ?? null)
+    : null;
 
-  // Only reflect server-side guestCount into the input when the input isn't focused.
-  // Reflecting during typing/saving would drop digits the user has typed.
+  const selectedPackageTier = selectedPackage
+    ? getActiveTier(selectedPackage.tiers, previewGuestCount, customerType)
+    : null;
+
+  const previewPackageLineItem = packageLineItem
+    ? (() => {
+        if (packageLineItem.unitType !== "tiered_per_head") return packageLineItem;
+        const tiers =
+          packageLineItem.package?.tiers ??
+          packages.find((p) => p.id === packageLineItem.packageId)?.tiers ??
+          [];
+        const tier = getActiveTier(tiers, previewGuestCount, customerType);
+        if (!tier) {
+          return { ...packageLineItem, unitPrice: 0, appliedTier: null };
+        }
+        return {
+          ...packageLineItem,
+          unitPrice: tier.pricePerHead,
+          appliedTier: tier.pricePerHead
+        };
+      })()
+    : null;
+
+  // Reflect cached guestCount when input is not focused.
   useEffect(() => {
     const el = inputRef.current;
     const isFocused = el && document.activeElement === el;
     if (!isFocused) {
       lastEmittedRef.current = guestCount;
       setGuestInput(String(guestCount || ""));
+      setPreviewGuestCount(guestCount);
     }
   }, [guestCount]);
 
-  function commitGuestInput() {
-    const parsed = parseGuestInput(guestInput);
-    if (parsed === null) {
-      setGuestInput(String(guestCount || ""));
-      return;
-    }
+  useEffect(() => () => clearTimeout(commitTimerRef.current), []);
+
+  function applyPreview(parsed: number) {
+    setPreviewGuestCount(parsed);
+    onGuestCountPreview?.(parsed);
+  }
+
+  function commitGuestCount(parsed: number) {
     if (parsed !== lastEmittedRef.current) {
       lastEmittedRef.current = parsed;
-      onGuestCountChange(parsed);
+      onGuestCountCommit(parsed);
     }
   }
 
-  function handleGuestCountChange(nextGuestCount: number) {
+  function handleGuestInputChange(raw: string) {
+    setGuestInput(raw);
+
+    const parsed = parseGuestInput(raw);
+    if (parsed === null) return;
+
+    applyPreview(parsed);
+
+    clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = setTimeout(() => {
+      commitGuestCount(parsed);
+    }, 600);
+  }
+
+  function handleBlur() {
+    clearTimeout(commitTimerRef.current);
+    const parsed = parseGuestInput(guestInput);
+    if (parsed === null) {
+      setGuestInput(String(guestCount || ""));
+      applyPreview(guestCount);
+      return;
+    }
+    applyPreview(parsed);
+    commitGuestCount(parsed);
+  }
+
+  function handleTierGuestCount(nextGuestCount: number) {
+    clearTimeout(commitTimerRef.current);
     lastEmittedRef.current = nextGuestCount;
     setGuestInput(String(nextGuestCount || ""));
-    onGuestCountChange(nextGuestCount);
+    applyPreview(nextGuestCount);
+    onGuestCountCommit(nextGuestCount);
   }
 
   return (
@@ -281,27 +337,30 @@ export function PackagesSection({
 
             <div className="max-w-xs space-y-2">
               <Label htmlFor="package-guest-count">Guest count</Label>
-              <Input
-                id="package-guest-count"
-                ref={inputRef}
-                type="number"
-                min={0}
-                step={1}
-                value={guestInput}
-                onChange={(e) => setGuestInput(e.target.value)}
-                onBlur={commitGuestInput}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitGuestInput();
-                  }
-                }}
-                placeholder="e.g. 200"
-              />
-              {guestCountUpdating ? (
-                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Updating tiers…
+              <div className="relative">
+                <Input
+                  id="package-guest-count"
+                  ref={inputRef}
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={guestInput}
+                  onChange={(e) => handleGuestInputChange(e.target.value)}
+                  onBlur={handleBlur}
+                  placeholder="e.g. 200"
+                  className={guestCountUpdating ? "pr-7" : undefined}
+                />
+                {guestCountUpdating ? (
+                  <div
+                    className="absolute right-3 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-pulse rounded-full bg-muted-foreground/60"
+                    aria-hidden
+                  />
+                ) : null}
+              </div>
+              {selectedPackageTier ? (
+                <p className="text-xs text-muted-foreground">
+                  Active tier: {formatUsd(selectedPackageTier.pricePerHead)}/person (
+                  {formatTierRange(selectedPackageTier)} guests)
                 </p>
               ) : activeTierLabel(previewGuestCount, packages, customerType) ? (
                 <p className="text-xs text-muted-foreground">
@@ -328,8 +387,11 @@ export function PackagesSection({
                     customerType={customerType}
                     isSelected={selectedPackageId === pkg.id}
                     isSaving={savingPackageId === pkg.id}
-                    tierUnavailable={previewGuestCount <= 0 || !getActiveTier(pkg.tiers, previewGuestCount, customerType)}
-                    onSelectTier={handleGuestCountChange}
+                    tierUnavailable={
+                      previewGuestCount <= 0 ||
+                      !getActiveTier(pkg.tiers, previewGuestCount, customerType)
+                    }
+                    onSelectTier={handleTierGuestCount}
                     onAdd={() => onAdd(pkg.id)}
                     onRemove={onRemove}
                   />
@@ -337,28 +399,28 @@ export function PackagesSection({
               </div>
             )}
 
-            {packageLineItem ? (
+            {previewPackageLineItem ? (
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="flex items-center gap-2 font-medium">
                       <Package className="h-4 w-4" />
-                      {packageLineItem.name}
+                      {previewPackageLineItem.name}
                     </p>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {packageLineItem.appliedTierLabel ??
-                        packageLineItem.notes ??
-                        `${formatUsd(packageLineItem.unitPrice)}/person`}{" "}
+                      {previewPackageLineItem.appliedTierLabel ??
+                        previewPackageLineItem.notes ??
+                        `${formatUsd(previewPackageLineItem.unitPrice)}/person`}{" "}
                       × {previewGuestCount} guests
                     </p>
-                    {packageLineItem.package?.items?.length ? (
+                    {previewPackageLineItem.package?.items?.length ? (
                       <p className="mt-2 text-sm text-muted-foreground">
-                        Includes: {formatIncludedItems(packageLineItem.package.items)}
+                        Includes: {formatIncludedItems(previewPackageLineItem.package.items)}
                       </p>
                     ) : null}
                   </div>
                   <p className="text-lg font-semibold tabular-nums">
-                    {formatUsd(lineItemTotal(packageLineItem, previewGuestCount))}
+                    {formatUsd(lineItemTotal(previewPackageLineItem, previewGuestCount))}
                   </p>
                 </div>
                 <Button

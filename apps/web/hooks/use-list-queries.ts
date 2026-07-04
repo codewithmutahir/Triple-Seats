@@ -7,7 +7,9 @@ export function useLeadsQuery() {
   return useQuery({
     queryKey: queryKeys.leads.listAll(),
     queryFn: api.leads.listAll,
-    staleTime: 60 * 1000
+    staleTime: 30 * 1000,
+    refetchInterval: 30 * 1000,
+    refetchIntervalInBackground: false
   });
 }
 

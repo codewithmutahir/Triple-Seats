@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
+import { SaveIndicator } from "@/components/save-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,8 +11,9 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
+import { useUpdateProfileMutation, type ProfileUpdatePayload } from "@/hooks/use-settings-queries";
 import type { CatererProfile } from "./page";
 
 const TIMEZONES = [
@@ -23,7 +24,7 @@ const TIMEZONES = [
   { value: "America/Los_Angeles", label: "Pacific Time (US)" },
   { value: "Asia/Karachi", label: "Pakistan Standard Time" },
   { value: "Asia/Dubai", label: "Gulf Standard Time" },
-  { value: "Europe/London", label: "GMT (London)" },
+  { value: "Europe/London", label: "GMT (London)" }
 ];
 
 const CURRENCIES = [
@@ -31,69 +32,72 @@ const CURRENCIES = [
   { value: "PKR", label: "PKR (₨)" },
   { value: "AED", label: "AED (د.إ)" },
   { value: "GBP", label: "GBP (£)" },
-  { value: "EUR", label: "EUR (€)" },
+  { value: "EUR", label: "EUR (€)" }
 ];
 
 type Props = {
   profile: CatererProfile;
-  onUpdate: (profile: CatererProfile) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
-export function BusinessProfileSection({ profile, onUpdate }: Props) {
-  const [form, setForm] = useState({
+function profileToForm(profile: CatererProfile) {
+  return {
     name: profile.name,
     email: profile.email,
     phone: profile.phone ?? "",
     timezone: profile.timezone ?? "UTC",
     currencyCode: profile.currencyCode,
-    websiteUrl: profile.websiteUrl ?? "",
-  });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+    websiteUrl: profile.websiteUrl ?? ""
+  };
+}
 
-  const hasChanges =
-    form.name !== profile.name ||
-    form.email !== profile.email ||
-    form.phone !== (profile.phone ?? "") ||
-    form.timezone !== (profile.timezone ?? "UTC") ||
-    form.currencyCode !== profile.currencyCode ||
-    form.websiteUrl !== (profile.websiteUrl ?? "");
+function formToPayload(form: ReturnType<typeof profileToForm>): ProfileUpdatePayload {
+  return {
+    name: form.name.trim(),
+    email: form.email.trim(),
+    phone: form.phone.trim() || null,
+    timezone: form.timezone,
+    currencyCode: form.currencyCode,
+    websiteUrl: form.websiteUrl.trim() || null
+  };
+}
 
-  async function handleSave() {
-    setSaving(true);
-    setError(null);
-    setSuccess(false);
+export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
+  const updateProfileMutation = useUpdateProfileMutation();
+  const [form, setForm] = useState(() => profileToForm(profile));
 
-    try {
-      const res = await fetch("/api/caterer", {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: form.name.trim(),
-          email: form.email.trim(),
-          phone: form.phone.trim() || null,
-          timezone: form.timezone,
-          currencyCode: form.currencyCode,
-          websiteUrl: form.websiteUrl.trim() || null,
-        }),
-      });
+  const savedPayload = formToPayload(profileToForm(profile));
+  const currentPayload = formToPayload(form);
+  const isDirty =
+    currentPayload.name !== savedPayload.name ||
+    currentPayload.email !== savedPayload.email ||
+    currentPayload.phone !== savedPayload.phone ||
+    currentPayload.timezone !== savedPayload.timezone ||
+    currentPayload.currencyCode !== savedPayload.currencyCode ||
+    currentPayload.websiteUrl !== savedPayload.websiteUrl;
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "Failed to save");
+  useEffect(() => {
+    setForm(profileToForm(profile));
+  }, [profile]);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  function updateField<K extends keyof ReturnType<typeof profileToForm>>(
+    key: K,
+    value: ReturnType<typeof profileToForm>[K]
+  ) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  function handleSave() {
+    if (!isDirty) return;
+    updateProfileMutation.mutate(formToPayload(form), {
+      onSuccess: () => {
+        onDirtyChange?.(false);
       }
-
-      const data = await res.json();
-      onUpdate(data.caterer);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save");
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   return (
@@ -104,7 +108,7 @@ export function BusinessProfileSection({ profile, onUpdate }: Props) {
           <Input
             id="business-name"
             value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            onChange={(e) => updateField("name", e.target.value)}
             placeholder="Your business name"
           />
         </div>
@@ -115,7 +119,7 @@ export function BusinessProfileSection({ profile, onUpdate }: Props) {
             id="business-email"
             type="email"
             value={form.email}
-            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+            onChange={(e) => updateField("email", e.target.value)}
             placeholder="contact@example.com"
           />
         </div>
@@ -126,7 +130,7 @@ export function BusinessProfileSection({ profile, onUpdate }: Props) {
             id="business-phone"
             type="tel"
             value={form.phone}
-            onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+            onChange={(e) => updateField("phone", e.target.value)}
             placeholder="+1 234 567 8900"
           />
         </div>
@@ -137,17 +141,14 @@ export function BusinessProfileSection({ profile, onUpdate }: Props) {
             id="business-website"
             type="url"
             value={form.websiteUrl}
-            onChange={(e) => setForm((f) => ({ ...f, websiteUrl: e.target.value }))}
+            onChange={(e) => updateField("websiteUrl", e.target.value)}
             placeholder="https://example.com"
           />
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="business-timezone">Timezone</Label>
-          <Select
-            value={form.timezone}
-            onValueChange={(v) => setForm((f) => ({ ...f, timezone: v }))}
-          >
+          <Select value={form.timezone} onValueChange={(v) => updateField("timezone", v)}>
             <SelectTrigger id="business-timezone">
               <SelectValue />
             </SelectTrigger>
@@ -163,10 +164,7 @@ export function BusinessProfileSection({ profile, onUpdate }: Props) {
 
         <div className="space-y-2">
           <Label htmlFor="business-currency">Currency</Label>
-          <Select
-            value={form.currencyCode}
-            onValueChange={(v) => setForm((f) => ({ ...f, currencyCode: v }))}
-          >
+          <Select value={form.currencyCode} onValueChange={(v) => updateField("currencyCode", v)}>
             <SelectTrigger id="business-currency">
               <SelectValue />
             </SelectTrigger>
@@ -181,15 +179,25 @@ export function BusinessProfileSection({ profile, onUpdate }: Props) {
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {success && <p className="text-sm text-emerald-600">Profile saved successfully!</p>}
-
-      <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={saving || !hasChanges}>
-          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Save Changes
+      <div className="flex items-center justify-between gap-3">
+        {isDirty ? (
+          <span className="flex items-center gap-1.5 text-xs text-amber-600">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+            Unsaved changes
+          </span>
+        ) : (
+          <span />
+        )}
+        <Button type="button" onClick={handleSave}>
+          Save Profile
         </Button>
       </div>
+
+      <SaveIndicator
+        isPending={updateProfileMutation.isPending}
+        isSuccess={updateProfileMutation.isSuccess}
+        isError={updateProfileMutation.isError}
+      />
     </div>
   );
 }
