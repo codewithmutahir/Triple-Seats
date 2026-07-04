@@ -12,6 +12,10 @@ type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 const catererCache = new Map<string, { caterer: Caterer; ts: number }>();
 const CATERER_TTL = 30_000;
 
+type SessionData = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
+const sessionCache = new Map<string, { data: SessionData; ts: number }>();
+const SESSION_TTL = 60_000;
+
 export class SessionError extends Error {
   constructor(
     message: string,
@@ -34,6 +38,43 @@ export function requestToHeaders(req: Request): Headers {
     }
   }
   return headers;
+}
+
+/** Extract Better Auth session token from cookies (supports chunked + secure prefix). */
+export function extractSessionToken(req: Request): string | null {
+  const cookieHeader = req.headers.cookie ?? "";
+
+  let token = cookieHeader.match(/better-auth\.session_token=([^;]+)/)?.[1];
+  if (token) return decodeURIComponent(token);
+
+  const chunks: string[] = [];
+  let i = 0;
+  while (true) {
+    const chunk = cookieHeader.match(
+      new RegExp(`better-auth\\.session_token\\.${i}=([^;]+)`)
+    )?.[1];
+    if (!chunk) break;
+    chunks.push(decodeURIComponent(chunk));
+    i++;
+  }
+  if (chunks.length > 0) return chunks.join("");
+
+  token = cookieHeader.match(/__Secure-better-auth\.session_token=([^;]+)/)?.[1];
+  if (token) return decodeURIComponent(token);
+
+  const secureChunks: string[] = [];
+  i = 0;
+  while (true) {
+    const chunk = cookieHeader.match(
+      new RegExp(`__Secure-better-auth\\.session_token\\.${i}=([^;]+)`)
+    )?.[1];
+    if (!chunk) break;
+    secureChunks.push(decodeURIComponent(chunk));
+    i++;
+  }
+  if (secureChunks.length > 0) return secureChunks.join("");
+
+  return null;
 }
 
 type AuthUser = { id: string; email: string | null; name: string | null };
@@ -177,19 +218,48 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
   return withSlug;
 }
 
+async function resolveAuthSession(req: Request): Promise<SessionData> {
+  const token = extractSessionToken(req);
+  const isDev = process.env.NODE_ENV !== "production";
+
+  if (token) {
+    const cached = sessionCache.get(token);
+    if (cached && Date.now() - cached.ts < SESSION_TTL) {
+      if (isDev) {
+        console.log(`[session] CACHE HIT for token: ${token.slice(0, 8)}...`);
+      }
+      return cached.data;
+    }
+  }
+
+  if (isDev) {
+    console.log("[session] CACHE MISS — fetching from Better Auth");
+  }
+
+  const data = await auth.api.getSession({ headers: requestToHeaders(req) });
+  if (!data?.user || !data?.session) {
+    throw new SessionError("Unauthorized", 401);
+  }
+
+  if (token) {
+    sessionCache.set(token, { data, ts: Date.now() });
+    if (isDev) {
+      console.log(`[session] Cached session for token: ${token.slice(0, 8)}...`);
+    }
+  }
+
+  return data;
+}
+
 /**
  * Validates Better Auth session and resolves (or creates) the caterer for this user.
- * Session validity is always checked upstream; only the caterer lookup is cached.
+ * Session validity is cached by token; caterer lookup is cached by user id.
  */
 export async function getSession(req: Request) {
   const perf = timer("session");
 
-  const data = await auth.api.getSession({ headers: requestToHeaders(req) });
+  const data = await resolveAuthSession(req);
   perf.step("auth.api.getSession");
-
-  if (!data?.user || !data?.session) {
-    throw new SessionError("Unauthorized", 401);
-  }
 
   const caterer = await ensureCatererForAuthUser({
     id: data.user.id,

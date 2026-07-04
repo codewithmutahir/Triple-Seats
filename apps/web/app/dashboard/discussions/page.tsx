@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -26,21 +26,20 @@ import { cn } from "@/lib/utils";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
-  CLIENT_LIST_FETCH_SIZE,
-  fetchAllListPages,
   filterConversationItems,
   LIST_PAGE_SIZE,
   paginateItems
 } from "@/lib/client-list-filter";
-import { useAppStore, type Conversation, type ConversationsListResponse, type DiscussionThread } from "@/lib/stores/app-store";
-import { loadWithCache } from "@/lib/stores/cache-helpers";
-import { parseApiError } from "@/lib/user-facing-error";
+import {
+  useDiscussionMutations,
+  useDiscussionsQuery,
+  useDiscussionThreadQuery
+} from "@/hooks/use-discussions-query";
+import type { DiscussionThread } from "@/lib/stores/app-store";
 import { browserTimer } from "@/lib/perf";
 
 type EventThreadMeta = DiscussionThread["event"];
 type Message = DiscussionThread["messages"][number];
-
-const ALL_CONVERSATIONS_CACHE_KEY = "__all__";
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -68,30 +67,6 @@ function formatMessageTime(iso: string) {
   } catch {
     return iso;
   }
-}
-
-async function fetchConversations(
-  params: URLSearchParams
-): Promise<ConversationsListResponse | { error: string }> {
-  const res = await fetch(`/api/messages/conversations?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText) };
-  }
-  return (await res.json()) as ConversationsListResponse;
-}
-
-async function fetchThread(
-  eventId: string
-): Promise<{ event: EventThreadMeta; messages: Message[] } | { error: string }> {
-  const res = await fetch(`/api/messages/event/${encodeURIComponent(eventId)}`, {
-    credentials: "include"
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText) };
-  }
-  return (await res.json()) as { event: EventThreadMeta; messages: Message[] };
 }
 
 function DiscussionsSkeleton() {
@@ -171,27 +146,36 @@ function DiscussionsInner() {
     perfRef.current.step("mount");
   }
 
-  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [page, setPage] = useState(1);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(urlEventId);
-  const [threadEvent, setThreadEvent] = useState<EventThreadMeta | null>(() => {
-    const cached = urlEventId
-      ? useAppStore.getState().peekDiscussionsThread(urlEventId)
-      : null;
-    return cached?.event ?? null;
-  });
-  const [messages, setMessages] = useState<Message[]>(() => {
-    const cached = urlEventId
-      ? useAppStore.getState().peekDiscussionsThread(urlEventId)
-      : null;
-    return cached?.messages ?? [];
-  });
   const [search, setSearch] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [composerText, setComposerText] = useState("");
   const [sendAsEmail, setSendAsEmail] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [listLoading, setListLoading] = useState(true);
+  const [mobileShowThread, setMobileShowThread] = useState(Boolean(urlEventId));
+
+  const {
+    data: allConversations = [],
+    isLoading: listLoading,
+    isFetching: listFetching,
+    error: listError
+  } = useDiscussionsQuery();
+
+  const {
+    data: threadData,
+    isLoading: threadLoading,
+    isFetching: threadFetching,
+    error: threadError
+  } = useDiscussionThreadQuery(selectedEventId);
+
+  const { sendMutation } = useDiscussionMutations(selectedEventId);
+
+  const listRefreshing = listFetching && !listLoading;
+  const threadRefreshing = threadFetching && !threadLoading;
+  const error = listError?.message ?? threadError?.message ?? null;
+
+  const messages = threadData?.messages ?? [];
+  const threadEvent = threadData?.event ?? null;
 
   const filteredConversations = useMemo(
     () => filterConversationItems(allConversations, searchDebounced),
@@ -204,11 +188,6 @@ function DiscussionsInner() {
   );
 
   const conversations = listMeta.items;
-  const [threadLoading, setThreadLoading] = useState(false);
-  const [listRefreshing, setListRefreshing] = useState(false);
-  const [threadRefreshing, setThreadRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [mobileShowThread, setMobileShowThread] = useState(Boolean(urlEventId));
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -221,81 +200,6 @@ function DiscussionsInner() {
   useEffect(() => {
     setPage(1);
   }, [searchDebounced]);
-
-  const loadConversations = useCallback(async () => {
-    const store = useAppStore.getState();
-    setError(null);
-    perfRef.current?.step("fetch:start");
-
-    await loadWithCache({
-      peek: () => store.peekDiscussionsConversations(ALL_CONVERSATIONS_CACHE_KEY),
-      getFresh: () => store.getDiscussionsConversations(ALL_CONVERSATIONS_CACHE_KEY),
-      set: (data) => store.setDiscussionsConversations(ALL_CONVERSATIONS_CACHE_KEY, data),
-      fetch: async () => {
-        const result = await fetchAllListPages<Conversation>(
-          async (pageNum) => {
-            const params = new URLSearchParams();
-            params.set("page", String(pageNum));
-            params.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
-            const res = await fetchConversations(params);
-            if ("error" in res) return res;
-            return {
-              items: res.conversations,
-              total: res.total,
-              pageSize: res.pageSize
-            };
-          },
-          CLIENT_LIST_FETCH_SIZE
-        );
-        if ("error" in result) throw new Error(result.error);
-        return {
-          conversations: result.items,
-          total: result.total,
-          page: 1,
-          pageSize: LIST_PAGE_SIZE,
-          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE))
-        };
-      },
-      onData: (data) => {
-        setAllConversations(data.conversations);
-        perfRef.current?.step("fetch:done");
-      },
-      setLoading: setListLoading,
-      setRefreshing: setListRefreshing
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setAllConversations([]);
-    });
-  }, []);
-
-  const loadThread = useCallback(async (eventId: string) => {
-    const store = useAppStore.getState();
-    setError(null);
-    await loadWithCache({
-      peek: () => store.peekDiscussionsThread(eventId),
-      getFresh: () => store.getDiscussionsThread(eventId),
-      set: (data) => store.setDiscussionsThread(eventId, data),
-      fetch: async () => {
-        const result = await fetchThread(eventId);
-        if ("error" in result) throw new Error(result.error);
-        return result;
-      },
-      onData: (result) => {
-        setThreadEvent(result.event);
-        setMessages(result.messages);
-      },
-      setLoading: setThreadLoading,
-      setRefreshing: setThreadRefreshing
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setThreadEvent(null);
-      setMessages([]);
-    });
-  }, []);
-
-  useEffect(() => {
-    void loadConversations();
-  }, [loadConversations]);
 
   useEffect(() => {
     if (perfEndedRef.current || listLoading) return;
@@ -310,14 +214,11 @@ function DiscussionsInner() {
     if (urlEventId) {
       setSelectedEventId(urlEventId);
       setMobileShowThread(true);
-      void loadThread(urlEventId);
     } else {
       setSelectedEventId(null);
       setMobileShowThread(false);
-      setThreadEvent(null);
-      setMessages([]);
     }
-  }, [urlEventId, loadThread]);
+  }, [urlEventId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -351,36 +252,21 @@ function DiscussionsInner() {
     router.replace("/dashboard/discussions", { scroll: false });
   }
 
-  async function sendMessage() {
+  function sendMessage() {
     if (!selectedEventId || !composerText.trim()) return;
-    setSending(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          eventId: selectedEventId,
-          body: composerText.trim(),
-          direction: sendAsEmail ? "outbound" : "internal"
-        })
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: Message };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.message) {
-        setMessages((prev) => [...prev, body.message!]);
-        setComposerText("");
-        await loadConversations();
+    sendMutation.mutate(
+      {
+        body: composerText.trim(),
+        direction: sendAsEmail ? "outbound" : "internal"
+      },
+      {
+        onSuccess: () => setComposerText("")
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send message");
-    } finally {
-      setSending(false);
-    }
+    );
   }
 
   const showListOnMobile = !mobileShowThread;
+  const sending = sendMutation.isPending;
 
   return (
     <div className="space-y-4">
@@ -417,7 +303,6 @@ function DiscussionsInner() {
       ) : null}
 
       <div className="flex h-[calc(100vh-11rem)] min-h-[480px] overflow-hidden rounded-lg border bg-white shadow-sm">
-        {/* Left: conversation list */}
         <div
           className={cn(
             "flex w-full flex-col border-r lg:w-1/3",
@@ -503,7 +388,6 @@ function DiscussionsInner() {
           </div>
         </div>
 
-        {/* Right: message thread */}
         <div
           className={cn(
             "flex flex-1 flex-col",
@@ -578,7 +462,7 @@ function DiscussionsInner() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                         e.preventDefault();
-                        void sendMessage();
+                        sendMessage();
                       }
                     }}
                     disabled={sending}
@@ -609,7 +493,7 @@ function DiscussionsInner() {
                       type="button"
                       className="bg-[#1B2A4A] hover:bg-[#1B2A4A]/90"
                       disabled={sending || !composerText.trim()}
-                      onClick={() => void sendMessage()}
+                      onClick={() => sendMessage()}
                     >
                       {sending ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />

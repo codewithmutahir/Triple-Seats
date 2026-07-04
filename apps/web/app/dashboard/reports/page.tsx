@@ -2,7 +2,7 @@
 
 import { CalendarCheck, DollarSign, Download, TrendingUp, Users } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
@@ -18,8 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useAppStore, type ReportsData } from "@/lib/stores/app-store";
-import { parseApiError } from "@/lib/user-facing-error";
+import { useReportsQuery } from "@/hooks/use-reports-query";
 import { browserTimer } from "@/lib/perf";
 
 const ReportsBarCharts = dynamic(
@@ -122,27 +121,6 @@ function trendLabel(growth: number) {
   return "Flat vs last month";
 }
 
-async function fetchReports(year: number, month: number): Promise<ReportsData | { error: string }> {
-  const params = new URLSearchParams({ year: String(year), month: String(month) });
-  const [summaryRes, timelineRes] = await Promise.all([
-    fetch(`/api/reports/summary?${params}`, { credentials: "include" }),
-    fetch(`/api/reports/events-timeline?${params}`, { credentials: "include" })
-  ]);
-
-  if (!summaryRes.ok) {
-    const body = (await summaryRes.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, summaryRes.status, summaryRes.statusText) };
-  }
-  if (!timelineRes.ok) {
-    const body = (await timelineRes.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, timelineRes.status, timelineRes.statusText) };
-  }
-
-  const summary = await summaryRes.json();
-  const timeline = await timelineRes.json();
-  return { filterKey: `${year}-${month}`, summary, timeline };
-}
-
 const REPORTS_PAGE_SIZE = 20;
 
 export default function ReportsPage() {
@@ -158,74 +136,16 @@ export default function ReportsPage() {
   const [month, setMonth] = useState(String(now.getMonth() + 1));
 
   const filterKey = `${year}-${month}`;
+  const yearNum = parseInt(year, 10);
+  const monthNum = parseInt(month, 10);
 
-  const [reports, setReports] = useState<ReportsData | null>(() => {
-    const cached = useAppStore.getState().peekReportsCache();
-    return cached?.filterKey === `${now.getFullYear()}-${now.getMonth() + 1}` ? cached : null;
-  });
-  const [loading, setLoading] = useState(() => {
-    const cached = useAppStore.getState().peekReportsCache();
-    return !(cached?.filterKey === `${now.getFullYear()}-${now.getMonth() + 1}`);
-  });
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { data: reports, isLoading: loading, isFetching, error: queryError } =
+    useReportsQuery(yearNum, monthNum);
+  const refreshing = isFetching && !loading;
+  const error = queryError?.message ?? null;
+
   const [leadReportsPage, setLeadReportsPage] = useState(1);
   const [recentActivityPage, setRecentActivityPage] = useState(1);
-  const requestIdRef = useRef(0);
-
-  const load = useCallback(async () => {
-    const requestId = ++requestIdRef.current;
-    const store = useAppStore.getState();
-    setError(null);
-
-    const cached = store.getReportsCache();
-    if (cached?.filterKey === filterKey) {
-      if (requestId === requestIdRef.current) {
-        setReports(cached);
-        setLoading(false);
-        setRefreshing(false);
-        perfRef.current?.step("fetch:done");
-      }
-      return;
-    }
-
-    const stale = store.peekReportsCache();
-    if (stale?.filterKey === filterKey) {
-      if (requestId === requestIdRef.current) {
-        setReports(stale);
-        setLoading(false);
-      }
-    } else if (requestId === requestIdRef.current) {
-      setReports(null);
-      setLoading(true);
-    }
-
-    if (requestId === requestIdRef.current) {
-      setRefreshing(stale?.filterKey === filterKey);
-    }
-    try {
-      perfRef.current?.step("fetch:start");
-      const result = await fetchReports(parseInt(year, 10), parseInt(month, 10));
-      perfRef.current?.step("fetch:done");
-      if (requestId !== requestIdRef.current) return;
-      if ("error" in result) throw new Error(result.error);
-      store.setReportsCache(result);
-      setReports(result);
-    } catch (e) {
-      if (requestId !== requestIdRef.current) return;
-      setError(e instanceof Error ? e.message : "Request failed.");
-      if (stale?.filterKey !== filterKey) setReports(null);
-    } finally {
-      if (requestId === requestIdRef.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [filterKey, year, month]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   useEffect(() => {
     setLeadReportsPage(1);

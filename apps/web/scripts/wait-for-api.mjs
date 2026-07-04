@@ -6,17 +6,26 @@ const maxMs = Number(process.env.API_WAIT_MAX_MS ?? 60_000);
 const pollMs = 300;
 const start = Date.now();
 
+let ready = false;
+
 while (Date.now() - start < maxMs) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
     if (res.ok) {
-      process.exit(0);
+      await res.arrayBuffer().catch(() => {});
+      ready = true;
+      break;
     }
+    await res.arrayBuffer().catch(() => {});
   } catch {
     /* retry */
   }
   await new Promise((r) => setTimeout(r, pollMs));
 }
 
-console.error(`[wait-for-api] Timed out after ${maxMs}ms waiting for ${url}`);
-process.exit(1);
+if (ready) {
+  process.exitCode = 0;
+} else {
+  console.error(`[wait-for-api] Timed out after ${maxMs}ms waiting for ${url}`);
+  process.exitCode = 1;
+}

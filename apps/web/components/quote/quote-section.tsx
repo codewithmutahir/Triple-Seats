@@ -33,7 +33,6 @@ type QuoteSectionProps = {
   onAdd: (payload: AddItemPayload) => void;
   onUpdate: (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => void;
   onDelete: (itemId: string) => void;
-  tempItemIds: Set<string>;
   includedPackageName?: string;
   includedItems?: PackageIncludedItem[];
   catalogItems?: MenuItem[];
@@ -54,7 +53,6 @@ export function QuoteSection({
   onAdd,
   onUpdate,
   onDelete,
-  tempItemIds,
   includedPackageName,
   includedItems,
   catalogItems,
@@ -156,7 +154,6 @@ export function QuoteSection({
                         category={category}
                         onUpdate={onUpdate}
                         onDelete={onDelete}
-                        isTemp={tempItemIds.has(item.id)}
                       />
                     ))}
                   </ul>

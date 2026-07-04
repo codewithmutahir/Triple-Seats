@@ -14,22 +14,20 @@ import {
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
+import { SaveIndicator } from "@/components/save-indicator";
 import { AddItemPayload } from "@/components/quote/add-item-form";
 import { PackagesSection, packageSummaryLabel } from "@/components/quote/packages-section";
 import { QuoteSection } from "@/components/quote/quote-section";
-import { SaveStatusIndicator } from "@/components/quote/save-status-indicator";
 import {
   CATEGORY_LABELS,
   MENU_SECTIONS,
   type ItemCategory,
   type CateringPackage,
   type MenuItem,
-  type Quote,
   type QuoteLineItem,
-  type QuoteStatus,
-  type QuoteUnit,
-  type SaveStatus
+  type QuoteStatus
 } from "@/components/quote/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,8 +48,8 @@ import {
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { formatEventDateWithTime } from "@/lib/event-datetime";
 import { isPackageIncludedSection, packageItemsForSection } from "@/lib/package-sections";
+import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { useDebouncedCallback } from "@/lib/use-debounce";
-import { fetchQuoteBuilder } from "@/lib/quote-builder-api";
 import { parseApiError } from "@/lib/user-facing-error";
 import { browserTimer } from "@/lib/perf";
 import { cn } from "@/lib/utils";
@@ -97,20 +95,6 @@ function unitTypeSummary(item: QuoteLineItem, guestCount: number): string {
   return "(flat)";
 }
 
-async function apiJson<T>(
-  path: string,
-  init?: RequestInit
-): Promise<{ data?: T; error?: string }> {
-  const res = await fetch(path, { credentials: "include", ...init });
-  const body = (await res.json().catch(() => null)) as { error?: string } | T | null;
-  if (!res.ok) {
-    const errBody =
-      body && typeof body === "object" && "error" in body ? (body as { error?: string }) : null;
-    return { error: parseApiError(errBody, res.status, res.statusText) };
-  }
-  return { data: body as T };
-}
-
 function QuoteBuilderPage() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get("eventId");
@@ -122,16 +106,33 @@ function QuoteBuilderPage() {
     perfRef.current.step("mount");
   }
 
-  const [quote, setQuote] = useState<Quote | null>(null);
-  const [lineItems, setLineItems] = useState<QuoteLineItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: builderData, isLoading: loading, error: queryError } = useQuoteBuilderQuery(eventId);
+  const {
+    addItemMutation,
+    removeItemMutation,
+    updateItemMutation,
+    updateQuoteMutation,
+    addPackageMutation,
+    removePackageMutation,
+    updateGuestCountMutation,
+    duplicateMutation,
+    isMutating,
+    isSaving,
+    isSaveSuccess,
+    isSaveError
+  } = useQuoteBuilderMutations(eventId);
+
+  const quote = builderData?.quote ?? null;
+  const lineItems = quote?.lineItems ?? [];
+  const packages = (builderData?.packages ?? []) as CateringPackage[];
+  const menuItemsByCategory = (builderData?.menuItemsByCategory ?? {}) as Partial<
+    Record<ItemCategory, MenuItem[]>
+  >;
+  const packagesLoading = loading;
+  const error = queryError?.message ?? null;
+
   const [pdfLoading, setPdfLoading] = useState(false);
   const [sendLoading, setSendLoading] = useState(false);
-  const [duplicateLoading, setDuplicateLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [tempItemIds, setTempItemIds] = useState<Set<string>>(new Set());
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
 
   const [taxPct, setTaxPct] = useState("8.75");
@@ -142,14 +143,6 @@ function QuoteBuilderPage() {
   const [deliveryDistance, setDeliveryDistance] = useState("");
   const [deliveryRate, setDeliveryRate] = useState("");
 
-  const [packages, setPackages] = useState<CateringPackage[]>([]);
-  const [menuItemsByCategory, setMenuItemsByCategory] = useState<
-    Partial<Record<ItemCategory, MenuItem[]>>
-  >({});
-  const [packagesLoading, setPackagesLoading] = useState(true);
-  const [packageActionLoading, setPackageActionLoading] = useState(false);
-  const [guestCountSaving, setGuestCountSaving] = useState(false);
-
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, true]))
   );
@@ -158,8 +151,7 @@ function QuoteBuilderPage() {
     Record<string, Record<string, string[]>>
   >(() => Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
 
-  const pendingSaves = useRef(0);
-  const quoteIdRef = useRef<string | null>(null);
+  const settingsInitialized = useRef(false);
 
   const guestCount = quote?.event?.guestCountEstimate ?? 0;
 
@@ -200,113 +192,30 @@ function QuoteBuilderPage() {
     return d * r;
   }, [deliveryDistance, deliveryRate]);
 
-  const beginSave = useCallback(() => {
-    pendingSaves.current += 1;
-    setSaveStatus("saving");
-  }, []);
-
-  const endSave = useCallback((ok: boolean) => {
-    pendingSaves.current = Math.max(0, pendingSaves.current - 1);
-    if (pendingSaves.current === 0) {
-      setSaveStatus(ok ? "saved" : "error");
-    }
-  }, []);
-
-  const applyQuote = useCallback((q: Quote) => {
-    setQuote(q);
-    setLineItems(q.lineItems);
-    setTaxPct(String((q.taxRate * 100).toFixed(2).replace(/\.?0+$/, "")));
-    setDepositPctInput(String(Math.round(q.depositPct * 100)));
-    setNotes(q.notes ?? "");
-    setDueDate(q.dueDate ? new Date(q.dueDate) : undefined);
-    quoteIdRef.current = q.id;
-  }, []);
-
   useEffect(() => {
-    if (!eventId) {
-      setLoading(false);
-      setError("Missing event. Open a quote from an event.");
-      return;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      setLoading(true);
-      setPackagesLoading(true);
-      setError(null);
-
-      perfRef.current?.step("fetch:start");
-      const res = await fetchQuoteBuilder(eventId);
-
-      perfRef.current?.step("fetch:all-done");
-      if (cancelled) return;
-
-      if (!res.ok || !res.data.quote) {
-        setError(res.ok ? "Could not load quote." : res.message);
-        setLoading(false);
-        setPackagesLoading(false);
-        return;
-      }
-
-      applyQuote(res.data.quote);
-      setPackages(res.data.packages ?? []);
-      setMenuItemsByCategory(res.data.menuItemsByCategory ?? {});
-      perfRef.current?.step("state:set");
-      setLoading(false);
-      setPackagesLoading(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId, applyQuote]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3500);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  const patchQuoteBackground = useCallback(
-    async (payload: Record<string, unknown>) => {
-      const id = quoteIdRef.current;
-      if (!id) return { error: "No quote loaded" };
-      beginSave();
-      const res = await apiJson<{ quote: Quote }>(`/api/quotes/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (res.data?.quote) {
-        setQuote((prev) => (prev ? { ...prev, ...res.data!.quote, lineItems } : res.data!.quote));
-        endSave(true);
-      } else {
-        endSave(false);
-      }
-      return res;
-    },
-    [beginSave, endSave, lineItems]
-  );
-
-  const settingsInitialized = useRef(false);
+    if (!quote) return;
+    settingsInitialized.current = true;
+    setTaxPct(String((quote.taxRate * 100).toFixed(2).replace(/\.?0+$/, "")));
+    setDepositPctInput(String(Math.round(quote.depositPct * 100)));
+    setNotes(quote.notes ?? "");
+    setDueDate(quote.dueDate ? new Date(quote.dueDate) : undefined);
+  }, [quote?.id]);
 
   const saveSettings = useDebouncedCallback(() => {
-    if (!settingsInitialized.current) return;
+    if (!settingsInitialized.current || !quote) return;
     const tax = parseFloat(taxPct) / 100;
     const deposit = parseFloat(depositPctInput) / 100;
     if (!Number.isFinite(tax) || !Number.isFinite(deposit)) return;
-    void patchQuoteBackground({
-      taxRate: tax,
-      depositPct: deposit,
-      notes: notes.trim() || null,
-      dueDate: dueDate ? dueDate.toISOString() : null
+    updateQuoteMutation.mutate({
+      quoteId: quote.id,
+      data: {
+        taxRate: tax,
+        depositPct: deposit,
+        notes: notes.trim() || null,
+        dueDate: dueDate ? dueDate.toISOString() : null
+      }
     });
   }, 800);
-
-  useEffect(() => {
-    if (quote) settingsInitialized.current = true;
-  }, [quote]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading || packagesLoading) return;
@@ -327,13 +236,12 @@ function QuoteBuilderPage() {
 
   const addLineItemOptimistic = useCallback(
     (category: ItemCategory, payload: AddItemPayload) => {
-      const id = quoteIdRef.current;
-      if (!id || !quote) return;
+      if (!quote) return;
 
       const tempId = `temp_${Date.now()}`;
-      const newItem: QuoteLineItem = {
+      const tempItem: QuoteLineItem = {
         id: tempId,
-        quoteId: id,
+        quoteId: quote.id,
         menuItemId: payload.menuItemId ?? null,
         packageId: null,
         category,
@@ -346,129 +254,37 @@ function QuoteBuilderPage() {
         notes: null
       };
 
-      setLineItems((prev) => [...prev, newItem]);
-      setTempItemIds((prev) => new Set(prev).add(tempId));
-      beginSave();
-
-      void apiJson<{ quote: Quote }>(`/api/quotes/${encodeURIComponent(id)}/items`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      addItemMutation.mutate({
+        quoteId: quote.id,
+        item: {
           category,
           name: payload.name,
           quantity: payload.quantity,
           unitPrice: payload.unitPrice,
           unitType: payload.unitType,
           menuItemId: payload.menuItemId ?? null
-        })
-      }).then((res) => {
-        if (res.data?.quote) {
-          setLineItems((prev) => {
-            const prevRealIds = new Set(
-              prev.filter((i) => !i.id.startsWith("temp_")).map((i) => i.id)
-            );
-            const created = res.data!.quote.lineItems.find((i) => !prevRealIds.has(i.id));
-            if (!created) return prev.filter((i) => i.id !== tempId);
-            return prev.map((i) => (i.id === tempId ? created : i));
-          });
-          setTempItemIds((prev) => {
-            const next = new Set(prev);
-            next.delete(tempId);
-            return next;
-          });
-          setQuote((prev) => (prev ? { ...prev, totalAmount: res.data!.quote.totalAmount } : prev));
-          endSave(true);
-        } else {
-          setLineItems((prev) => prev.filter((i) => i.id !== tempId));
-          setTempItemIds((prev) => {
-            const next = new Set(prev);
-            next.delete(tempId);
-            return next;
-          });
-          if (process.env.NODE_ENV === "development") {
-            console.error("Add line item failed:", res.error);
-          }
-          setToast(res.error ?? "Failed to add item");
-          endSave(false);
-        }
+        },
+        tempItem
       });
     },
-    [quote, beginSave, endSave]
+    [quote, addItemMutation]
   );
 
   const deleteLineItemOptimistic = useCallback(
     (itemId: string) => {
-      const id = quoteIdRef.current;
-      if (!id) return;
-
-      const removed = lineItems.find((i) => i.id === itemId);
-      if (!removed) return;
-
-      setLineItems((prev) => prev.filter((i) => i.id !== itemId));
-      beginSave();
-
-      if (itemId.startsWith("temp_")) {
-        endSave(true);
-        return;
-      }
-
-      void apiJson<{ quote: Quote }>(
-        `/api/quotes/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}`,
-        { method: "DELETE" }
-      ).then((res) => {
-        if (res.data?.quote) {
-          setQuote((prev) => (prev ? { ...prev, totalAmount: res.data!.quote.totalAmount } : prev));
-          endSave(true);
-        } else {
-          setLineItems((prev) => [...prev, removed]);
-          setToast("Failed to remove item");
-          endSave(false);
-        }
-      });
+      if (!quote) return;
+      if (itemId.startsWith("temp_")) return;
+      removeItemMutation.mutate({ quoteId: quote.id, itemId });
     },
-    [lineItems, beginSave, endSave]
+    [quote, removeItemMutation]
   );
 
   const updateLineItemOptimistic = useCallback(
     (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => {
-      const id = quoteIdRef.current;
-      if (!id) return;
-
-      const prevItem = lineItems.find((i) => i.id === itemId);
-      if (!prevItem) return;
-
-      const updated = { ...prevItem, ...patch };
-      setLineItems((prev) => prev.map((i) => (i.id === itemId ? updated : i)));
-      beginSave();
-
-      if (itemId.startsWith("temp_")) {
-        endSave(true);
-        return;
-      }
-
-      void apiJson<{ quote: Quote }>(
-        `/api/quotes/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patch)
-        }
-      ).then((res) => {
-        if (res.data?.quote) {
-          setLineItems(res.data.quote.lineItems);
-          setQuote((prev) => (prev ? { ...prev, totalAmount: res.data!.quote.totalAmount } : prev));
-          endSave(true);
-        } else {
-          setLineItems((prev) => prev.map((i) => (i.id === itemId ? prevItem : i)));
-          if (process.env.NODE_ENV === "development") {
-            console.error("Update line item failed:", res.error);
-          }
-          setToast(res.error ?? "Failed to update item");
-          endSave(false);
-        }
-      });
+      if (!quote || itemId.startsWith("temp_")) return;
+      updateItemMutation.mutate({ quoteId: quote.id, itemId, data: patch });
     },
-    [lineItems, beginSave, endSave]
+    [quote, updateItemMutation]
   );
 
   const addDeliveryLine = useCallback(() => {
@@ -486,74 +302,24 @@ function QuoteBuilderPage() {
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic]);
 
   const addPackageToQuote = useCallback(
-    async (packageId: string) => {
-      const id = quoteIdRef.current;
-      if (!id) return;
-      setPackageActionLoading(true);
-      beginSave();
-      const res = await apiJson<{ quote: Quote }>(
-        `/api/quotes/${encodeURIComponent(id)}/package`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ packageId })
-        }
-      );
-      setPackageActionLoading(false);
-      if (res.data?.quote) {
-        applyQuote(res.data.quote);
-        endSave(true);
-      } else {
-        setToast(res.error ?? "Failed to add package");
-        endSave(false);
-      }
+    (packageId: string) => {
+      if (!quote) return;
+      addPackageMutation.mutate({ quoteId: quote.id, packageId });
     },
-    [applyQuote, beginSave, endSave]
+    [quote, addPackageMutation]
   );
 
-  const removePackageFromQuote = useCallback(async () => {
-    const id = quoteIdRef.current;
-    if (!id) return;
-    setPackageActionLoading(true);
-    beginSave();
-    const res = await apiJson<{ quote: Quote }>(
-      `/api/quotes/${encodeURIComponent(id)}/package`,
-      { method: "DELETE" }
-    );
-    setPackageActionLoading(false);
-    if (res.data?.quote) {
-      applyQuote(res.data.quote);
-      endSave(true);
-    } else {
-      setToast(res.error ?? "Failed to remove package");
-      endSave(false);
-    }
-  }, [applyQuote, beginSave, endSave]);
+  const removePackageFromQuote = useCallback(() => {
+    if (!quote) return;
+    removePackageMutation.mutate(quote.id);
+  }, [quote, removePackageMutation]);
 
   const updateGuestCount = useCallback(
-    async (nextGuestCount: number) => {
-      const id = quoteIdRef.current;
-      if (!id) return;
-      setGuestCountSaving(true);
-      beginSave();
-      const res = await apiJson<{ quote: Quote }>(
-        `/api/quotes/${encodeURIComponent(id)}/guest-count`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ guestCount: nextGuestCount })
-        }
-      );
-      setGuestCountSaving(false);
-      if (res.data?.quote) {
-        applyQuote(res.data.quote);
-        endSave(true);
-      } else {
-        setToast(res.error ?? "Failed to update guest count");
-        endSave(false);
-      }
+    (nextGuestCount: number) => {
+      if (!quote) return;
+      updateGuestCountMutation.mutate({ quoteId: quote.id, guestCount: nextGuestCount });
     },
-    [applyQuote, beginSave, endSave]
+    [quote, updateGuestCountMutation]
   );
 
   const handlePackageItemsChange = useCallback(
@@ -566,27 +332,22 @@ function QuoteBuilderPage() {
     []
   );
 
-  const saveDraft = useCallback(async () => {
-    const res = await patchQuoteBackground({ status: "draft" });
-    if (!res.error) setToast("Draft saved.");
-  }, [patchQuoteBackground]);
-
-  const duplicateQuote = useCallback(async () => {
-    const id = quoteIdRef.current;
-    if (!id) return;
-    setDuplicateLoading(true);
-    const res = await apiJson<{ quote: Quote }>(
-      `/api/quotes/${encodeURIComponent(id)}/duplicate`,
-      { method: "POST" }
+  const saveDraft = useCallback(() => {
+    if (!quote) return;
+    updateQuoteMutation.mutate(
+      { quoteId: quote.id, data: { status: "draft" } },
+      { onSuccess: () => toast.success("Draft saved.") }
     );
-    setDuplicateLoading(false);
-    if (res.data?.quote) {
-      applyQuote(res.data.quote);
-      setToast("Quote duplicated.");
-    } else {
-      setToast(res.error ?? "Failed to duplicate quote.");
-    }
-  }, [applyQuote]);
+  }, [quote, updateQuoteMutation]);
+
+  const duplicateQuote = useCallback(() => {
+    if (!quote) return;
+    duplicateMutation.mutate(quote.id);
+  }, [quote, duplicateMutation]);
+
+  const packageActionLoading = addPackageMutation.isPending || removePackageMutation.isPending;
+  const guestCountSaving = updateGuestCountMutation.isPending;
+  const duplicateLoading = duplicateMutation.isPending;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -805,19 +566,11 @@ function QuoteBuilderPage() {
 
   return (
     <div className="relative p-4 pb-28 md:p-6 lg:pb-24">
-      <SaveStatusIndicator
-        status={saveStatus}
-        onFadeComplete={() => setSaveStatus("idle")}
+      <SaveIndicator
+        isPending={isMutating || isSaving}
+        isSuccess={isSaveSuccess && !isMutating && !isSaving}
+        isError={isSaveError}
       />
-
-      {toast ? (
-        <div
-          role="status"
-          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border bg-card px-4 py-2 text-sm shadow-lg"
-        >
-          {toast}
-        </div>
-      ) : null}
 
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -892,7 +645,6 @@ function QuoteBuilderPage() {
                 onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
                 onUpdate={updateLineItemOptimistic}
                 onDelete={deleteLineItemOptimistic}
-                tempItemIds={tempItemIds}
                 includedPackageName={
                   includedItems !== undefined ? selectedPackage?.name : undefined
                 }
@@ -1063,7 +815,7 @@ function QuoteBuilderPage() {
               disabled={pdfLoading}
               onClick={async () => {
                 setPdfLoading(true);
-                setToast("Generating PDF — this can take up to a minute…");
+                toast.message("Generating PDF — this can take up to a minute…");
                 try {
                   const res = await fetch(
                     `/api/quotes/${encodeURIComponent(quote.id)}/pdf`,
@@ -1071,12 +823,12 @@ function QuoteBuilderPage() {
                   );
                   if (!res.ok) {
                     const body = (await res.json().catch(() => null)) as { error?: string } | null;
-                    setToast(parseApiError(body, res.status, res.statusText));
+                    toast.error(parseApiError(body, res.status, res.statusText));
                     return;
                   }
                   const blob = await res.blob();
                   if (blob.size === 0) {
-                    setToast("PDF download was empty. Please try again.");
+                    toast.error("PDF download was empty. Please try again.");
                     return;
                   }
                   const url = URL.createObjectURL(blob);
@@ -1085,9 +837,9 @@ function QuoteBuilderPage() {
                   a.download = "quote.pdf";
                   a.click();
                   setTimeout(() => URL.revokeObjectURL(url), 150);
-                  setToast("PDF downloaded!");
+                  toast.success("PDF downloaded!");
                 } catch {
-                  setToast("Failed to generate PDF.");
+                  toast.error("Failed to generate PDF.");
                 } finally {
                   setPdfLoading(false);
                 }
@@ -1105,7 +857,7 @@ function QuoteBuilderPage() {
               disabled={sendLoading}
               onClick={async () => {
                 setSendLoading(true);
-                setToast("Sending quote — generating PDF and email…");
+                toast.message("Sending quote — generating PDF and email…");
                 try {
                   const res = await fetch(
                     `/api/quotes/${encodeURIComponent(quote.id)}/send`,
@@ -1113,20 +865,19 @@ function QuoteBuilderPage() {
                   );
                   const body = (await res.json().catch(() => null)) as {
                     error?: string;
-                    quote?: Quote;
+                    quote?: { event?: { primaryGuest?: { email?: string | null } } };
                   } | null;
                   if (!res.ok) {
-                    setToast(parseApiError(body, res.status, res.statusText));
+                    toast.error(parseApiError(body, res.status, res.statusText));
                     return;
                   }
-                  if (body?.quote) applyQuote(body.quote);
                   const guestEmail =
                     body?.quote?.event?.primaryGuest?.email ??
                     quote.event?.primaryGuest?.email ??
                     "guest";
-                  setToast(`Quote sent to ${guestEmail}!`);
+                  toast.success(`Quote sent to ${guestEmail}!`);
                 } catch {
-                  setToast("Failed to send quote.");
+                  toast.error("Failed to send quote.");
                 } finally {
                   setSendLoading(false);
                 }

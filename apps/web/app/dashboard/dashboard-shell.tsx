@@ -14,12 +14,15 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { api } from "@/lib/api";
 import { getApiFeatures } from "@/lib/api-features";
 import { signOut, useSession } from "@/lib/auth-client";
+import { queryKeys } from "@/lib/query-keys";
 import type { ServerAuthUser } from "@/lib/server-auth-session";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +51,93 @@ const TITLE_MAP: Record<string, string> = {
   "/dashboard/settings": "Settings"
 };
 
+type NavItem = (typeof NAV)[number];
+
+function prefetchRoute(qc: ReturnType<typeof useQueryClient>, href: NavItem["href"]) {
+  switch (href) {
+    case "/dashboard":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.dashboard.stats(),
+        queryFn: api.dashboard.all,
+        staleTime: 60 * 1000
+      });
+      break;
+    case "/dashboard/leads":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.leads.listAll(),
+        queryFn: api.leads.listAll,
+        staleTime: 60 * 1000
+      });
+      break;
+    case "/dashboard/bookings":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.bookings.listAll(),
+        queryFn: api.bookings.listAll,
+        staleTime: 60 * 1000
+      });
+      void qc.prefetchQuery({
+        queryKey: queryKeys.bookings.stats(),
+        queryFn: api.bookings.stats,
+        staleTime: 60 * 1000
+      });
+      break;
+    case "/dashboard/events":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.events.listAll(),
+        queryFn: api.events.listAll,
+        staleTime: 60 * 1000
+      });
+      void qc.prefetchQuery({
+        queryKey: queryKeys.events.stats(),
+        queryFn: api.events.stats,
+        staleTime: 60 * 1000
+      });
+      break;
+    case "/dashboard/discussions":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.messages.conversationsAll(),
+        queryFn: api.messages.conversationsAll,
+        staleTime: 60 * 1000
+      });
+      break;
+    case "/dashboard/tasks":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.tasks.listAll(),
+        queryFn: api.tasks.listAll,
+        staleTime: 60 * 1000
+      });
+      void qc.prefetchQuery({
+        queryKey: queryKeys.tasks.stats(),
+        queryFn: api.tasks.stats,
+        staleTime: 60 * 1000
+      });
+      break;
+    case "/dashboard/calendar":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.calendar.init(),
+        queryFn: api.calendar.init,
+        staleTime: 5 * 60 * 1000
+      });
+      break;
+    case "/dashboard/reports": {
+      const now = new Date();
+      void qc.prefetchQuery({
+        queryKey: queryKeys.reports.summary(now.getFullYear(), now.getMonth() + 1),
+        queryFn: () => api.reports.summary(now.getFullYear(), now.getMonth() + 1),
+        staleTime: 5 * 60 * 1000
+      });
+      break;
+    }
+    case "/dashboard/settings":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.settings.profile(),
+        queryFn: api.profile.caterer,
+        staleTime: 5 * 60 * 1000
+      });
+      break;
+  }
+}
+
 function initialsFromUser(name: string | null | undefined, email: string | undefined) {
   if (name?.trim()) {
     const parts = name.trim().split(/\s+/);
@@ -59,25 +149,52 @@ function initialsFromUser(name: string | null | undefined, email: string | undef
   return "?";
 }
 
+function NavLink({
+  href,
+  label,
+  icon: Icon,
+  active,
+  onNavigate
+}: {
+  href: NavItem["href"];
+  label: string;
+  icon: NavItem["icon"];
+  active: boolean;
+  onNavigate?: () => void;
+}) {
+  const qc = useQueryClient();
+
+  return (
+    <Link
+      href={href}
+      onClick={onNavigate}
+      onMouseEnter={() => prefetchRoute(qc, href)}
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-white/90 transition-colors hover:bg-white/10",
+        active && "bg-white/15 text-white"
+      )}
+    >
+      <Icon className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
+      {label}
+    </Link>
+  );
+}
+
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
     <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-      {NAV.map(({ href, label, icon: Icon }) => {
+      {NAV.map(({ href, label, icon }) => {
         const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
         return (
-          <Link
+          <NavLink
             key={href}
             href={href}
-            onClick={onNavigate}
-            className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-white/90 transition-colors hover:bg-white/10",
-              active && "bg-white/15 text-white"
-            )}
-          >
-            <Icon className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
-            {label}
-          </Link>
+            label={label}
+            icon={icon}
+            active={active}
+            onNavigate={onNavigate}
+          />
         );
       })}
     </nav>
@@ -86,6 +203,8 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 
 function MobileBottomNav() {
   const pathname = usePathname();
+  const qc = useQueryClient();
+
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-50 flex border-t border-white/10 bg-[#1B2A4A] px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 md:hidden"
@@ -98,6 +217,7 @@ function MobileBottomNav() {
             <Link
               key={href}
               href={href}
+              onMouseEnter={() => prefetchRoute(qc, href)}
               className={cn(
                 "flex min-w-[3.25rem] flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-medium text-white/80",
                 active && "text-white"
@@ -124,7 +244,7 @@ export function DashboardShell({
   children,
   initialUser
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   initialUser: ServerAuthUser;
 }) {
   const pathname = usePathname();
@@ -151,7 +271,6 @@ export function DashboardShell({
 
   return (
     <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900">
-      {/* Desktop sidebar */}
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-[#1B2A4A] text-white md:flex">
         <div className="border-b border-white/10 px-5 py-6">
           <Link href="/dashboard" className="block">

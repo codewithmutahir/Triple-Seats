@@ -3,7 +3,7 @@
 import { format } from "date-fns";
 import { BookCheck, Download, Inbox } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,23 +24,16 @@ import { formatEventTimeRange } from "@/lib/event-datetime";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
-  CLIENT_LIST_FETCH_SIZE,
-  fetchAllListPages,
   filterBookingItems,
   LIST_PAGE_SIZE,
   paginateItems
 } from "@/lib/client-list-filter";
-import { useAppStore, type BookingsListResponse, type BookingsStats } from "@/lib/stores/app-store";
-import { loadWithCache } from "@/lib/stores/cache-helpers";
-import { parseApiError } from "@/lib/user-facing-error";
+import { useBookingsQuery } from "@/hooks/use-list-queries";
+import { usePrefetchOnHover } from "@/hooks/use-prefetch";
+import type { BookingsListResponse, BookingsStats } from "@/lib/stores/app-store";
 import { browserTimer } from "@/lib/perf";
 
-type ListResponse = BookingsListResponse;
-type StatsResponse = BookingsStats;
-
-type BookingRow = ListResponse["items"][number];
-
-const ALL_BOOKINGS_CACHE_KEY = "__all__";
+type BookingRow = BookingsListResponse["items"][number];
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
@@ -100,26 +93,6 @@ function csvEscape(value: string | number | null | undefined) {
   return s;
 }
 
-async function fetchBookings(
-  params: URLSearchParams
-): Promise<ListResponse | { error: string; status: number }> {
-  const res = await fetch(`/api/bookings?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText), status: res.status };
-  }
-  return (await res.json()) as ListResponse;
-}
-
-async function fetchStats(): Promise<StatsResponse | { error: string; status: number }> {
-  const res = await fetch("/api/bookings/stats", { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText), status: res.status };
-  }
-  return (await res.json()) as StatsResponse;
-}
-
 function yearOptions() {
   const current = new Date().getFullYear();
   const years = [{ value: "all", label: "All years" }];
@@ -127,6 +100,81 @@ function yearOptions() {
     years.push({ value: String(y), label: String(y) });
   }
   return years;
+}
+
+function BookingTableRow({ row }: { row: BookingRow }) {
+  const onHover = usePrefetchOnHover(row.eventId);
+
+  return (
+    <TableRow onMouseEnter={onHover}>
+      <TableCell>
+        <div className="font-medium">{row.guestName}</div>
+        {row.guestEmail ? (
+          <div className="text-xs text-muted-foreground">{row.guestEmail}</div>
+        ) : null}
+        <div className="mt-1 sm:hidden">
+          <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
+            {row.eventTypeLabel ?? formatEventType(row.eventType)}
+          </Badge>
+        </div>
+      </TableCell>
+      <TableCell className="hidden sm:table-cell">
+        <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
+          {row.eventTypeLabel ?? formatEventType(row.eventType)}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <Badge
+          variant="outline"
+          className={cn(
+            "font-semibold",
+            row.customerType === "b2b"
+              ? "border-blue-300 bg-blue-50 text-blue-800"
+              : "border-slate-300 bg-slate-100 text-slate-700"
+          )}
+        >
+          {formatCustomerType(row.customerType)}
+        </Badge>
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-sm">
+        {formatBookingDate(row.eventDate)}
+      </TableCell>
+      <TableCell className="hidden lg:table-cell whitespace-nowrap text-sm text-muted-foreground">
+        {formatEventTimeRange(row.startTime, row.endTime)}
+      </TableCell>
+      <TableCell className="hidden md:table-cell max-w-[180px] truncate text-sm">
+        {row.location}
+      </TableCell>
+      <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
+      <TableCell className="hidden lg:table-cell text-right text-sm">
+        {row.quoteTotal != null ? money.format(row.quoteTotal) : "No quote"}
+      </TableCell>
+      <TableCell>
+        <Badge variant={depositVariant(row.depositStatus)} className="capitalize">
+          {row.depositStatus === "paid" ? "Paid" : "Pending"}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex flex-col items-end gap-1 sm:flex-row sm:justify-end">
+          <Button variant="outline" size="sm" asChild onMouseEnter={onHover}>
+            <Link href={`/dashboard/events?eventId=${encodeURIComponent(row.eventId)}`}>
+              View Event
+            </Link>
+          </Button>
+          {row.quoteId ? (
+            <Button variant="ghost" size="sm" asChild onMouseEnter={onHover}>
+              <Link href={`/dashboard/quotes?eventId=${encodeURIComponent(row.eventId)}`}>
+                View Quote
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+      </TableCell>
+    </TableRow>
+  );
 }
 
 export default function BookingsPage() {
@@ -144,20 +192,13 @@ export default function BookingsPage() {
   const [year, setYear] = useState("all");
   const [page, setPage] = useState(1);
 
-  const [allBookings, setAllBookings] = useState<BookingRow[]>(
-    () => useAppStore.getState().peekBookingsCache(ALL_BOOKINGS_CACHE_KEY)?.items ?? []
-  );
-  const [stats, setStats] = useState<StatsResponse | null>(() =>
-    useAppStore.getState().peekBookingsStats()
-  );
-  const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekBookingsCache(ALL_BOOKINGS_CACHE_KEY) == null
-  );
-  const [statsLoading, setStatsLoading] = useState(
-    () => useAppStore.getState().peekBookingsStats() == null
-  );
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { listQuery, statsQuery } = useBookingsQuery();
+  const allBookings = listQuery.data ?? [];
+  const stats: BookingsStats | null = statsQuery.data ?? null;
+  const loading = listQuery.isLoading;
+  const statsLoading = statsQuery.isLoading;
+  const refreshing = listQuery.isFetching && !listQuery.isLoading;
+  const error = listQuery.error?.message ?? statsQuery.error?.message ?? null;
 
   const years = useMemo(() => yearOptions(), []);
 
@@ -182,72 +223,9 @@ export default function BookingsPage() {
     [filteredBookings, page]
   );
 
-  const loadAllBookings = useCallback(async () => {
-    const store = useAppStore.getState();
-    setError(null);
-    perfRef.current?.step("fetch:start");
-
-    await loadWithCache({
-      peek: () => store.peekBookingsCache(ALL_BOOKINGS_CACHE_KEY),
-      getFresh: () => store.getBookingsCache(ALL_BOOKINGS_CACHE_KEY),
-      set: (result) => store.setBookingsCache(ALL_BOOKINGS_CACHE_KEY, result),
-      fetch: async () => {
-        const result = await fetchAllListPages<BookingRow>(
-          async (pageNum) => {
-            const p = new URLSearchParams();
-            p.set("page", String(pageNum));
-            p.set("status", "all");
-            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
-            return fetchBookings(p);
-          },
-          CLIENT_LIST_FETCH_SIZE
-        );
-        if ("error" in result) throw new Error(result.error);
-        return {
-          items: result.items,
-          total: result.total,
-          page: 1,
-          pageSize: LIST_PAGE_SIZE,
-          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE))
-        };
-      },
-      onData: (result) => {
-        setAllBookings(result.items);
-        perfRef.current?.step("fetch:done");
-      },
-      setLoading,
-      setRefreshing
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setAllBookings([]);
-    });
-  }, []);
-
   useEffect(() => {
-    void loadAllBookings();
-  }, [loadAllBookings]);
-
-  const loadStats = useCallback(async () => {
-    const store = useAppStore.getState();
-    await loadWithCache({
-      peek: () => store.peekBookingsStats(),
-      getFresh: () => store.getBookingsStats(),
-      set: (result) => store.setBookingsStats(result),
-      fetch: async () => {
-        const result = await fetchStats();
-        if ("error" in result) throw new Error(result.error);
-        return result;
-      },
-      onData: setStats,
-      setLoading: setStatsLoading
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-    });
-  }, []);
-
-  useEffect(() => {
-    void loadStats();
-  }, [loadStats]);
+    if (!loading) perfRef.current?.step("fetch:done");
+  }, [loading]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading) return;
@@ -485,78 +463,7 @@ export default function BookingsPage() {
                         </TableRow>
                       ))
                     : data.items.map((row) => (
-                        <TableRow key={row.eventId}>
-                          <TableCell>
-                            <div className="font-medium">{row.guestName}</div>
-                            {row.guestEmail ? (
-                              <div className="text-xs text-muted-foreground">{row.guestEmail}</div>
-                            ) : null}
-                            <div className="mt-1 sm:hidden">
-                              <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
-                                {row.eventTypeLabel ?? formatEventType(row.eventType)}
-                              </Badge>
-                            </div>
-                          </TableCell>
-                          <TableCell className="hidden sm:table-cell">
-                            <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
-                              {row.eventTypeLabel ?? formatEventType(row.eventType)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "font-semibold",
-                                row.customerType === "b2b"
-                                  ? "border-blue-300 bg-blue-50 text-blue-800"
-                                  : "border-slate-300 bg-slate-100 text-slate-700"
-                              )}
-                            >
-                              {formatCustomerType(row.customerType)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-sm">
-                            {formatBookingDate(row.eventDate)}
-                          </TableCell>
-                          <TableCell className="hidden lg:table-cell whitespace-nowrap text-sm text-muted-foreground">
-                            {formatEventTimeRange(row.startTime, row.endTime)}
-                          </TableCell>
-                          <TableCell className="hidden md:table-cell max-w-[180px] truncate text-sm">
-                            {row.location}
-                          </TableCell>
-                          <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
-                          <TableCell className="hidden lg:table-cell text-right text-sm">
-                            {row.quoteTotal != null ? money.format(row.quoteTotal) : "No quote"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={depositVariant(row.depositStatus)} className="capitalize">
-                              {row.depositStatus === "paid" ? "Paid" : "Pending"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex flex-col items-end gap-1 sm:flex-row sm:justify-end">
-                              <Button variant="outline" size="sm" asChild>
-                                <Link
-                                  href={`/dashboard/events?eventId=${encodeURIComponent(row.eventId)}`}
-                                >
-                                  View Event
-                                </Link>
-                              </Button>
-                              {row.quoteId ? (
-                                <Button variant="ghost" size="sm" asChild>
-                                  <Link
-                                    href={`/dashboard/quotes?eventId=${encodeURIComponent(row.eventId)}`}
-                                  >
-                                    View Quote
-                                  </Link>
-                                </Button>
-                              ) : null}
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                        <BookingTableRow key={row.eventId} row={row} />
                       ))}
                 </TableBody>
               </Table>

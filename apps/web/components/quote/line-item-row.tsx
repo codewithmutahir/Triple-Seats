@@ -14,7 +14,6 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { formatUsd, lineItemTotal } from "@/lib/quote-totals";
-import { cn } from "@/lib/utils";
 
 type LineItemRowProps = {
   item: QuoteLineItem;
@@ -22,10 +21,9 @@ type LineItemRowProps = {
   category?: ItemCategory;
   onUpdate: (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => void;
   onDelete: (itemId: string) => void;
-  isTemp?: boolean;
 };
 
-export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, isTemp }: LineItemRowProps) {
+export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: LineItemRowProps) {
   const [editingField, setEditingField] = useState<"quantity" | "unitPrice" | null>(null);
   const [qtyDraft, setQtyDraft] = useState(String(item.quantity));
   const [priceDraft, setPriceDraft] = useState(String(item.unitPrice));
@@ -75,12 +73,7 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, is
           : `${formatUsd(item.unitPrice)} × ${item.quantity} = ${formatUsd(total)}`;
 
   return (
-    <li
-      className={cn(
-        "group rounded-md border bg-muted/20 px-3 py-2 text-sm transition-opacity",
-        isTemp && "opacity-70"
-      )}
-    >
+    <li className="group rounded-md border bg-muted/20 px-3 py-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-[100px] flex-1 font-medium">{item.name}</span>
 
