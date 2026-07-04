@@ -1,0 +1,239 @@
+"use client";
+
+import { Check, ChevronDown, Plus } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+
+import type { MenuItem, PackageIncludedItem } from "@/components/quote/types";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { formatUsd } from "@/lib/quote-totals";
+import { cn } from "@/lib/utils";
+
+const CATEGORY_LABELS: Record<string, string> = {
+  Appetizer: "appetizer",
+  "Main Course": "main_course",
+  BBQ: "bbq",
+  Dessert: "dessert"
+};
+
+function isCategoryLabel(label: string): boolean {
+  return label in CATEGORY_LABELS;
+}
+
+type PackageItemSelectorProps = {
+  includedItem: PackageIncludedItem;
+  catalogItems: MenuItem[];
+  selectedItemIds: string[];
+  onSelect: (itemId: string) => void;
+  onDeselect: (itemId: string) => void;
+  disabled?: boolean;
+};
+
+export function PackageItemSelector({
+  includedItem,
+  catalogItems,
+  selectedItemIds,
+  onSelect,
+  onDeselect,
+  disabled
+}: PackageItemSelectorProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const allowedCount = includedItem.quantity;
+  const currentCount = selectedItemIds.length;
+  const canSelectMore = currentCount < allowedCount;
+  const isCategory = isCategoryLabel(includedItem.label);
+
+  const selectedItems = useMemo(
+    () => catalogItems.filter((item) => selectedItemIds.includes(item.id)),
+    [catalogItems, selectedItemIds]
+  );
+
+  const availableItems = useMemo(
+    () => catalogItems.filter((item) => !selectedItemIds.includes(item.id)),
+    [catalogItems, selectedItemIds]
+  );
+
+  const handleToggle = useCallback(
+    (itemId: string) => {
+      if (selectedItemIds.includes(itemId)) {
+        onDeselect(itemId);
+      } else if (canSelectMore) {
+        onSelect(itemId);
+      }
+    },
+    [selectedItemIds, canSelectMore, onSelect, onDeselect]
+  );
+
+  if (!isCategory) {
+    return (
+      <li className="flex items-center justify-between gap-2 rounded-md border bg-emerald-50/50 px-3 py-2 text-sm">
+        <span className="flex items-center gap-2 font-medium text-emerald-900">
+          <Check className="h-4 w-4 text-emerald-600" aria-hidden />
+          {includedItem.label}
+          {includedItem.quantity > 1 ? ` × ${includedItem.quantity}` : ""}
+        </span>
+        <span className="text-xs text-muted-foreground">Included in package</span>
+      </li>
+    );
+  }
+
+  return (
+    <li className="rounded-md border bg-muted/30">
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/50"
+            disabled={disabled}
+          >
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-foreground">
+                {includedItem.label}
+              </span>
+              <Badge
+                variant={currentCount >= allowedCount ? "default" : "secondary"}
+                className={cn(
+                  "text-xs",
+                  currentCount >= allowedCount
+                    ? "bg-emerald-600 hover:bg-emerald-600"
+                    : ""
+                )}
+              >
+                {currentCount}/{allowedCount} selected
+              </Badge>
+            </div>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 transition-transform duration-200",
+                isOpen && "rotate-180"
+              )}
+            />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="space-y-2 border-t px-3 py-2">
+            {selectedItems.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Selected items:
+                </p>
+                {selectedItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleToggle(item.id)}
+                    className="flex w-full items-center justify-between gap-2 rounded-md border bg-emerald-50 px-2 py-1.5 text-sm transition-colors hover:bg-emerald-100"
+                  >
+                    <span className="flex items-center gap-2 font-medium text-emerald-900">
+                      <Check className="h-4 w-4 text-emerald-600" />
+                      {item.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      Click to remove
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {canSelectMore && availableItems.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">
+                  {selectedItems.length > 0
+                    ? `Select ${allowedCount - currentCount} more:`
+                    : `Select ${allowedCount} item${allowedCount > 1 ? "s" : ""}:`}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {availableItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleToggle(item.id)}
+                      className="flex items-center gap-1 rounded-full border bg-background px-2 py-1 text-xs transition-colors hover:bg-primary/10 hover:border-primary"
+                    >
+                      <Plus className="h-3 w-3" />
+                      {item.name}
+                      {item.defaultPrice != null && (
+                        <span className="text-muted-foreground">
+                          {formatUsd(item.defaultPrice)}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!canSelectMore && (
+              <p className="text-xs text-emerald-700">
+                All {allowedCount} item{allowedCount > 1 ? "s" : ""} selected
+              </p>
+            )}
+
+            {availableItems.length === 0 && selectedItems.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No items available in catalog for this category.
+              </p>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </li>
+  );
+}
+
+type PackageItemsSectionProps = {
+  includedItems: PackageIncludedItem[];
+  catalogItems: MenuItem[];
+  packageName: string;
+  selectedPackageItems: Record<string, string[]>;
+  onPackageItemsChange: (selections: Record<string, string[]>) => void;
+  disabled?: boolean;
+};
+
+export function PackageItemsSection({
+  includedItems,
+  catalogItems,
+  packageName,
+  selectedPackageItems,
+  onPackageItemsChange,
+  disabled
+}: PackageItemsSectionProps) {
+  const handleSelect = useCallback(
+    (itemLabel: string, menuItemId: string) => {
+      const current = selectedPackageItems[itemLabel] ?? [];
+      const updated = { ...selectedPackageItems, [itemLabel]: [...current, menuItemId] };
+      onPackageItemsChange(updated);
+    },
+    [selectedPackageItems, onPackageItemsChange]
+  );
+
+  const handleDeselect = useCallback(
+    (itemLabel: string, menuItemId: string) => {
+      const current = selectedPackageItems[itemLabel] ?? [];
+      const updated = {
+        ...selectedPackageItems,
+        [itemLabel]: current.filter((id) => id !== menuItemId)
+      };
+      onPackageItemsChange(updated);
+    },
+    [selectedPackageItems, onPackageItemsChange]
+  );
+
+  return (
+    <ul className="space-y-2">
+      {includedItems.map((item) => (
+        <PackageItemSelector
+          key={item.id}
+          includedItem={item}
+          catalogItems={catalogItems}
+          selectedItemIds={selectedPackageItems[item.label] ?? []}
+          onSelect={(menuItemId) => handleSelect(item.label, menuItemId)}
+          onDeselect={(menuItemId) => handleDeselect(item.label, menuItemId)}
+          disabled={disabled}
+        />
+      ))}
+    </ul>
+  );
+}

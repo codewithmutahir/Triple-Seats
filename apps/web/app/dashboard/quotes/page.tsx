@@ -151,6 +151,10 @@ function QuoteBuilderPage() {
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, true]))
   );
 
+  const [packageItemSelections, setPackageItemSelections] = useState<
+    Record<string, Record<string, string[]>>
+  >({});
+
   const pendingSaves = useRef(0);
   const quoteIdRef = useRef<string | null>(null);
 
@@ -542,6 +546,16 @@ function QuoteBuilderPage() {
     [applyQuote, beginSave, endSave]
   );
 
+  const handlePackageItemsChange = useCallback(
+    (category: string, selections: Record<string, string[]>) => {
+      setPackageItemSelections((prev) => ({
+        ...prev,
+        [category]: selections
+      }));
+    },
+    []
+  );
+
   const saveDraft = useCallback(async () => {
     const res = await patchQuoteBackground({ status: "draft" });
     if (!res.error) setToast("Draft saved.");
@@ -874,6 +888,11 @@ function QuoteBuilderPage() {
                 }
                 includedItems={includedItems}
                 catalogItems={menuItemsByCategory[section.category]}
+                customerType={customerType}
+                selectedPackageItems={packageItemSelections[section.category]}
+                onPackageItemsChange={(selections) =>
+                  handlePackageItemsChange(section.category, selections)
+                }
               />
             );
           })}

@@ -16,6 +16,7 @@ import { getResend } from "./lib/mail";
 import { authLimiter, generalLimiter } from "./lib/rate-limit";
 import { bookingsRouter } from "./routes/bookings";
 import { calendarRouter } from "./routes/calendar";
+import { catererRouter } from "./routes/caterer";
 import { caterersRouter } from "./routes/caterers";
 import { dashboardRouter } from "./routes/dashboard";
 import { eventsRouter } from "./routes/events";
@@ -143,6 +144,7 @@ function createApp() {
   app.use("/api/auth", authLimiter, toNodeHandler(auth));
 
   app.use("/api", generalLimiter);
+  app.use("/api/caterer", catererRouter);
   app.use("/api/caterers", caterersRouter);
   app.use("/api/dashboard", dashboardRouter);
   app.use("/api/bookings", bookingsRouter);
