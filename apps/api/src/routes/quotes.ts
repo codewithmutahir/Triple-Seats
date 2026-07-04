@@ -17,6 +17,7 @@ import { getSession, SessionError } from "../lib/session";
 import { timer } from "../lib/perf";
 import { seedMenuItemsForCaterer } from "../lib/seed-menu-items";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
+import { parsePackageSelections } from "../lib/package-selections";
 import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
 
 const router = Router();
@@ -103,37 +104,68 @@ async function updateGuestCountAndPackageTiers(
 
   const customerType = quote.event?.customerType ?? "b2c";
 
-  await prisma.event.update({
-    where: { id: quote.eventId },
-    data: { guestCountEstimate: guestCount }
-  });
-
-  for (const item of quote.lineItems) {
-    if (item.unitType !== "tiered_per_head") continue;
-
-    const pkg = item.packageId
-      ? await prisma.cateringPackage.findFirst({
-          where: { id: item.packageId, catererId },
-          include: { tiers: { orderBy: { minGuests: "asc" } } }
-        })
-      : null;
-
-    const tiers = pkg?.tiers ?? item.package?.tiers ?? [];
-    const activeTier = tiers.length ? getActiveTier(tiers, guestCount, customerType) : null;
-    if (!activeTier) continue;
-
-    await prisma.quoteLineItem.update({
-      where: { id: item.id },
-      data: {
-        appliedTier: activeTier.pricePerHead,
-        appliedTierLabel: formatTierLabel(activeTier),
-        unitPrice: activeTier.pricePerHead,
-        notes: formatTierLabel(activeTier)
-      }
+  return prisma.$transaction(async (tx) => {
+    await tx.event.update({
+      where: { id: quote.eventId! },
+      data: { guestCountEstimate: guestCount }
     });
-  }
 
-  return persistQuoteTotals(quoteId);
+    const packageLineItems = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+    const packageIds = [
+      ...new Set(packageLineItems.map((item) => item.packageId).filter(Boolean))
+    ] as string[];
+
+    const packages =
+      packageIds.length > 0
+        ? await tx.cateringPackage.findMany({
+            where: { id: { in: packageIds }, catererId },
+            include: { tiers: { orderBy: { minGuests: "asc" } } }
+          })
+        : [];
+    const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
+
+    for (const item of packageLineItems) {
+      const pkg = item.packageId ? packageById.get(item.packageId) : null;
+      const tiers = pkg?.tiers ?? item.package?.tiers ?? [];
+      const activeTier = tiers.length ? getActiveTier(tiers, guestCount, customerType) : null;
+
+      await tx.quoteLineItem.update({
+        where: { id: item.id },
+        data: activeTier
+          ? {
+              appliedTier: activeTier.pricePerHead,
+              appliedTierLabel: formatTierLabel(activeTier),
+              unitPrice: activeTier.pricePerHead,
+              notes: formatTierLabel(activeTier)
+            }
+          : {
+              appliedTier: null,
+              appliedTierLabel: null,
+              unitPrice: 0,
+              notes: null
+            }
+      });
+    }
+
+    const refreshed = await tx.quote.findUnique({
+      where: { id: quoteId },
+      include: { lineItems: true, event: true }
+    });
+    if (!refreshed) return null;
+
+    const { grandTotal } = calculateQuoteTotals(
+      refreshed.lineItems,
+      refreshed.taxRate,
+      refreshed.depositPct,
+      guestCount
+    );
+
+    return tx.quote.update({
+      where: { id: quoteId },
+      data: { totalAmount: grandTotal },
+      include: quoteInclude
+    });
+  });
 }
 
 function serializeBuilderPackage(
@@ -441,6 +473,7 @@ router.patch("/:id", async (req: Request, res: Response) => {
       dueDate?: string | null;
       notes?: string | null;
       status?: string;
+      packageSelections?: unknown;
     };
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -487,6 +520,13 @@ router.patch("/:id", async (req: Request, res: Response) => {
           throw Object.assign(new Error("Invalid status."), { status: 400 });
         }
         data.status = status;
+      }
+      if (body.packageSelections !== undefined) {
+        const packageSelections = parsePackageSelections(body.packageSelections);
+        if (packageSelections === null) {
+          throw Object.assign(new Error("Invalid packageSelections."), { status: 400 });
+        }
+        data.packageSelections = packageSelections;
       }
 
       const newTaxRate =
@@ -739,65 +779,98 @@ router.post("/:id/package", async (req: Request, res: Response) => {
     const { caterer } = await getSession(req);
     const quoteId = paramId(req);
     const body = req.body as { packageId?: string };
+    const perf = timer(`quote:add-package:${quoteId}`);
 
     if (!body.packageId?.trim()) {
       return res.status(400).json({ error: "packageId is required." });
     }
 
-    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
-    if (!quote) {
-      return res.status(404).json({ error: "Quote not found." });
-    }
-
-    const pkg = await prisma.cateringPackage.findFirst({
-      where: { id: body.packageId, catererId: caterer.id },
-      include: {
-        tiers: { orderBy: { minGuests: "asc" } },
-        items: { orderBy: { sortOrder: "asc" } }
-      }
-    });
-    if (!pkg) {
-      return res.status(404).json({ error: "Package not found." });
-    }
-
-    const guestCount = quote.event?.guestCountEstimate ?? 0;
-    const customerType = quote.event?.customerType ?? "b2c";
-    if (guestCount < pkg.minGuests) {
-      return res.status(400).json({
-        error: `Minimum ${pkg.minGuests} guests required for this package.`
+    const updated = await prisma.$transaction(async (tx) => {
+      const quote = await tx.quote.findFirst({
+        where: { id: quoteId, catererId: caterer.id },
+        include: {
+          lineItems: true,
+          event: { select: { guestCountEstimate: true, customerType: true } }
+        }
       });
-    }
-
-    const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
-    if (!activeTier) {
-      return res.status(400).json({ error: "No pricing tier matches the guest count." });
-    }
-
-    const existingPackageLine = quote.lineItems.find(
-      (item) => item.unitType === "tiered_per_head"
-    );
-    if (existingPackageLine) {
-      await prisma.quoteLineItem.delete({ where: { id: existingPackageLine.id } });
-    }
-
-    await prisma.quoteLineItem.create({
-      data: {
-        quoteId,
-        packageId: pkg.id,
-        category: "other",
-        name: pkg.name,
-        quantity: 1,
-        unitPrice: activeTier.pricePerHead,
-        unitType: "tiered_per_head",
-        appliedTier: activeTier.pricePerHead,
-        appliedTierLabel: formatTierLabel(activeTier),
-        notes: formatTierLabel(activeTier)
+      if (!quote) {
+        throw Object.assign(new Error("Quote not found."), { status: 404 });
       }
+
+      const pkg = await tx.cateringPackage.findFirst({
+        where: { id: body.packageId!, catererId: caterer.id },
+        include: {
+          tiers: { orderBy: { minGuests: "asc" } },
+          items: { orderBy: { sortOrder: "asc" } }
+        }
+      });
+      if (!pkg) {
+        throw Object.assign(new Error("Package not found."), { status: 404 });
+      }
+
+      const guestCount = quote.event?.guestCountEstimate ?? 0;
+      const customerType = quote.event?.customerType ?? "b2c";
+      const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
+      if (!activeTier) {
+        throw Object.assign(new Error("No pricing tier matches the guest count."), { status: 400 });
+      }
+
+      const existingPackageLine = quote.lineItems.find(
+        (item) => item.unitType === "tiered_per_head"
+      );
+      if (existingPackageLine) {
+        await tx.quoteLineItem.delete({ where: { id: existingPackageLine.id } });
+      }
+
+      await tx.quoteLineItem.create({
+        data: {
+          quoteId,
+          packageId: pkg.id,
+          category: "other",
+          name: pkg.name,
+          quantity: 1,
+          unitPrice: activeTier.pricePerHead,
+          unitType: "tiered_per_head",
+          appliedTier: activeTier.pricePerHead,
+          appliedTierLabel: formatTierLabel(activeTier),
+          notes: formatTierLabel(activeTier)
+        }
+      });
+
+      const lineItems = await tx.quoteLineItem.findMany({
+        where: { quoteId },
+        include: {
+          package: { include: { tiers: { orderBy: { minGuests: "asc" } } } }
+        }
+      });
+
+      const { grandTotal } = calculateQuoteTotals(
+        lineItems,
+        quote.taxRate,
+        quote.depositPct,
+        guestCount
+      );
+
+      return tx.quote.update({
+        where: { id: quoteId },
+        data: { totalAmount: grandTotal },
+        include: quoteInclude
+      });
     });
 
-    const updated = await persistQuoteTotals(quoteId);
+    perf.step("db:transaction");
+    perf.end();
+
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
   } catch (e) {
+    const status =
+      e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
+    if (status === 404) {
+      return res.status(404).json({ error: e instanceof Error ? e.message : "Not found." });
+    }
+    if (status === 400) {
+      return res.status(400).json({ error: e instanceof Error ? e.message : "Invalid request." });
+    }
     return handleSessionError(res, e);
   }
 });
@@ -806,21 +879,53 @@ router.delete("/:id/package", async (req: Request, res: Response) => {
   try {
     const { caterer } = await getSession(req);
     const quoteId = paramId(req);
+    const perf = timer(`quote:remove-package:${quoteId}`);
 
-    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
-    if (!quote) {
-      return res.status(404).json({ error: "Quote not found." });
-    }
+    const updated = await prisma.$transaction(async (tx) => {
+      const quote = await tx.quote.findFirst({
+        where: { id: quoteId, catererId: caterer.id },
+        include: {
+          lineItems: true,
+          event: { select: { guestCountEstimate: true } }
+        }
+      });
+      if (!quote) {
+        throw Object.assign(new Error("Quote not found."), { status: 404 });
+      }
 
-    const packageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
-    if (!packageLine) {
-      return res.status(404).json({ error: "No package on this quote." });
-    }
+      const packageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
+      if (!packageLine) {
+        throw Object.assign(new Error("No package on this quote."), { status: 404 });
+      }
 
-    await prisma.quoteLineItem.delete({ where: { id: packageLine.id } });
-    const updated = await persistQuoteTotals(quoteId);
+      await tx.quoteLineItem.delete({ where: { id: packageLine.id } });
+
+      const lineItems = await tx.quoteLineItem.findMany({ where: { quoteId } });
+      const guestCount = quote.event?.guestCountEstimate ?? 0;
+      const { grandTotal } = calculateQuoteTotals(
+        lineItems,
+        quote.taxRate,
+        quote.depositPct,
+        guestCount
+      );
+
+      return tx.quote.update({
+        where: { id: quoteId },
+        data: { totalAmount: grandTotal },
+        include: quoteInclude
+      });
+    });
+
+    perf.step("db:transaction");
+    perf.end();
+
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
   } catch (e) {
+    const status =
+      e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
+    if (status === 404) {
+      return res.status(404).json({ error: e instanceof Error ? e.message : "Not found." });
+    }
     return handleSessionError(res, e);
   }
 });
@@ -844,6 +949,7 @@ router.post("/:id/duplicate", async (req: Request, res: Response) => {
         taxRate: source.taxRate,
         depositPct: source.depositPct,
         dueDate: source.dueDate,
+        packageSelections: source.packageSelections ?? undefined,
         totalAmount: 0,
         lineItems: {
           create: source.lineItems.map((item) => ({

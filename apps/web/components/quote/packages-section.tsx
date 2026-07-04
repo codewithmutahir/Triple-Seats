@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, ChevronDown, Info, Package } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, ChevronDown, Info, Loader2, Package } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDebouncedCallback } from "@/lib/use-debounce";
 import {
   formatTierRange,
   formatUsd,
@@ -26,17 +27,22 @@ type PackagesSectionProps = {
   customerType?: "b2b" | "b2c";
   packageLineItem: QuoteLineItem | null;
   loading?: boolean;
-  guestCountSaving?: boolean;
+  guestCountUpdating?: boolean;
   onGuestCountChange: (guestCount: number) => void;
   onAdd: (packageId: string) => void;
   onRemove: () => void;
-  actionLoading?: boolean;
 };
 
 function formatIncludedItems(items: CateringPackage["items"]): string {
   return items
     .map((item) => (item.quantity > 1 ? `${item.label} ×${item.quantity}` : item.label))
     .join(", ");
+}
+
+function parseGuestInput(value: string): number | null {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
 }
 
 function PackageCard({
@@ -47,8 +53,7 @@ function PackageCard({
   disabled,
   onAdd,
   onRemove,
-  onSelectTier,
-  actionLoading
+  onSelectTier
 }: {
   pkg: CateringPackage;
   guestCount: number;
@@ -58,7 +63,6 @@ function PackageCard({
   onAdd: () => void;
   onRemove: () => void;
   onSelectTier: (guestCount: number) => void;
-  actionLoading?: boolean;
 }) {
   const [tiersOpen, setTiersOpen] = useState(false);
   const [itemsOpen, setItemsOpen] = useState(false);
@@ -87,9 +91,7 @@ function PackageCard({
               {formatUsd(activeTier.pricePerHead)}
               <span className="text-sm font-normal text-muted-foreground">/person</span>
             </p>
-            <p className="text-xs text-muted-foreground">
-              ({formatTierRange(activeTier)} guests)
-            </p>
+            <p className="text-xs text-muted-foreground">({formatTierRange(activeTier)} guests)</p>
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">No tier for current guest count</p>
@@ -158,7 +160,6 @@ function PackageCard({
             type="button"
             variant="outline"
             className="mt-auto border-destructive text-destructive hover:bg-destructive/10"
-            disabled={actionLoading}
             onClick={onRemove}
           >
             Remove
@@ -167,7 +168,7 @@ function PackageCard({
           <Button
             type="button"
             className="mt-auto"
-            disabled={disabled || actionLoading || !activeTier}
+            disabled={disabled || !activeTier}
             onClick={onAdd}
           >
             Add Package
@@ -184,30 +185,45 @@ export function PackagesSection({
   customerType = "b2c",
   packageLineItem,
   loading,
-  guestCountSaving,
+  guestCountUpdating = false,
   onGuestCountChange,
   onAdd,
-  onRemove,
-  actionLoading
+  onRemove
 }: PackagesSectionProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [guestInput, setGuestInput] = useState(String(guestCount || ""));
-  const minGuests = packages[0]?.minGuests ?? 200;
-  const belowMinimum = guestCount > 0 && guestCount < minGuests;
-  const addedPackageId = packageLineItem?.packageId ?? null;
+  const pendingGuestCountRef = useRef<number | null>(null);
+
+  const previewGuestCount = useMemo(() => {
+    const parsed = parseGuestInput(guestInput);
+    return parsed ?? guestCount;
+  }, [guestInput, guestCount]);
+
+  const debouncedSaveGuestCount = useDebouncedCallback((nextGuestCount: number) => {
+    pendingGuestCountRef.current = null;
+    if (nextGuestCount !== guestCount) {
+      onGuestCountChange(nextGuestCount);
+    }
+  }, 400);
 
   useEffect(() => {
-    setGuestInput(String(guestCount || ""));
+    if (pendingGuestCountRef.current === null) {
+      setGuestInput(String(guestCount || ""));
+    }
   }, [guestCount]);
 
   function commitGuestInput() {
-    const parsed = parseInt(guestInput, 10);
-    if (!Number.isFinite(parsed) || parsed < 0) {
+    const parsed = parseGuestInput(guestInput);
+    if (parsed === null) {
       setGuestInput(String(guestCount || ""));
+      pendingGuestCountRef.current = null;
       return;
     }
+    pendingGuestCountRef.current = parsed;
     if (parsed !== guestCount) {
       onGuestCountChange(parsed);
+    } else {
+      pendingGuestCountRef.current = null;
     }
   }
 
@@ -253,8 +269,14 @@ export function PackagesSection({
                 min={0}
                 step={1}
                 value={guestInput}
-                disabled={guestCountSaving}
-                onChange={(e) => setGuestInput(e.target.value)}
+                onChange={(e) => {
+                  setGuestInput(e.target.value);
+                  const parsed = parseGuestInput(e.target.value);
+                  if (parsed !== null && parsed !== guestCount) {
+                    pendingGuestCountRef.current = parsed;
+                    debouncedSaveGuestCount(parsed);
+                  }
+                }}
                 onBlur={commitGuestInput}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -262,25 +284,23 @@ export function PackagesSection({
                     commitGuestInput();
                   }
                 }}
-                placeholder={`e.g. ${minGuests}`}
+                placeholder="e.g. 200"
               />
-              {guestCountSaving ? (
-                <p className="text-xs text-muted-foreground">Updating tiers…</p>
-              ) : activeTierLabel(guestCount, packages, customerType) ? (
-                <p className="text-xs text-muted-foreground">{activeTierLabel(guestCount, packages, customerType)}</p>
-              ) : guestCount > 0 ? (
+              {guestCountUpdating ? (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Updating tiers…
+                </p>
+              ) : activeTierLabel(previewGuestCount, packages, customerType) ? (
+                <p className="text-xs text-muted-foreground">
+                  {activeTierLabel(previewGuestCount, packages, customerType)}
+                </p>
+              ) : previewGuestCount > 0 ? (
                 <p className="text-xs text-amber-700">No package tier matches this guest count.</p>
               ) : (
                 <p className="text-xs text-muted-foreground">Enter guests to preview package pricing.</p>
               )}
             </div>
-
-            {belowMinimum ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                Packages require minimum {minGuests} guests. Current event has{" "}
-                <span className="font-semibold">{guestCount}</span> guests.
-              </div>
-            ) : null}
 
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading packages…</p>
@@ -292,11 +312,10 @@ export function PackagesSection({
                   <PackageCard
                     key={pkg.id}
                     pkg={pkg}
-                    guestCount={guestCount}
+                    guestCount={previewGuestCount}
                     customerType={customerType}
-                    isAdded={addedPackageId === pkg.id}
-                    disabled={belowMinimum || guestCount <= 0}
-                    actionLoading={actionLoading}
+                    isAdded={(packageLineItem?.packageId ?? null) === pkg.id}
+                    disabled={previewGuestCount <= 0}
                     onSelectTier={onGuestCountChange}
                     onAdd={() => onAdd(pkg.id)}
                     onRemove={onRemove}
@@ -317,7 +336,7 @@ export function PackagesSection({
                       {packageLineItem.appliedTierLabel ??
                         packageLineItem.notes ??
                         `${formatUsd(packageLineItem.unitPrice)}/person`}{" "}
-                      × {guestCount} guests
+                      × {previewGuestCount} guests
                     </p>
                     {packageLineItem.package?.items?.length ? (
                       <p className="mt-2 text-sm text-muted-foreground">
@@ -326,7 +345,7 @@ export function PackagesSection({
                     ) : null}
                   </div>
                   <p className="text-lg font-semibold tabular-nums">
-                    {formatUsd(lineItemTotal(packageLineItem, guestCount))}
+                    {formatUsd(lineItemTotal(packageLineItem, previewGuestCount))}
                   </p>
                 </div>
                 <Button
@@ -334,7 +353,6 @@ export function PackagesSection({
                   variant="outline"
                   size="sm"
                   className="mt-3 border-destructive text-destructive hover:bg-destructive/10"
-                  disabled={actionLoading}
                   onClick={onRemove}
                 >
                   Remove package
@@ -359,9 +377,13 @@ function activeTierLabel(
   customerType: "b2b" | "b2c"
 ): string | null {
   if (guestCount <= 0 || packages.length === 0) return null;
-  const tier = getActiveTier(packages[0]!.tiers, guestCount, customerType);
-  if (!tier) return null;
-  return `Active tier: ${formatUsd(tier.pricePerHead)}/person (${formatTierRange(tier)} guests)`;
+  for (const pkg of packages) {
+    const tier = getActiveTier(pkg.tiers, guestCount, customerType);
+    if (tier) {
+      return `Active tier: ${formatUsd(tier.pricePerHead)}/person (${formatTierRange(tier)} guests)`;
+    }
+  }
+  return null;
 }
 
 export { packageLineTotal };

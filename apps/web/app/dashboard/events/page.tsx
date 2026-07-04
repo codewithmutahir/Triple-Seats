@@ -398,8 +398,7 @@ function EventDetailInner() {
     statusMutation,
     notesMutation,
     guestMutation,
-    updateMutation,
-    isSaving
+    updateMutation
   } = useEventDetailMutations(eventId);
 
   const error = queryError?.message ?? null;
@@ -460,7 +459,7 @@ function EventDetailInner() {
   }
 
   function patchStatus(next: string) {
-    if (!eventId || !event) return;
+    if (!eventId || !event || next === event.status) return;
     statusMutation.mutate(next);
   }
 
@@ -557,7 +556,6 @@ function EventDetailInner() {
   if (!event) return null;
 
   const guestName = [guestEdit.firstName, guestEdit.lastName].filter(Boolean).join(" ") || "—";
-  const statusSaving = statusMutation.isPending;
   const fieldSaving = updateMutation.isPending;
   const notesSaving = notesMutation.isPending;
 
@@ -602,11 +600,7 @@ function EventDetailInner() {
                     </SelectContent>
                   </Select>
                   <div className="flex items-center gap-2">
-                    <Select
-                      value={event.status}
-                      disabled={statusSaving}
-                      onValueChange={(v) => void patchStatus(v)}
-                    >
+                    <Select value={event.status} onValueChange={(v) => patchStatus(v)}>
                       <SelectTrigger className="w-[180px] bg-white">
                         <SelectValue placeholder="Change status" />
                       </SelectTrigger>
@@ -617,7 +611,6 @@ function EventDetailInner() {
                         <SelectItem value="completed">Completed</SelectItem>
                       </SelectContent>
                     </Select>
-                    {statusSaving ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
                   </div>
                 </div>
               </div>

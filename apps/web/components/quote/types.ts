@@ -100,6 +100,7 @@ export type Quote = {
   depositPct: number;
   dueDate: string | null;
   totalAmount: number;
+  packageSelections?: Record<string, Record<string, { id: string; name: string }[]>>;
   lineItems: QuoteLineItem[];
   event?: QuoteEvent;
 };

@@ -264,6 +264,7 @@ model Quote {
   depositPct  Float           @default(0.5)
   dueDate     DateTime?
   totalAmount Float           @default(0)
+  packageSelections Json?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
   caterer     Caterer         @relation(fields: [catererId], references: [id], onDelete: Cascade)

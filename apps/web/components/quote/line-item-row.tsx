@@ -109,8 +109,13 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
         </div>
 
         <Select
-          value={effectiveUnit === "per_piece" && item.unitType === "per_head" ? "per_piece" : item.unitType}
-          onValueChange={(v) => onUpdate(item.id, { unitType: v as QuoteUnit })}
+          value={item.unitType === "per_head" && category === "equipment" ? "per_piece" : item.unitType}
+          onValueChange={(v) => {
+            const next = v as QuoteLineItem["unitType"];
+            onUpdate(item.id, {
+              unitType: category === "equipment" && next === "per_head" ? "per_piece" : next
+            });
+          }}
         >
           <SelectTrigger className="h-7 w-[110px] text-xs">
             <SelectValue />
