@@ -10,7 +10,7 @@ import {
   UserPlus
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,17 +19,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { BookingLinkCard } from "@/components/dashboard/booking-link-card";
-import {
-  useAppStore,
-  type DashboardAllResponse,
-  type DashboardRecentRow,
-  type DashboardStats,
-  type DashboardUpcomingRow
-} from "@/lib/stores/app-store";
-import { fetchDashboardAll } from "@/lib/dashboard-api";
+import { useDashboardQuery } from "@/hooks/use-dashboard-query";
+import { usePrefetchOnHover } from "@/hooks/use-prefetch";
+import type { DashboardRecentRow, DashboardStats, DashboardUpcomingRow } from "@/lib/stores/app-store";
 import { browserTimer } from "@/lib/perf";
 
-type StatsResponse = DashboardStats;
 type RecentRow = DashboardRecentRow;
 type UpcomingRow = DashboardUpcomingRow;
 
@@ -51,6 +45,30 @@ function formatShortDate(iso: string) {
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
+function RecentLeadRow({ row }: { row: RecentRow }) {
+  const onHover = usePrefetchOnHover(row.id);
+
+  return (
+    <TableRow onMouseEnter={onHover}>
+      <TableCell className="font-medium">{row.guestName}</TableCell>
+      <TableCell className="hidden sm:table-cell">{row.eventType}</TableCell>
+      <TableCell className="hidden md:table-cell whitespace-nowrap">{formatShortDate(row.date)}</TableCell>
+      <TableCell className="hidden lg:table-cell max-w-[180px] truncate">{row.location}</TableCell>
+      <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
+      <TableCell>
+        <Badge variant={statusVariant(row.status)} className="capitalize">
+          {row.status}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-right">
+        <Button variant="outline" size="sm" asChild onMouseEnter={onHover}>
+          <Link href={`/dashboard/events?eventId=${encodeURIComponent(row.id)}`}>View</Link>
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 export default function DashboardPage() {
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -59,110 +77,27 @@ export default function DashboardPage() {
     perfRef.current.step("mount");
   }
 
-  const [stats, setStats] = useState<StatsResponse | null>(() =>
-    useAppStore.getState().peekDashboardStats()
-  );
-  const [recent, setRecent] = useState<RecentRow[] | null>(() =>
-    useAppStore.getState().peekRecentLeads()
-  );
-  const [upcoming, setUpcoming] = useState<UpcomingRow[] | null>(() =>
-    useAppStore.getState().peekUpcomingEvents()
-  );
-  const [statsLoading, setStatsLoading] = useState(
-    () => useAppStore.getState().peekDashboardStats() == null
-  );
-  const [recentLoading, setRecentLoading] = useState(
-    () => useAppStore.getState().peekRecentLeads() == null
-  );
-  const [upcomingLoading, setUpcomingLoading] = useState(
-    () => useAppStore.getState().peekUpcomingEvents() == null
-  );
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (force = false) => {
-    const store = useAppStore.getState();
-    setError(null);
-    perfRef.current?.step("fetch:start");
-
-    const applyAll = (data: DashboardAllResponse) => {
-      store.setDashboardStats(data.stats);
-      store.setRecentLeads(data.recent.items);
-      store.setUpcomingEvents(data.upcoming.items);
-      setStats(data.stats);
-      setRecent(data.recent.items);
-      setUpcoming(data.upcoming.items);
-      setStatsLoading(false);
-      setRecentLoading(false);
-      setUpcomingLoading(false);
-    };
-
-    try {
-      if (!force) {
-        const cachedStats = store.getDashboardStats();
-        const cachedRecent = store.getRecentLeads();
-        const cachedUpcoming = store.getUpcomingEvents();
-        if (cachedStats && cachedRecent && cachedUpcoming) {
-          setStats(cachedStats);
-          setRecent(cachedRecent);
-          setUpcoming(cachedUpcoming);
-          setStatsLoading(false);
-          setRecentLoading(false);
-          setUpcomingLoading(false);
-          perfRef.current?.step("fetch:done");
-          // Stale-while-revalidate: show cache instantly, refresh in background
-          void (async () => {
-            const res = await fetchDashboardAll();
-            if (res.ok) applyAll(res.data);
-          })();
-          return;
-        }
-      }
-
-      setStatsLoading(stats == null);
-      setRecentLoading(recent == null);
-      setUpcomingLoading(upcoming == null);
-      setRefreshing(force);
-
-      const res = await fetchDashboardAll();
-      if (!res.ok) throw new Error(res.message);
-      applyAll(res.data);
-      perfRef.current?.step("fetch:done");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setStats(null);
-      setRecent(null);
-      setUpcoming(null);
-      setStatsLoading(false);
-      setRecentLoading(false);
-      setUpcomingLoading(false);
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
+  const { data, isLoading, isFetching, error, refetch } = useDashboardQuery();
+  const stats = data?.stats ?? null;
+  const recent = data?.recent.items ?? [];
+  const upcoming = data?.upcoming.items ?? [];
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    if (perfEndedRef.current) return;
-    if (!statsLoading && !recentLoading && !upcomingLoading) {
-      perfEndedRef.current = true;
-      perfRef.current?.step("render:complete");
-      perfRef.current?.end();
-    }
-  }, [statsLoading, recentLoading, upcomingLoading]);
+    if (perfEndedRef.current || isLoading) return;
+    perfEndedRef.current = true;
+    perfRef.current?.step("render:complete");
+    perfRef.current?.end();
+  }, [isLoading]);
 
   if (error) {
     return (
       <Card className="border-destructive/50 bg-destructive/5">
         <CardHeader>
           <CardTitle className="font-heading text-lg text-destructive">Couldn&apos;t load dashboard</CardTitle>
-          <CardDescription>{error}</CardDescription>
+          <CardDescription>{error.message}</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button type="button" onClick={() => void load(true)}>
+          <Button type="button" onClick={() => void refetch()}>
             Try again
           </Button>
         </CardContent>
@@ -173,7 +108,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       <BookingLinkCard />
-      {refreshing ? (
+      {isFetching && !isLoading ? (
         <div className="flex justify-end">
           <RefreshingBadge />
         </div>
@@ -185,7 +120,7 @@ export default function DashboardPage() {
             icon={UserPlus}
             value={stats?.leads.count}
             trend={stats?.leads.trend}
-            loading={statsLoading && stats == null}
+            loading={isLoading && stats == null}
           />
           <StatCard
             title="Confirmed bookings"
@@ -193,7 +128,7 @@ export default function DashboardPage() {
             icon={BookCheck}
             value={stats?.bookings.count}
             trend={stats?.bookings.trend}
-            loading={statsLoading && stats == null}
+            loading={isLoading && stats == null}
           />
           <StatCard
             title="Upcoming events"
@@ -201,7 +136,7 @@ export default function DashboardPage() {
             icon={CalendarDays}
             value={stats?.upcomingEvents.count}
             trend={stats?.upcomingEvents.trend}
-            loading={statsLoading && stats == null}
+            loading={isLoading && stats == null}
           />
           <StatCard
             title="Revenue this month"
@@ -209,7 +144,7 @@ export default function DashboardPage() {
             icon={BarChart3}
             value={stats != null ? money.format(stats.revenue.amount) : undefined}
             trend={stats?.revenue.trend}
-            loading={statsLoading && stats == null}
+            loading={isLoading && stats == null}
             isTextValue
           />
         </div>
@@ -225,7 +160,7 @@ export default function DashboardPage() {
             <LayoutDashboard className="h-5 w-5 text-muted-foreground" aria-hidden />
           </CardHeader>
           <CardContent>
-            {recentLoading && recent == null ? (
+            {isLoading && recent.length === 0 ? (
               <div className="space-y-2">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-10 w-full" />
@@ -245,34 +180,14 @@ export default function DashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(recent ?? []).length === 0 ? (
+                  {recent.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground">
                         No leads yet.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    (recent ?? []).map((row) => (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-medium">{row.guestName}</TableCell>
-                        <TableCell className="hidden sm:table-cell">{row.eventType}</TableCell>
-                        <TableCell className="hidden md:table-cell whitespace-nowrap">
-                          {formatShortDate(row.date)}
-                        </TableCell>
-                        <TableCell className="hidden lg:table-cell max-w-[180px] truncate">{row.location}</TableCell>
-                        <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant={statusVariant(row.status)} className="capitalize">
-                            {row.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="outline" size="sm" asChild>
-                            <Link href={`/dashboard/events?eventId=${encodeURIComponent(row.id)}`}>View</Link>
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                    recent.map((row) => <RecentLeadRow key={row.id} row={row} />)
                   )}
                 </TableBody>
               </Table>
@@ -295,19 +210,19 @@ export default function DashboardPage() {
             <CardDescription>Next 7 days</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {upcomingLoading && upcoming == null ? (
+            {isLoading && upcoming.length === 0 ? (
               <div className="space-y-2">
                 {Array.from({ length: 4 }).map((_, i) => (
                   <Skeleton key={i} className="h-16 w-full" />
                 ))}
               </div>
-            ) : (upcoming ?? []).length === 0 ? (
+            ) : upcoming.length === 0 ? (
               <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-muted-foreground">
                 No events in the next week.
               </p>
             ) : (
               <ul className="space-y-3">
-                {(upcoming ?? []).map((ev) => (
+                {upcoming.map((ev) => (
                   <li
                     key={ev.id}
                     className="rounded-lg border border-slate-100 bg-white px-3 py-3 shadow-sm"

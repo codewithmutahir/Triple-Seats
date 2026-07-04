@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Edit2, Loader2, Plus, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -33,28 +34,18 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useSettingsMenuItemsQuery } from "@/hooks/use-reports-query";
+import {
+  EMPTY_MENU_ITEMS_BY_CATEGORY,
+  type SettingsItemCategory,
+  type SettingsMenuItem,
+  type SettingsMenuItemsByCategory
+} from "@/lib/settings-types";
+import { queryKeys } from "@/lib/query-keys";
 
-type ItemCategory =
-  | "appetizer"
-  | "main_course"
-  | "bbq"
-  | "dessert"
-  | "equipment"
-  | "delivery"
-  | "other";
-
-type QuoteUnit = "per_head" | "by_tray" | "flat";
-
-type MenuItem = {
-  id: string;
-  catererId: string;
-  category: ItemCategory;
-  name: string;
-  defaultPrice: number | null;
-  defaultUnit: QuoteUnit;
-  usageCount: number;
-  isDefault: boolean;
-};
+type ItemCategory = SettingsItemCategory;
+type MenuItem = SettingsMenuItem;
+type QuoteUnit = MenuItem["defaultUnit"];
 
 const CATEGORIES: { value: ItemCategory; label: string }[] = [
   { value: "appetizer", label: "Appetizers" },
@@ -300,12 +291,12 @@ function ItemRow({
 function CategorySection({
   category,
   label,
-  items,
+  items = [],
   onRefresh,
 }: {
   category: ItemCategory;
   label: string;
-  items: MenuItem[];
+  items?: MenuItem[];
   onRefresh: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -453,59 +444,22 @@ function CategorySection({
 }
 
 export function MenuItemsSection() {
-  const [itemsByCategory, setItemsByCategory] = useState<Record<ItemCategory, MenuItem[]>>({
-    appetizer: [],
-    main_course: [],
-    bbq: [],
-    dessert: [],
-    equipment: [],
-    delivery: [],
-    other: [],
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const {
+    data: itemsByCategory = EMPTY_MENU_ITEMS_BY_CATEGORY,
+    isLoading: loading,
+    isFetching: refreshing,
+    error: queryError
+  } = useSettingsMenuItemsQuery();
 
-  const fetchItems = useCallback(async () => {
-    try {
-      const results = await Promise.all(
-        CATEGORIES.map(async (cat) => {
-          const res = await fetch(`/api/menu-items?category=${cat.value}`, {
-            credentials: "include",
-          });
-          if (!res.ok) return { category: cat.value, items: [] };
-          const data = await res.json();
-          return { category: cat.value, items: data.items ?? [] };
-        })
-      );
+  const totalItems = Object.values(itemsByCategory).flat().length;
+  const error = queryError?.message ?? null;
 
-      const grouped: Record<ItemCategory, MenuItem[]> = {
-        appetizer: [],
-        main_course: [],
-        bbq: [],
-        dessert: [],
-        equipment: [],
-        delivery: [],
-        other: [],
-      };
+  const refreshItems = () => {
+    void qc.invalidateQueries({ queryKey: queryKeys.settings.menuItems() });
+  };
 
-      for (const { category, items } of results) {
-        grouped[category as ItemCategory] = items;
-      }
-
-      setItemsByCategory(grouped);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load items");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchItems();
-  }, [fetchItems]);
-
-  if (loading) {
+  if (loading && totalItems === 0) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -513,16 +467,15 @@ export function MenuItemsSection() {
     );
   }
 
-  if (error) {
+  if (error && totalItems === 0) {
     return <p className="text-sm text-destructive">{error}</p>;
   }
-
-  const totalItems = Object.values(itemsByCategory).flat().length;
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         {totalItems} total item{totalItems !== 1 ? "s" : ""} across all categories
+        {refreshing ? " · refreshing…" : ""}
       </p>
 
       <div className="space-y-3">
@@ -531,8 +484,8 @@ export function MenuItemsSection() {
             key={cat.value}
             category={cat.value}
             label={cat.label}
-            items={itemsByCategory[cat.value]}
-            onRefresh={fetchItems}
+            items={itemsByCategory[cat.value] ?? []}
+            onRefresh={refreshItems}
           />
         ))}
       </div>

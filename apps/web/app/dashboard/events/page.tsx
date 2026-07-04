@@ -21,7 +21,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,14 +55,16 @@ import { formatEventTimeRange } from "@/lib/event-datetime";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
-  CLIENT_LIST_FETCH_SIZE,
-  fetchAllListPages,
   filterAndPaginate,
   LIST_PAGE_SIZE
 } from "@/lib/client-list-filter";
-import { useAppStore, type EventsListResponse, type EventsStats } from "@/lib/stores/app-store";
-import { loadWithCache } from "@/lib/stores/cache-helpers";
-import { parseApiError } from "@/lib/user-facing-error";
+import { useEventsListQuery } from "@/hooks/use-list-queries";
+import { useEventDetailMutations, useEventDetailQuery } from "@/hooks/use-event-detail";
+import { usePrefetchOnHover } from "@/hooks/use-prefetch";
+import { api } from "@/lib/api";
+import type { EventDetailPayload, TaskPayload } from "@/lib/event-types";
+import { queryKeys } from "@/lib/query-keys";
+import type { EventsListResponse, EventsStats } from "@/lib/stores/app-store";
 import { browserTimer } from "@/lib/perf";
 
 const STATUS_TABS = [
@@ -71,7 +75,6 @@ const STATUS_TABS = [
   { value: "completed", label: "Completed" }
 ] as const;
 
-const ALL_EVENTS_CACHE_KEY = "__all__";
 const EVENTS_PAGE_SIZE = LIST_PAGE_SIZE;
 
 type EventListRow = EventsListResponse["items"][number];
@@ -83,68 +86,6 @@ function formatTableDate(iso: string) {
     return iso;
   }
 }
-
-async function fetchEventsList(
-  params: URLSearchParams
-): Promise<EventsListResponse | { error: string }> {
-  const res = await fetch(`/api/leads?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText) };
-  }
-  return (await res.json()) as EventsListResponse;
-}
-
-async function fetchEventsStats(): Promise<EventsStats | { error: string }> {
-  const res = await fetch("/api/events/stats", { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText) };
-  }
-  return (await res.json()) as EventsStats;
-}
-
-type ActivityEntry = { at: string; type: string; label: string };
-
-type GuestPayload = {
-  id: string;
-  firstName: string;
-  lastName: string | null;
-  email: string | null;
-  phone: string | null;
-};
-
-type TaskPayload = {
-  id: string;
-  title: string;
-  status: string;
-  dueAt: string | null;
-  completedAt: string | null;
-  createdAt: string;
-};
-
-export type EventDetailPayload = {
-  id: string;
-  title: string;
-  eventType: EventTypeValue;
-  eventTypeLabel: string;
-  customerType: CustomerTypeValue;
-  status: string;
-  eventDate: string;
-  startTime: string | null;
-  endTime: string | null;
-  venueName: string | null;
-  venueAddress: string | null;
-  guestCountEstimate: number | null;
-  notesBody: string;
-  preferredSlots: string[];
-  eventLocationFromNotes: string | null;
-  additionalNotes: string;
-  activity: ActivityEntry[];
-  createdAt: string;
-  primaryGuest: GuestPayload | null;
-  tasks: TaskPayload[];
-};
 
 function customerTypeBadgeClass(type: string) {
   return type === "b2b"
@@ -201,14 +142,6 @@ function daysUntilLabel(iso: string): string {
   }
 }
 
-async function fetchEvent(id: string): Promise<{ event: EventDetailPayload } | { error: string; status: number }> {
-  const res = await fetch(`/api/events/${encodeURIComponent(id)}`, { credentials: "include" });
-  const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-  if (!res.ok) return { error: parseApiError(body, res.status, res.statusText), status: res.status };
-  if (!body.event) return { error: "Invalid response", status: 500 };
-  return { event: body.event };
-}
-
 function EventsListSkeleton() {
   return (
     <div className="space-y-6">
@@ -223,88 +156,66 @@ function EventsListSkeleton() {
   );
 }
 
-function EventsListView() {
+function EventListRowButton({ row }: { row: EventListRow }) {
   const router = useRouter();
+  const onHover = usePrefetchOnHover(row.id);
+
+  return (
+    <TableRow onMouseEnter={onHover}>
+      <TableCell className="font-medium">{row.guestName}</TableCell>
+      <TableCell>
+        {row.eventTypeLabel ?? formatEventType(row.eventType)}
+      </TableCell>
+      <TableCell>
+        <CustomerTypeBadge type={row.customerType} />
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-sm">
+        {formatTableDate(row.eventDate)}
+      </TableCell>
+      <TableCell className="hidden md:table-cell whitespace-nowrap text-sm text-muted-foreground">
+        {formatEventTimeRange(row.startTime, row.endTime)}
+      </TableCell>
+      <TableCell className="hidden max-w-[180px] truncate sm:table-cell text-sm">
+        {row.location}
+      </TableCell>
+      <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
+      <TableCell>
+        <Badge variant={statusVariant(row.status)} className="capitalize">
+          {row.status}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-right">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onMouseEnter={onHover}
+          onClick={() =>
+            router.push(`/dashboard/events?eventId=${encodeURIComponent(row.id)}`)
+          }
+        >
+          View
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function EventsListView() {
   const [status, setStatus] = useState<string>("all");
   const [page, setPage] = useState(1);
 
-  const [allEvents, setAllEvents] = useState<EventListRow[]>(
-    () => useAppStore.getState().peekEventsCache(ALL_EVENTS_CACHE_KEY)?.items ?? []
-  );
-  const [stats, setStats] = useState<EventsStats | null>(() =>
-    useAppStore.getState().peekEventsStats()
-  );
-  const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekEventsCache(ALL_EVENTS_CACHE_KEY) == null
-  );
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { listQuery, statsQuery } = useEventsListQuery();
+  const allEvents = listQuery.data ?? [];
+  const stats: EventsStats | null = statsQuery.data ?? null;
+  const loading = listQuery.isLoading;
+  const refreshing = listQuery.isFetching && !listQuery.isLoading;
+  const error = listQuery.error?.message ?? null;
 
   const data = useMemo(
     () => filterAndPaginate(allEvents, { status, page, pageSize: EVENTS_PAGE_SIZE }),
     [allEvents, status, page]
   );
-
-  const loadAllEvents = useCallback(async () => {
-    const store = useAppStore.getState();
-    setError(null);
-
-    await loadWithCache({
-      peek: () => store.peekEventsCache(ALL_EVENTS_CACHE_KEY),
-      getFresh: () => store.getEventsCache(ALL_EVENTS_CACHE_KEY),
-      set: (result) => store.setEventsCache(ALL_EVENTS_CACHE_KEY, result),
-      fetch: async () => {
-        const result = await fetchAllListPages<EventListRow>(
-          async (pageNum) => {
-            const p = new URLSearchParams();
-            p.set("page", String(pageNum));
-            p.set("status", "all");
-            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
-            return fetchEventsList(p);
-          },
-          CLIENT_LIST_FETCH_SIZE
-        );
-        if ("error" in result) throw new Error(result.error);
-        return {
-          items: result.items,
-          total: result.total,
-          page: 1,
-          pageSize: EVENTS_PAGE_SIZE,
-          totalPages: Math.max(1, Math.ceil(result.total / EVENTS_PAGE_SIZE))
-        };
-      },
-      onData: (result) => setAllEvents(result.items),
-      setLoading,
-      setRefreshing
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setAllEvents([]);
-    });
-  }, []);
-
-  const loadStats = useCallback(async () => {
-    const store = useAppStore.getState();
-    await loadWithCache({
-      peek: () => store.peekEventsStats(),
-      getFresh: () => store.getEventsStats(),
-      set: (result) => store.setEventsStats(result),
-      fetch: async () => {
-        const result = await fetchEventsStats();
-        if ("error" in result) throw new Error(result.error);
-        return result;
-      },
-      onData: setStats,
-      setLoading: () => {},
-      setRefreshing: () => {}
-    }).catch(() => {
-      /* stats cards are supplementary; list still works */
-    });
-  }, []);
-
-  useEffect(() => {
-    void loadAllEvents();
-    void loadStats();
-  }, [loadAllEvents, loadStats]);
 
   useEffect(() => {
     setPage(1);
@@ -408,42 +319,7 @@ function EventsListView() {
                         </TableRow>
                       ))
                     : data.items.map((row) => (
-                        <TableRow key={row.id}>
-                          <TableCell className="font-medium">{row.guestName}</TableCell>
-                          <TableCell>
-                            {row.eventTypeLabel ?? formatEventType(row.eventType)}
-                          </TableCell>
-                          <TableCell>
-                            <CustomerTypeBadge type={row.customerType} />
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-sm">
-                            {formatTableDate(row.eventDate)}
-                          </TableCell>
-                          <TableCell className="hidden md:table-cell whitespace-nowrap text-sm text-muted-foreground">
-                            {formatEventTimeRange(row.startTime, row.endTime)}
-                          </TableCell>
-                          <TableCell className="hidden max-w-[180px] truncate sm:table-cell text-sm">
-                            {row.location}
-                          </TableCell>
-                          <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
-                          <TableCell>
-                            <Badge variant={statusVariant(row.status)} className="capitalize">
-                              {row.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() =>
-                                router.push(`/dashboard/events?eventId=${encodeURIComponent(row.id)}`)
-                              }
-                            >
-                              View
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+                        <EventListRowButton key={row.id} row={row} />
                       ))}
                 </TableBody>
               </Table>
@@ -483,9 +359,26 @@ function EventDetailSkeleton() {
   );
 }
 
+function toTaskPayload(task: {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: string;
+}): TaskPayload {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    dueAt: null,
+    completedAt: null,
+    createdAt: task.createdAt
+  };
+}
+
 function EventDetailInner() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get("eventId");
+  const qc = useQueryClient();
 
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -494,9 +387,23 @@ function EventDetailInner() {
     perfRef.current.step("component:mount");
   }
 
-  const [event, setEvent] = useState<EventDetailPayload | null>(null);
-  const [loading, setLoading] = useState(Boolean(eventId));
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: event,
+    isLoading: loading,
+    error: queryError,
+    refetch
+  } = useEventDetailQuery(eventId);
+
+  const {
+    statusMutation,
+    notesMutation,
+    guestMutation,
+    updateMutation,
+    isSaving
+  } = useEventDetailMutations(eventId);
+
+  const error = queryError?.message ?? null;
+  const detailKey = queryKeys.events.detail(eventId ?? "");
 
   const [guestEdit, setGuestEdit] = useState({
     firstName: "",
@@ -506,50 +413,24 @@ function EventDetailInner() {
     guestCount: "" as string | number
   });
   const [guestEditing, setGuestEditing] = useState(false);
-
   const [additionalNotes, setAdditionalNotes] = useState("");
-  const [statusSaving, setStatusSaving] = useState(false);
-  const [fieldSaving, setFieldSaving] = useState(false);
-  const [notesSaving, setNotesSaving] = useState(false);
-
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [taskSaving, setTaskSaving] = useState(false);
   const [showQuickTaskForm, setShowQuickTaskForm] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!eventId) {
-      setEvent(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    perfRef.current?.step("fetch:start");
-    const res = await fetchEvent(eventId);
-    perfRef.current?.step("fetch:complete");
-    if ("error" in res) {
-      setError(res.error);
-      setEvent(null);
-    } else {
-      setEvent(res.event);
-      perfRef.current?.step("state:set");
-      const g = res.event.primaryGuest;
-      setGuestEdit({
-        firstName: g?.firstName ?? "",
-        lastName: g?.lastName ?? "",
-        email: g?.email ?? "",
-        phone: g?.phone ?? "",
-        guestCount: res.event.guestCountEstimate ?? ""
-      });
-      setAdditionalNotes(res.event.additionalNotes);
-    }
-    setLoading(false);
-  }, [eventId]);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!event) return;
+    perfRef.current?.step("state:set");
+    const g = event.primaryGuest;
+    setGuestEdit({
+      firstName: g?.firstName ?? "",
+      lastName: g?.lastName ?? "",
+      email: g?.email ?? "",
+      phone: g?.phone ?? "",
+      guestCount: event.guestCountEstimate ?? ""
+    });
+    setAdditionalNotes(event.additionalNotes);
+  }, [event]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading) return;
@@ -573,116 +454,50 @@ function EventDetailInner() {
     return [...event.activity].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   }, [event]);
 
-  async function patchEvent(patch: { eventType?: EventTypeValue; customerType?: CustomerTypeValue }) {
+  function patchEvent(patch: { eventType?: EventTypeValue; customerType?: CustomerTypeValue }) {
     if (!eventId || !event) return;
-    setFieldSaving(true);
-    try {
-      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(patch)
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.event) setEvent(body.event);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update event");
-    } finally {
-      setFieldSaving(false);
-    }
+    updateMutation.mutate(patch);
   }
 
-  async function patchStatus(next: string) {
+  function patchStatus(next: string) {
     if (!eventId || !event) return;
-    setStatusSaving(true);
-    try {
-      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ status: next })
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.event) setEvent(body.event);
-      useAppStore.getState().invalidateEventsData();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update status");
-    } finally {
-      setStatusSaving(false);
-    }
+    statusMutation.mutate(next);
   }
 
-  async function saveNotes() {
+  function saveNotes() {
     if (!eventId || !event) return;
     if (additionalNotes === event.additionalNotes) return;
-    setNotesSaving(true);
-    try {
-      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}/notes`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ notes: additionalNotes })
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.event) setEvent(body.event);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save notes");
-    } finally {
-      setNotesSaving(false);
-    }
+    notesMutation.mutate(additionalNotes);
   }
 
-  async function saveGuest() {
+  function saveGuest() {
     if (!eventId || !event?.primaryGuest) return;
     const guestCountNum =
       guestEdit.guestCount === "" ? undefined : Number.parseInt(String(guestEdit.guestCount), 10);
-    try {
-      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}/guest`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          firstName: guestEdit.firstName,
-          lastName: guestEdit.lastName || null,
-          email: guestEdit.email || null,
-          phone: guestEdit.phone || null,
-          ...(guestCountNum !== undefined && !Number.isNaN(guestCountNum)
-            ? { guestCountEstimate: guestCountNum }
-            : {})
-        })
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; event?: EventDetailPayload };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.event) setEvent(body.event);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save guest");
-    }
+    guestMutation.mutate({
+      firstName: guestEdit.firstName,
+      lastName: guestEdit.lastName || null,
+      email: guestEdit.email || null,
+      phone: guestEdit.phone || null,
+      ...(guestCountNum !== undefined && !Number.isNaN(guestCountNum)
+        ? { guestCount: guestCountNum }
+        : {})
+    });
   }
 
   async function addTask(fromQuick: boolean) {
     if (!eventId || !newTaskTitle.trim()) return;
     setTaskSaving(true);
     try {
-      const res = await fetch(`/api/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ eventId, title: newTaskTitle.trim() })
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; task?: TaskPayload };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.task && event) {
-        setEvent({ ...event, tasks: [...event.tasks, body.task] });
-        setNewTaskTitle("");
-        if (fromQuick) setShowQuickTaskForm(false);
-      } else {
-        await load();
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add task");
+      const { task } = await api.tasks.create({ eventId, title: newTaskTitle.trim() });
+      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+        old ? { ...old, tasks: [...old.tasks, toTaskPayload(task)] } : old
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      setNewTaskTitle("");
+      if (fromQuick) setShowQuickTaskForm(false);
+    } catch {
+      toast.error("Failed to add task");
     } finally {
       setTaskSaving(false);
     }
@@ -690,38 +505,34 @@ function EventDetailInner() {
 
   async function toggleTask(task: TaskPayload, completed: boolean) {
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ status: completed ? "completed" : "pending" })
+      const { task: updated } = await api.tasks.update(task.id, {
+        status: completed ? "completed" : "pending"
       });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; task?: TaskPayload };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      if (body.task && event) {
-        setEvent({
-          ...event,
-          tasks: event.tasks.map((t) => (t.id === task.id ? body.task! : t))
-        });
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update task");
+      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+        old
+          ? {
+              ...old,
+              tasks: old.tasks.map((t) =>
+                t.id === task.id ? toTaskPayload(updated) : t
+              )
+            }
+          : old
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    } catch {
+      toast.error("Failed to update task");
     }
   }
 
   async function deleteTask(id: string) {
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        credentials: "include"
-      });
-      if (!res.ok && res.status !== 204) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(parseApiError(body, res.status, res.statusText));
-      }
-      if (event) setEvent({ ...event, tasks: event.tasks.filter((t) => t.id !== id) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete task");
+      await api.tasks.delete(id);
+      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+        old ? { ...old, tasks: old.tasks.filter((t) => t.id !== id) } : old
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    } catch {
+      toast.error("Failed to delete task");
     }
   }
 
@@ -734,7 +545,7 @@ function EventDetailInner() {
       <Card className="border-destructive/40 bg-destructive/5">
         <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
           <p className="text-sm text-destructive">{error}</p>
-          <Button type="button" variant="outline" onClick={() => void load()}>
+          <Button type="button" variant="outline" onClick={() => void refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Retry
           </Button>
@@ -746,13 +557,12 @@ function EventDetailInner() {
   if (!event) return null;
 
   const guestName = [guestEdit.firstName, guestEdit.lastName].filter(Boolean).join(" ") || "—";
+  const statusSaving = statusMutation.isPending;
+  const fieldSaving = updateMutation.isPending;
+  const notesSaving = notesMutation.isPending;
 
   return (
     <div className="space-y-6">
-      {error ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">{error}</div>
-      ) : null}
-
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* Header */}

@@ -18,14 +18,17 @@ export const generalLimiter = rateLimit({
   message: { error: "Too many requests" }
 });
 
-/** Strict limit for auth routes */
-export const authLimiter = rateLimit({
+/** Strict limit for auth write operations (sign-in, sign-up, password reset). */
+export const authWriteLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many auth attempts" }
 });
+
+/** @deprecated Broad auth limiter — do not apply to all /api/auth routes. */
+export const authLimiter = authWriteLimiter;
 
 /** @deprecated Use leadFormLimiter — kept for backwards compatibility */
 export const leadSubmitLimiter = leadFormLimiter;

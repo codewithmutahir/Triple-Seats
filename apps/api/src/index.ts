@@ -14,7 +14,7 @@ import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-sch
 import { ensureQuoteUnitEnum } from "./lib/ensure-quote-units";
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { getResend } from "./lib/mail";
-import { authLimiter, generalLimiter } from "./lib/rate-limit";
+import { authWriteLimiter, generalLimiter } from "./lib/rate-limit";
 import { bookingsRouter } from "./routes/bookings";
 import { calendarRouter } from "./routes/calendar";
 import { catererRouter } from "./routes/caterer";
@@ -142,7 +142,11 @@ function createApp() {
     });
   });
 
-  app.use("/api/auth", authLimiter, toNodeHandler(auth));
+  app.use("/api/auth/sign-in", authWriteLimiter);
+  app.use("/api/auth/sign-up", authWriteLimiter);
+  app.use("/api/auth/forgot-password", authWriteLimiter);
+  app.use("/api/auth/reset-password", authWriteLimiter);
+  app.use("/api/auth", toNodeHandler(auth));
 
   app.use("/api", generalLimiter);
   app.use("/api/caterer", catererRouter);
@@ -197,7 +201,9 @@ async function start() {
 
   const app = createApp();
   const server = app.listen(port, host, () => {
-    console.log(`API running on ${host}:${port}`);
+    console.log(`✅ API running on port ${port}`);
+    console.log(`   Environment: ${process.env.NODE_ENV ?? "development"}`);
+    console.log(`   Auth URL: ${process.env.BETTER_AUTH_URL ?? "(not set)"}`);
   });
   server.setTimeout(120_000);
   server.requestTimeout = 120_000;

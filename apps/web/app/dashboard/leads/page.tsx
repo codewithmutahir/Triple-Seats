@@ -4,7 +4,7 @@ import { format } from "date-fns";
 import { CalendarIcon, Download, Inbox, Share2 } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,24 +26,16 @@ import { formatCustomerType, formatEventType } from "@/lib/event-customer-types"
 import { formatEventTimeRange } from "@/lib/event-datetime";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
-import {
-  CLIENT_LIST_FETCH_SIZE,
-  fetchAllListPages,
-  filterLeadsItems,
-  LIST_PAGE_SIZE,
-  paginateItems
-} from "@/lib/client-list-filter";
-import { useAppStore, type LeadsListResponse } from "@/lib/stores/app-store";
-import { loadWithCache } from "@/lib/stores/cache-helpers";
+import { filterLeadsItems, LIST_PAGE_SIZE, paginateItems } from "@/lib/client-list-filter";
+import { useCatererProfileQuery } from "@/hooks/use-dashboard-query";
+import { useLeadsQuery } from "@/hooks/use-list-queries";
+import { usePrefetchOnHover } from "@/hooks/use-prefetch";
+import type { LeadsListResponse } from "@/lib/stores/app-store";
 import { tenantUrls } from "@/lib/tenant-host";
-import { fetchCatererProfile, type CatererProfile } from "@/lib/caterer-profile";
-import { parseApiError } from "@/lib/user-facing-error";
+import type { CatererProfile } from "@/lib/caterer-profile";
 import { browserTimer } from "@/lib/perf";
 
-type ListResponse = LeadsListResponse;
-type LeadRow = ListResponse["items"][number];
-
-const ALL_LEADS_CACHE_KEY = "__all__";
+type LeadRow = LeadsListResponse["items"][number];
 
 function statusVariant(
   status: string
@@ -67,15 +59,6 @@ function csvEscape(value: string | number | null | undefined) {
   const s = value == null ? "" : String(value);
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
-}
-
-async function fetchLeads(params: URLSearchParams): Promise<ListResponse | { error: string; status: number }> {
-  const res = await fetch(`/api/leads?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText), status: res.status };
-  }
-  return (await res.json()) as ListResponse;
 }
 
 function resolveBookUrl(profile: CatererProfile | null): string | null {
@@ -105,30 +88,14 @@ export default function LeadsPage() {
       ? format(dateRange.from, "yyyy-MM-dd")
       : undefined;
 
-  const [allLeads, setAllLeads] = useState<LeadRow[]>(
-    () => useAppStore.getState().peekLeadsCache(ALL_LEADS_CACHE_KEY)?.items ?? []
-  );
-  const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekLeadsCache(ALL_LEADS_CACHE_KEY) == null
-  );
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [intakeWarning, setIntakeWarning] = useState<string | null>(
-    () => useAppStore.getState().peekLeadsCache(ALL_LEADS_CACHE_KEY)?.intakeMismatchWarning ?? null
-  );
-  const [bookUrl, setBookUrl] = useState<string | null>(null);
+  const { data: leadsData, isLoading: loading, isFetching: refreshing, error: queryError } =
+    useLeadsQuery();
+  const { data: profile } = useCatererProfileQuery();
+  const allLeads = leadsData?.items ?? [];
+  const intakeWarning = leadsData?.intakeMismatchWarning ?? null;
+  const error = queryError?.message ?? null;
+  const bookUrl = useMemo(() => resolveBookUrl(profile ?? null), [profile]);
   const [linkCopied, setLinkCopied] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const profile = await fetchCatererProfile();
-      if (!cancelled && profile) setBookUrl(resolveBookUrl(profile));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
@@ -151,56 +118,9 @@ export default function LeadsPage() {
     [filteredLeads, page]
   );
 
-  const loadAllLeads = useCallback(async () => {
-    const store = useAppStore.getState();
-    setError(null);
-    perfRef.current?.step("fetch:start");
-
-    await loadWithCache({
-      peek: () => store.peekLeadsCache(ALL_LEADS_CACHE_KEY),
-      getFresh: () => store.getLeadsCache(ALL_LEADS_CACHE_KEY),
-      set: (result) => store.setLeadsCache(ALL_LEADS_CACHE_KEY, result),
-      fetch: async () => {
-        let intakeMismatchWarning: string | undefined;
-        const result = await fetchAllListPages<LeadRow>(
-          async (pageNum) => {
-            const p = new URLSearchParams();
-            p.set("page", String(pageNum));
-            p.set("status", "all");
-            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
-            const res = await fetchLeads(p);
-            if ("error" in res) return res;
-            if (pageNum === 1) intakeMismatchWarning = res.intakeMismatchWarning;
-            return res;
-          },
-          CLIENT_LIST_FETCH_SIZE
-        );
-        if ("error" in result) throw new Error(result.error);
-        return {
-          items: result.items,
-          total: result.total,
-          page: 1,
-          pageSize: LIST_PAGE_SIZE,
-          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE)),
-          ...(intakeMismatchWarning ? { intakeMismatchWarning } : {})
-        };
-      },
-      onData: (result) => {
-        setAllLeads(result.items);
-        setIntakeWarning(result.intakeMismatchWarning ?? null);
-        perfRef.current?.step("fetch:done");
-      },
-      setLoading,
-      setRefreshing
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setAllLeads([]);
-    });
-  }, []);
-
   useEffect(() => {
-    void loadAllLeads();
-  }, [loadAllLeads]);
+    if (!loading) perfRef.current?.step("fetch:done");
+  }, [loading]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading) return;
@@ -425,55 +345,7 @@ export default function LeadsPage() {
                         </TableRow>
                       ))
                     : data.items.map((row) => (
-                        <TableRow key={row.id}>
-                          <TableCell>
-                            <div className="font-medium">{row.guestName}</div>
-                            {row.guestEmail ? (
-                              <div className="text-xs text-muted-foreground">{row.guestEmail}</div>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="hidden md:table-cell whitespace-nowrap text-sm">
-                            {row.contactNumber ?? "—"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
-                              {row.eventTypeLabel ?? formatEventType(row.eventType)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "font-semibold",
-                                row.customerType === "b2b"
-                                  ? "border-blue-300 bg-blue-50 text-blue-800"
-                                  : "border-slate-300 bg-slate-100 text-slate-700"
-                              )}
-                            >
-                              {formatCustomerType(row.customerType)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="hidden sm:table-cell whitespace-nowrap text-sm">
-                            {formatDisplayDate(row.eventDate)}
-                          </TableCell>
-                          <TableCell className="hidden md:table-cell whitespace-nowrap text-sm text-muted-foreground">
-                            {formatEventTimeRange(row.startTime, row.endTime)}
-                          </TableCell>
-                          <TableCell className="hidden lg:table-cell max-w-[180px] truncate text-sm">
-                            {row.location}
-                          </TableCell>
-                          <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
-                          <TableCell>
-                            <Badge variant={statusVariant(row.status)} className="capitalize">
-                              {row.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button variant="outline" size="sm" asChild>
-                              <Link href={`/dashboard/events?eventId=${encodeURIComponent(row.id)}`}>View</Link>
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+                        <LeadTableRow key={row.id} row={row} />
                       ))}
                 </TableBody>
               </Table>
@@ -492,5 +364,61 @@ export default function LeadsPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+function LeadTableRow({ row }: { row: LeadRow }) {
+  const onHover = usePrefetchOnHover(row.id);
+
+  return (
+    <TableRow onMouseEnter={onHover}>
+      <TableCell>
+        <div className="font-medium">{row.guestName}</div>
+        {row.guestEmail ? (
+          <div className="text-xs text-muted-foreground">{row.guestEmail}</div>
+        ) : null}
+      </TableCell>
+      <TableCell className="hidden md:table-cell whitespace-nowrap text-sm">
+        {row.contactNumber ?? "—"}
+      </TableCell>
+      <TableCell>
+        <Badge variant="secondary" className="max-w-[140px] truncate font-normal">
+          {row.eventTypeLabel ?? formatEventType(row.eventType)}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <Badge
+          variant="outline"
+          className={cn(
+            "font-semibold",
+            row.customerType === "b2b"
+              ? "border-blue-300 bg-blue-50 text-blue-800"
+              : "border-slate-300 bg-slate-100 text-slate-700"
+          )}
+        >
+          {formatCustomerType(row.customerType)}
+        </Badge>
+      </TableCell>
+      <TableCell className="hidden sm:table-cell whitespace-nowrap text-sm">
+        {formatDisplayDate(row.eventDate)}
+      </TableCell>
+      <TableCell className="hidden md:table-cell whitespace-nowrap text-sm text-muted-foreground">
+        {formatEventTimeRange(row.startTime, row.endTime)}
+      </TableCell>
+      <TableCell className="hidden lg:table-cell max-w-[180px] truncate text-sm">
+        {row.location}
+      </TableCell>
+      <TableCell className="text-right">{row.guestCount ?? "—"}</TableCell>
+      <TableCell>
+        <Badge variant={statusVariant(row.status)} className="capitalize">
+          {row.status}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-right">
+        <Button variant="outline" size="sm" asChild onMouseEnter={onHover}>
+          <Link href={`/dashboard/events?eventId=${encodeURIComponent(row.id)}`}>View</Link>
+        </Button>
+      </TableCell>
+    </TableRow>
   );
 }

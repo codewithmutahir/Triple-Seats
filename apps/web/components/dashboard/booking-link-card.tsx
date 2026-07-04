@@ -1,15 +1,15 @@
 "use client";
 
 import { Copy, ExternalLink, Link2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCatererProfileQuery } from "@/hooks/use-dashboard-query";
 import { tenantUrls } from "@/lib/tenant-host";
-import { fetchCatererProfile, type CatererProfile } from "@/lib/caterer-profile";
-import { useAppStore } from "@/lib/stores/app-store";
+import type { CatererProfile } from "@/lib/caterer-profile";
 
 function resolveBookUrl(profile: CatererProfile | null): string | null {
   if (!profile?.slug) return profile?.bookUrl ?? null;
@@ -17,25 +17,9 @@ function resolveBookUrl(profile: CatererProfile | null): string | null {
 }
 
 export function BookingLinkCard() {
-  const [profile, setProfile] = useState<CatererProfile | null>(() =>
-    useAppStore.getState().peekCatererProfile()
-  );
-  const [loading, setLoading] = useState(() => useAppStore.getState().peekCatererProfile() == null);
+  const { data: profile, isLoading } = useCatererProfileQuery();
   const [copied, setCopied] = useState(false);
-
-  const bookUrl = useMemo(() => resolveBookUrl(profile), [profile]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const data = await fetchCatererProfile();
-      if (!cancelled && data) setProfile(data);
-      if (!cancelled) setLoading(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const bookUrl = useMemo(() => resolveBookUrl(profile ?? null), [profile]);
 
   const copyUrl = useCallback(async () => {
     if (!bookUrl) return;
@@ -44,7 +28,7 @@ export function BookingLinkCard() {
     setTimeout(() => setCopied(false), 2000);
   }, [bookUrl]);
 
-  if (loading) {
+  if (isLoading) {
     return (
       <Card>
         <CardHeader>

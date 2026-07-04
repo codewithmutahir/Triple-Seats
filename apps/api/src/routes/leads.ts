@@ -337,7 +337,6 @@ router.get("/", async (req: Request, res: Response) => {
       where.AND = andFilters;
     }
 
-    const start = Date.now();
     const [total, events] = await Promise.all([
       prisma.event.count({ where }),
       prisma.event.findMany({
@@ -372,7 +371,6 @@ router.get("/", async (req: Request, res: Response) => {
     ]);
     perf.step("db:count");
     perf.step("db:findMany");
-    console.log(`[leads] query took ${Date.now() - start}ms (caterer=${catererId}, page=${page})`);
 
     const items = events.map((ev) => {
       const g = ev.primaryGuest;

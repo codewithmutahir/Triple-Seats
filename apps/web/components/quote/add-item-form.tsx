@@ -21,6 +21,7 @@ import {
   searchMenuItems,
   type SearchableMenuItem
 } from "@/lib/menu-item-search";
+import { equipmentUnitFromCatalog } from "@/lib/quote-line-items";
 import { formatUsd } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -185,7 +186,9 @@ export function AddItemForm({
     setSelectedItem(item);
     setSearch(item.name);
     const unit =
-      category === "equipment" ? "per_piece" : (item.defaultUnit as QuoteUnit);
+      category === "equipment"
+        ? equipmentUnitFromCatalog(item.defaultUnit)
+        : (item.defaultUnit as QuoteUnit);
     setUnitType(unit);
     setUnitPrice(item.defaultPrice != null ? String(item.defaultPrice) : "");
     setShowForm(true);
@@ -205,10 +208,11 @@ export function AddItemForm({
   }, [category]);
 
   const refreshCatalog = useCallback(async () => {
+    if (catalogItems) return;
     const { items, error } = await fetchMenuItems(category);
     setMenuItems(items);
     setCatalogError(error ?? null);
-  }, [category]);
+  }, [category, catalogItems]);
 
   const submitItem = useCallback(
     async (payload: AddItemPayload, menuItemId?: string) => {
@@ -236,7 +240,8 @@ export function AddItemForm({
       (selectedItem && !selectedItem.id.startsWith("quote_") ? selectedItem.id : undefined);
 
     if (catalogId) {
-      const resolvedUnit = category === "equipment" ? "per_piece" : unitType;
+      const resolvedUnit =
+        category === "equipment" ? equipmentUnitFromCatalog(unitType) : unitType;
       await submitItem(
         { name, quantity: qty, unitPrice: price, unitType: resolvedUnit, menuItemId: catalogId },
         catalogId
@@ -244,7 +249,8 @@ export function AddItemForm({
       return;
     }
 
-    const resolvedUnit = category === "equipment" ? "per_piece" : unitType;
+    const resolvedUnit =
+      category === "equipment" ? equipmentUnitFromCatalog(unitType) : unitType;
     const res = await fetch("/api/menu-items", {
       method: "POST",
       credentials: "include",
@@ -265,7 +271,9 @@ export function AddItemForm({
       const price = item.defaultPrice ?? 0;
       const menuItemId = item.menuItemId ?? (item.id.startsWith("quote_") ? undefined : item.id);
       const unitType =
-        category === "equipment" ? "per_piece" : (item.defaultUnit as QuoteUnit);
+        category === "equipment"
+          ? equipmentUnitFromCatalog(item.defaultUnit)
+          : (item.defaultUnit as QuoteUnit);
       void submitItem(
         {
           name: item.name,

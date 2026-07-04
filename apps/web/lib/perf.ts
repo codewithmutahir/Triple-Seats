@@ -1,19 +1,17 @@
 export function browserTimer(label: string) {
   const t0 = performance.now();
-  const isProd = process.env.NODE_ENV === "production";
+  const isDev = process.env.NODE_ENV === "development";
   return {
     step: (name: string) => {
-      if (!isProd) {
+      if (isDev) {
         const ms = Math.round(performance.now() - t0);
-        const emoji = ms > 2000 ? "🔴" : ms > 500 ? "🟡" : "🟢";
-        console.log(`${emoji} [${label}] ${name}: ${ms}ms`);
+        console.log(`[${label}] ${name}: ${ms}ms`);
       }
     },
     end: () => {
-      if (!isProd) {
+      if (isDev) {
         const ms = Math.round(performance.now() - t0);
-        const emoji = ms > 2000 ? "🔴" : ms > 500 ? "🟡" : "🟢";
-        console.log(`${emoji} [${label}] TOTAL: ${ms}ms`);
+        console.log(`[${label}] TOTAL: ${ms}ms`);
       }
     }
   };

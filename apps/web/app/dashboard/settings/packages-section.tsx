@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
   ChevronDown,
   Edit2,
@@ -39,6 +40,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useSettingsPackagesQuery } from "@/hooks/use-reports-query";
+import type { SettingsPackage } from "@/lib/settings-types";
+import { queryKeys } from "@/lib/query-keys";
 
 type PriceTier = {
   id: string;
@@ -55,15 +59,7 @@ type PackageItem = {
   sortOrder: number;
 };
 
-type Package = {
-  id: string;
-  name: string;
-  description: string | null;
-  sortOrder: number;
-  minGuests: number;
-  tiers: PriceTier[];
-  items: PackageItem[];
-};
+type Package = SettingsPackage;
 
 type PackageFormData = {
   name: string;
@@ -513,35 +509,24 @@ function PackageCard({
 }
 
 export function PackagesSection() {
-  const [packages, setPackages] = useState<Package[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
+  const {
+    data: packages = [],
+    isLoading: loading,
+    isFetching: refreshing,
+    error: queryError
+  } = useSettingsPackagesQuery();
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const loadError = queryError?.message ?? error;
+
   const formData: PackageFormData = editingId
     ? packageToForm(packages.find((p) => p.id === editingId)!)
     : EMPTY_FORM;
-
-  const fetchPackages = useCallback(async () => {
-    try {
-      const res = await fetch("/api/packages?customerType=b2c", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load packages");
-      const data = await res.json();
-      setPackages(data.items ?? []);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load packages");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchPackages();
-  }, [fetchPackages]);
 
   async function handleSave(data: PackageFormData, id: string | null) {
     const body = {
@@ -569,7 +554,7 @@ export function PackagesSection() {
       throw new Error(errorBody.error || "Failed to save package");
     }
 
-    await fetchPackages();
+    await qc.invalidateQueries({ queryKey: queryKeys.settings.packages() });
   }
 
   async function handleDelete() {
@@ -584,7 +569,7 @@ export function PackagesSection() {
         const errorBody = await res.json().catch(() => ({}));
         throw new Error(errorBody.error || "Failed to delete");
       }
-      await fetchPackages();
+      await qc.invalidateQueries({ queryKey: queryKeys.settings.packages() });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete");
     } finally {
@@ -593,7 +578,7 @@ export function PackagesSection() {
     }
   }
 
-  if (loading) {
+  if (loading && packages.length === 0) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -606,6 +591,7 @@ export function PackagesSection() {
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           {packages.length} package{packages.length !== 1 ? "s" : ""} configured
+          {refreshing ? " · refreshing…" : ""}
         </p>
         <Button
           onClick={() => {
@@ -618,7 +604,7 @@ export function PackagesSection() {
         </Button>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
 
       {packages.length === 0 ? (
         <div className="rounded-lg border border-dashed py-12 text-center">

@@ -3,13 +3,12 @@
 import { format } from "date-fns";
 import { CheckSquare, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
-  CLIENT_LIST_FETCH_SIZE,
-  fetchAllListPages,
   filterTaskItems,
   LIST_PAGE_SIZE,
   paginateItems
@@ -29,25 +28,17 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import {
-  useAppStore,
-  type TaskItem,
-  type TasksListResponse,
-  type TasksStats
-} from "@/lib/stores/app-store";
-import { loadWithCache } from "@/lib/stores/cache-helpers";
-import { parseApiError } from "@/lib/user-facing-error";
+import { useEventsListQuery } from "@/hooks/use-list-queries";
+import { useTaskMutations, useTasksQuery } from "@/hooks/use-tasks-query";
+import { api } from "@/lib/api";
+import type { TaskItem } from "@/lib/stores/app-store";
 import { browserTimer } from "@/lib/perf";
-
-const ALL_TASKS_CACHE_KEY = "__all__";
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
   { value: "completed", label: "Completed" }
 ] as const;
-
-type EventOption = { id: string; title: string; eventDate: string };
 
 function formatShortDate(iso: string) {
   try {
@@ -66,35 +57,6 @@ function formatEventBadge(ev: TaskItem["event"]) {
   }
 }
 
-async function fetchTasks(
-  params: URLSearchParams
-): Promise<TasksListResponse | { error: string }> {
-  const res = await fetch(`/api/tasks?${params.toString()}`, { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText) };
-  }
-  return (await res.json()) as TasksListResponse;
-}
-
-async function fetchTaskStats(): Promise<TasksStats | { error: string }> {
-  const res = await fetch("/api/tasks/stats", { credentials: "include" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    return { error: parseApiError(body, res.status, res.statusText) };
-  }
-  return (await res.json()) as TasksStats;
-}
-
-async function fetchEventOptions(): Promise<EventOption[]> {
-  const res = await fetch("/api/leads?page=1&status=all&pageSize=100", { credentials: "include" });
-  if (!res.ok) return [];
-  const body = (await res.json()) as {
-    items: Array<{ id: string; eventType: string; eventDate: string }>;
-  };
-  return body.items.map((r) => ({ id: r.id, title: r.eventType, eventDate: r.eventDate }));
-}
-
 export default function TasksPage() {
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -108,38 +70,34 @@ export default function TasksPage() {
   const [status, setStatus] = useState<string>("all");
   const [eventFilter, setEventFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
-  const [eventOptions, setEventOptions] = useState<EventOption[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [newEventId, setNewEventId] = useState<string>("none");
   const [completedOpen, setCompletedOpen] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
 
-  const [allTasks, setAllTasks] = useState<TaskItem[]>(
-    () => useAppStore.getState().peekTasksCache(ALL_TASKS_CACHE_KEY)?.items ?? []
+  const { listQuery, statsQuery } = useTasksQuery();
+  const { addMutation, toggleMutation, deleteMutation } = useTaskMutations();
+  const { listQuery: eventsListQuery } = useEventsListQuery();
+
+  const allTasks = listQuery.data ?? [];
+  const stats = statsQuery.data ?? null;
+  const loading = listQuery.isLoading;
+  const refreshing = listQuery.isFetching && !listQuery.isLoading;
+  const error = listQuery.error?.message ?? null;
+
+  const eventOptions = useMemo(
+    () =>
+      (eventsListQuery.data ?? []).map((r) => ({
+        id: r.id,
+        title: r.eventType,
+        eventDate: r.eventDate
+      })),
+    [eventsListQuery.data]
   );
-  const [stats, setStats] = useState<TasksStats | null>(() =>
-    useAppStore.getState().peekTasksStats()
-  );
-  const [loading, setLoading] = useState(
-    () => useAppStore.getState().peekTasksCache(ALL_TASKS_CACHE_KEY) == null
-  );
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
     return () => clearTimeout(t);
   }, [searchInput]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4000);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  useEffect(() => {
-    void fetchEventOptions().then(setEventOptions);
-  }, []);
 
   const eventFilterId = eventFilter === "all" ? undefined : eventFilter;
 
@@ -160,69 +118,9 @@ export default function TasksPage() {
 
   const tasks = listMeta.items;
 
-  const loadAllTasks = useCallback(async () => {
-    const store = useAppStore.getState();
-    setError(null);
-    perfRef.current?.step("fetch:start");
-
-    await loadWithCache({
-      peek: () => store.peekTasksCache(ALL_TASKS_CACHE_KEY),
-      getFresh: () => store.getTasksCache(ALL_TASKS_CACHE_KEY),
-      set: (result) => {
-        if (result) store.setTasksCache(ALL_TASKS_CACHE_KEY, result);
-      },
-      fetch: async () => {
-        const result = await fetchAllListPages<TaskItem>(
-          async (pageNum) => {
-            const p = new URLSearchParams();
-            p.set("page", String(pageNum));
-            p.set("status", "all");
-            p.set("pageSize", String(CLIENT_LIST_FETCH_SIZE));
-            return fetchTasks(p);
-          },
-          CLIENT_LIST_FETCH_SIZE
-        );
-        if ("error" in result) throw new Error(result.error);
-        return {
-          items: result.items,
-          total: result.total,
-          page: 1,
-          pageSize: LIST_PAGE_SIZE,
-          totalPages: Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE))
-        };
-      },
-      onData: (result) => {
-        setAllTasks(result.items);
-        perfRef.current?.step("fetch:done");
-      },
-      setLoading,
-      setRefreshing
-    }).catch((e) => {
-      setError(e instanceof Error ? e.message : "Request failed.");
-      setAllTasks([]);
-    });
-  }, []);
-
-  const loadStats = useCallback(async () => {
-    const store = useAppStore.getState();
-    await loadWithCache({
-      peek: () => store.peekTasksStats(),
-      getFresh: () => store.getTasksStats(),
-      set: (result) => store.setTasksStats(result),
-      fetch: async () => {
-        const result = await fetchTaskStats();
-        if ("error" in result) throw new Error(result.error);
-        return result;
-      },
-      onData: setStats,
-      setLoading: () => {}
-    }).catch(() => {});
-  }, []);
-
   useEffect(() => {
-    void loadAllTasks();
-    void loadStats();
-  }, [loadAllTasks, loadStats]);
+    if (!loading) perfRef.current?.step("fetch:done");
+  }, [loading]);
 
   useEffect(() => {
     setPage(1);
@@ -245,138 +143,31 @@ export default function TasksPage() {
     [tasks]
   );
 
-  async function addTask() {
+  function addTask() {
     const title = newTitle.trim();
     if (!title) return;
 
     const eventId = newEventId !== "none" ? newEventId : undefined;
-    const linkedEvent = eventOptions.find((e) => e.id === eventId);
-    const tempId = `temp-${Date.now()}`;
-    const optimistic: TaskItem = {
-      id: tempId,
-      title,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      event: linkedEvent
-        ? {
-            id: linkedEvent.id,
-            title: linkedEvent.title,
-            eventDate: linkedEvent.eventDate,
-            venue: "—"
-          }
-        : null
-    };
-
-    const prevTasks = allTasks;
-    const prevStats = stats;
-    setAllTasks((t) => [optimistic, ...t]);
-    setStats((s) =>
-      s ? { ...s, total: s.total + 1, pending: s.pending + 1 } : s
-    );
-    setNewTitle("");
-    setNewEventId("none");
-
-    try {
-      const res = await fetch("/api/tasks", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, eventId })
-      });
-      const body = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        task?: { id: string; title: string; status: string; createdAt: string };
-      };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-
-      setAllTasks((t) =>
-        t.map((item) =>
-          item.id === tempId
-            ? {
-                ...item,
-                id: body.task!.id,
-                createdAt: body.task!.createdAt,
-                status: body.task!.status === "done" || body.task!.status === "completed"
-                  ? "completed"
-                  : "pending"
-              }
-            : item
-        )
-      );
-      useAppStore.getState().setTasksCache(ALL_TASKS_CACHE_KEY, null);
-      useAppStore.getState().setTasksStats(null);
-    } catch (e) {
-      setAllTasks(prevTasks);
-      setStats(prevStats);
-      setToast(e instanceof Error ? e.message : "Failed to add task");
-    }
-  }
-
-  async function toggleTask(task: TaskItem, complete: boolean) {
-    const newStatus = complete ? "completed" : "pending";
-    const prevTasks = allTasks;
-    const prevStats = stats;
-
-    setAllTasks((t) =>
-      t.map((item) => (item.id === task.id ? { ...item, status: newStatus } : item))
-    );
-    if (stats) {
-      setStats({
-        ...stats,
-        pending: complete ? stats.pending - 1 : stats.pending + 1,
-        completed: complete ? stats.completed + 1 : stats.completed - 1
-      });
-    }
-
-    try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus })
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(parseApiError(body, res.status, res.statusText));
-      useAppStore.getState().setTasksCache(ALL_TASKS_CACHE_KEY, null);
-      useAppStore.getState().setTasksStats(null);
-    } catch (e) {
-      setAllTasks(prevTasks);
-      setStats(prevStats);
-      setToast(e instanceof Error ? e.message : "Failed to update task");
-    }
-  }
-
-  async function deleteTask(id: string) {
-    const prevTasks = allTasks;
-    const prevStats = stats;
-    const removed = allTasks.find((t) => t.id === id);
-
-    setAllTasks((t) => t.filter((item) => item.id !== id));
-    if (stats && removed) {
-      setStats({
-        ...stats,
-        total: stats.total - 1,
-        pending: removed.status === "pending" ? stats.pending - 1 : stats.pending,
-        completed: removed.status === "completed" ? stats.completed - 1 : stats.completed
-      });
-    }
-
-    try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        credentials: "include"
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(parseApiError(body, res.status, res.statusText));
+    addMutation.mutate(
+      { title, eventId },
+      {
+        onSuccess: () => {
+          setNewTitle("");
+          setNewEventId("none");
+        }
       }
-      useAppStore.getState().setTasksCache(ALL_TASKS_CACHE_KEY, null);
-      useAppStore.getState().setTasksStats(null);
-    } catch (e) {
-      setAllTasks(prevTasks);
-      setStats(prevStats);
-      setToast(e instanceof Error ? e.message : "Failed to delete task");
-    }
+    );
+  }
+
+  function toggleTask(task: TaskItem, complete: boolean) {
+    toggleMutation.mutate({
+      id: task.id,
+      status: complete ? "completed" : "pending"
+    });
+  }
+
+  function deleteTask(id: string) {
+    deleteMutation.mutate(id);
   }
 
   const allCompletedMatchingFilter = useMemo(
@@ -386,65 +177,27 @@ export default function TasksPage() {
 
   async function clearCompleted() {
     if (!allCompletedMatchingFilter.length) return;
-    const prevTasks = allTasks;
-    const prevStats = stats;
-    const count = allCompletedMatchingFilter.length;
-    const idsToDelete = new Set(allCompletedMatchingFilter.map((t) => t.id));
 
-    setAllTasks((t) => t.filter((item) => !idsToDelete.has(item.id)));
-    if (stats) {
-      setStats({
-        ...stats,
-        total: stats.total - count,
-        completed: stats.completed - count
-      });
-    }
+    const results = await Promise.allSettled(
+      allCompletedMatchingFilter.map((t) => api.tasks.delete(t.id))
+    );
 
-    try {
-      const results = await Promise.allSettled(
-        allCompletedMatchingFilter.map(async (t) => {
-          const res = await fetch(`/api/tasks/${encodeURIComponent(t.id)}`, {
-            method: "DELETE",
-            credentials: "include"
-          });
-          if (!res.ok) {
-            const body = (await res.json().catch(() => ({}))) as { error?: string };
-            throw new Error(parseApiError(body, res.status, res.statusText));
-          }
-          return t.id;
-        })
-      );
-
-      const failedIds = new Set<string>();
-      results.forEach((result, i) => {
-        if (result.status === "rejected") {
-          failedIds.add(allCompletedMatchingFilter[i]!.id);
-        }
-      });
-
-      if (failedIds.size > 0) {
-        const failedTasks = prevTasks.filter((t) => failedIds.has(t.id));
-        setAllTasks((current) => [...failedTasks, ...current]);
-        if (prevStats) {
-          setStats({
-            ...prevStats,
-            total: prevStats.total - (count - failedIds.size),
-            completed: prevStats.completed - (count - failedIds.size)
-          });
-        }
-        setToast(
-          failedIds.size === count
-            ? "Failed to clear completed tasks"
-            : `${failedIds.size} task(s) could not be deleted`
-        );
+    const failedIds = new Set<string>();
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        failedIds.add(allCompletedMatchingFilter[i]!.id);
       }
+    });
 
-      useAppStore.getState().setTasksCache(ALL_TASKS_CACHE_KEY, null);
-      useAppStore.getState().setTasksStats(null);
-    } catch {
-      setAllTasks(prevTasks);
-      setStats(prevStats);
-      setToast("Failed to clear completed tasks");
+    void listQuery.refetch();
+    void statsQuery.refetch();
+
+    if (failedIds.size > 0) {
+      toast.error(
+        failedIds.size === allCompletedMatchingFilter.length
+          ? "Failed to clear completed tasks"
+          : `${failedIds.size} task(s) could not be deleted`
+      );
     }
   }
 
@@ -463,7 +216,7 @@ export default function TasksPage() {
           <Checkbox
             className="mt-0.5"
             checked={task.status === "completed"}
-            onCheckedChange={(c) => void toggleTask(task, c === true)}
+            onCheckedChange={(c) => toggleTask(task, c === true)}
           />
           <div className="min-w-0 flex-1 space-y-1">
             <p
@@ -492,7 +245,7 @@ export default function TasksPage() {
             size="icon"
             variant="ghost"
             className="h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-            onClick={() => void deleteTask(task.id)}
+            onClick={() => deleteTask(task.id)}
           >
             <Trash2 className="h-4 w-4 text-muted-foreground" />
           </Button>
@@ -517,12 +270,6 @@ export default function TasksPage() {
         </div>
         {refreshing ? <RefreshingBadge /> : null}
       </header>
-
-      {toast ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-          {toast}
-        </div>
-      ) : null}
 
       {error ? (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
@@ -602,7 +349,7 @@ export default function TasksPage() {
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void addTask();
+            if (e.key === "Enter") addTask();
           }}
           className="bg-white"
         />
@@ -623,7 +370,8 @@ export default function TasksPage() {
           type="button"
           size="icon"
           className="shrink-0 bg-[#1B2A4A] hover:bg-[#1B2A4A]/90"
-          onClick={() => void addTask()}
+          onClick={() => addTask()}
+          disabled={addMutation.isPending}
         >
           <Plus className="h-4 w-4" />
         </Button>
