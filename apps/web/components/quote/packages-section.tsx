@@ -25,9 +25,10 @@ type PackagesSectionProps = {
   guestCount: number;
   customerType?: "b2b" | "b2c";
   packageLineItem: QuoteLineItem | null;
+  selectedPackageId: string | null;
+  savingPackageId?: string | null;
   loading?: boolean;
   guestCountUpdating?: boolean;
-  packageSaving?: boolean;
   onGuestCountChange: (guestCount: number) => void;
   onAdd: (packageId: string) => void;
   onRemove: () => void;
@@ -49,8 +50,9 @@ function PackageCard({
   pkg,
   guestCount,
   customerType,
-  isAdded,
-  disabled,
+  isSelected,
+  isSaving,
+  tierUnavailable,
   onAdd,
   onRemove,
   onSelectTier
@@ -58,8 +60,9 @@ function PackageCard({
   pkg: CateringPackage;
   guestCount: number;
   customerType: "b2b" | "b2c";
-  isAdded: boolean;
-  disabled: boolean;
+  isSelected: boolean;
+  isSaving?: boolean;
+  tierUnavailable: boolean;
   onAdd: () => void;
   onRemove: () => void;
   onSelectTier: (guestCount: number) => void;
@@ -70,15 +73,26 @@ function PackageCard({
   const itemCount = pkg.items.reduce((sum, i) => sum + i.quantity, 0);
 
   return (
-    <Card className={cn("flex flex-col", isAdded && "border-primary ring-1 ring-primary/20")}>
+    <Card
+      className={cn(
+        "relative flex flex-col",
+        isSelected && "border-primary ring-2 ring-[#1B2A4A]"
+      )}
+    >
+      {isSaving ? (
+        <div
+          className="absolute right-2 top-2 h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground"
+          aria-hidden
+        />
+      ) : null}
       <CardContent className="flex flex-1 flex-col gap-3 p-4">
         <div className="flex items-start justify-between gap-2">
           <div>
             <h3 className="font-heading text-lg font-semibold">{pkg.name}</h3>
             <p className="text-sm text-muted-foreground">{itemCount} items</p>
           </div>
-          {isAdded ? (
-            <Badge className="shrink-0 bg-emerald-600 hover:bg-emerald-600">Added ✓</Badge>
+          {isSelected ? (
+            <Badge className="shrink-0 bg-emerald-600 hover:bg-emerald-600">Selected ✓</Badge>
           ) : null}
         </div>
 
@@ -155,7 +169,7 @@ function PackageCard({
           </CollapsibleContent>
         </Collapsible>
 
-        {isAdded ? (
+        {isSelected ? (
           <Button
             type="button"
             variant="outline"
@@ -168,7 +182,7 @@ function PackageCard({
           <Button
             type="button"
             className="mt-auto"
-            disabled={disabled || !activeTier}
+            disabled={tierUnavailable}
             onClick={onAdd}
           >
             Add Package
@@ -184,9 +198,10 @@ export function PackagesSection({
   guestCount,
   customerType = "b2c",
   packageLineItem,
+  selectedPackageId,
+  savingPackageId = null,
   loading,
   guestCountUpdating = false,
-  packageSaving = false,
   onGuestCountChange,
   onAdd,
   onRemove
@@ -247,16 +262,10 @@ export function PackagesSection({
               >
                 <Info className="h-4 w-4" />
               </span>
-              {packageLineItem ? (
+              {selectedPackageId ? (
                 <Badge variant="secondary" className="ml-1">
                   1
                 </Badge>
-              ) : null}
-              {packageSaving ? (
-                <span className="ml-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Syncing
-                </span>
               ) : null}
             </div>
             <ChevronDown
@@ -317,8 +326,9 @@ export function PackagesSection({
                     pkg={pkg}
                     guestCount={previewGuestCount}
                     customerType={customerType}
-                    isAdded={(packageLineItem?.packageId ?? null) === pkg.id}
-                    disabled={previewGuestCount <= 0}
+                    isSelected={selectedPackageId === pkg.id}
+                    isSaving={savingPackageId === pkg.id}
+                    tierUnavailable={previewGuestCount <= 0 || !getActiveTier(pkg.tiers, previewGuestCount, customerType)}
                     onSelectTier={handleGuestCountChange}
                     onAdd={() => onAdd(pkg.id)}
                     onRemove={onRemove}
