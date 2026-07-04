@@ -12,6 +12,7 @@ out
 # Build
 build
 dist
+*.tsbuildinfo
 
 # Prisma
 **/generated
