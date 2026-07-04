@@ -137,8 +137,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       api.quotes.update(quoteId, data),
     onSuccess: (result) => {
       patchBuilder((old) => ({ ...old, quote: { ...old.quote, ...result.quote } }));
-    },
-    onError: () => toast.error("Failed to save quote")
+    }
   });
 
   const addPackageMutation = useMutation({
