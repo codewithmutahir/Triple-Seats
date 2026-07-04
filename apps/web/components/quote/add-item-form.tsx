@@ -97,6 +97,11 @@ function HighlightedName({ name, query }: { name: string; query: string }) {
   );
 }
 
+function getDefaultUnitType(category: ItemCategory): QuoteUnit {
+  if (category === "equipment") return "flat";
+  return "per_head";
+}
+
 export function AddItemForm({
   category,
   existingItems = [],
@@ -110,7 +115,7 @@ export function AddItemForm({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [selectedItem, setSelectedItem] = useState<SearchableMenuItem | null>(null);
   const [quantity, setQuantity] = useState("1");
-  const [unitType, setUnitType] = useState<QuoteUnit>("per_head");
+  const [unitType, setUnitType] = useState<QuoteUnit>(getDefaultUnitType(category));
   const [unitPrice, setUnitPrice] = useState("");
   const [showForm, setShowForm] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -190,12 +195,12 @@ export function AddItemForm({
     setSearch("");
     setSelectedItem(null);
     setQuantity("1");
-    setUnitType("per_head");
+    setUnitType(getDefaultUnitType(category));
     setUnitPrice("");
     setShowForm(false);
     setShowDropdown(false);
     setActiveIndex(-1);
-  }, []);
+  }, [category]);
 
   const refreshCatalog = useCallback(async () => {
     const { items, error } = await fetchMenuItems(category);

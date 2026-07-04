@@ -19,6 +19,22 @@ import {
   lineItemTotal
 } from "./quote-totals";
 import type { QuoteWithRelations } from "./quote-serialize";
+import { formatEventType } from "./event-customer-types";
+
+function formatEventTime(iso: Date | string | null | undefined): string {
+  if (!iso) return "";
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function formatEventTimeRange(startTime: Date | null | undefined, endTime: Date | null | undefined): string {
+  const start = formatEventTime(startTime);
+  if (!start) return "—";
+  const end = formatEventTime(endTime);
+  if (!end) return start;
+  return `${start} – ${end}`;
+}
 
 type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 
@@ -349,7 +365,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
       React.createElement(
         View,
         { style: styles.headerRow },
-        React.createElement(Text, { style: styles.logo }, "CaterPro"),
+        React.createElement(Text, { style: styles.logo }, "Tripeseats"),
         React.createElement(Text, { style: styles.title }, "CATERING QUOTE")
       ),
       React.createElement(Text, { style: styles.sectionTitle }, "Quote Details"),
@@ -406,6 +422,32 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
             { style: styles.detailValue },
             formatDate(quote.event?.eventDate)
           )
+        ),
+        React.createElement(
+          View,
+          { style: styles.detailRow },
+          React.createElement(Text, { style: styles.detailLabel }, "Event Time:"),
+          React.createElement(
+            Text,
+            { style: styles.detailValue },
+            formatEventTimeRange(quote.event?.startTime, quote.event?.endTime)
+          )
+        ),
+        React.createElement(
+          View,
+          { style: styles.detailRow },
+          React.createElement(Text, { style: styles.detailLabel }, "Event Type:"),
+          React.createElement(
+            Text,
+            { style: styles.detailValue },
+            quote.event?.eventType ? formatEventType(quote.event.eventType) : "—"
+          )
+        ),
+        React.createElement(
+          View,
+          { style: styles.detailRow },
+          React.createElement(Text, { style: styles.detailLabel }, "Guests:"),
+          React.createElement(Text, { style: styles.detailValue }, String(guestCount))
         ),
         React.createElement(
           View,
@@ -476,7 +518,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
       React.createElement(
         Text,
         { style: styles.footer },
-        "Thank you for choosing CaterPro"
+        "Thank you for choosing Tripeseats"
       )
     )
   );

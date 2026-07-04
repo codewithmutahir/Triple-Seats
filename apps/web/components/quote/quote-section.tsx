@@ -1,10 +1,11 @@
 "use client";
 
-import { Beef, Cake, Check, ChevronDown, Info, Package, Salad, UtensilsCrossed } from "lucide-react";
+import { Beef, Cake, ChevronDown, Info, Package, Salad, UtensilsCrossed } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { AddItemForm, type AddItemPayload } from "@/components/quote/add-item-form";
 import { LineItemRow } from "@/components/quote/line-item-row";
+import { PackageItemsSection } from "@/components/quote/package-item-selector";
 import type { ItemCategory, MenuItem, PackageIncludedItem, QuoteLineItem } from "@/components/quote/types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -36,6 +37,9 @@ type QuoteSectionProps = {
   includedPackageName?: string;
   includedItems?: PackageIncludedItem[];
   catalogItems?: MenuItem[];
+  customerType?: "b2b" | "b2c";
+  selectedPackageItems?: Record<string, string[]>;
+  onPackageItemsChange?: (selections: Record<string, string[]>) => void;
 };
 
 export function QuoteSection({
@@ -53,11 +57,16 @@ export function QuoteSection({
   tempItemIds,
   includedPackageName,
   includedItems,
-  catalogItems
+  catalogItems,
+  customerType = "b2c",
+  selectedPackageItems,
+  onPackageItemsChange
 }: QuoteSectionProps) {
   const Icon = SECTION_ICONS[category] ?? Package;
   const sectionSubtotal = items.reduce((sum, item) => sum + lineItemTotal(item, guestCount), 0);
   const isIncludedView = Boolean(includedPackageName && includedItems !== undefined);
+  const isB2B = customerType === "b2b";
+  const canAddItems = !isB2B || category === "equipment" || category === "delivery";
 
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
@@ -98,28 +107,37 @@ export function QuoteSection({
                   <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                   <p>
                     These items are included in {includedPackageName}. Pricing is covered by the
-                    package rate.
+                    package rate. Select your preferred items below.
                   </p>
                 </div>
-                <ul className="space-y-2">
-                  {includedItems!.length > 0 ? (
-                    includedItems!.map((item) => (
-                      <li
-                        key={item.id}
-                        className="flex items-center justify-between gap-2 rounded-md border bg-emerald-50/50 px-3 py-2 text-sm"
-                      >
-                        <span className="flex items-center gap-2 font-medium text-emerald-900">
-                          <Check className="h-4 w-4 text-emerald-600" aria-hidden />
-                          {item.label}
-                          {item.quantity > 1 ? ` × ${item.quantity}` : ""}
-                        </span>
-                        <span className="text-xs text-muted-foreground">Included in package</span>
-                      </li>
-                    ))
+                {includedItems!.length > 0 ? (
+                  selectedPackageItems && onPackageItemsChange && catalogItems ? (
+                    <PackageItemsSection
+                      includedItems={includedItems!}
+                      catalogItems={catalogItems}
+                      packageName={includedPackageName!}
+                      selectedPackageItems={selectedPackageItems}
+                      onPackageItemsChange={onPackageItemsChange}
+                    />
                   ) : (
-                    <li className="text-sm text-muted-foreground">No items in this category for this package.</li>
-                  )}
-                </ul>
+                    <ul className="space-y-2">
+                      {includedItems!.map((item) => (
+                        <li
+                          key={item.id}
+                          className="flex items-center justify-between gap-2 rounded-md border bg-emerald-50/50 px-3 py-2 text-sm"
+                        >
+                          <span className="flex items-center gap-2 font-medium text-emerald-900">
+                            {item.label}
+                            {item.quantity > 1 ? ` × ${item.quantity}` : ""}
+                          </span>
+                          <span className="text-xs text-muted-foreground">Included in package</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                ) : (
+                  <p className="text-sm text-muted-foreground">No items in this category for this package.</p>
+                )}
               </>
             ) : (
               <>
@@ -140,12 +158,18 @@ export function QuoteSection({
                   </ul>
                 )}
 
-                <AddItemForm
-                  category={category}
-                  existingItems={items}
-                  onAdd={onAdd}
-                  catalogItems={catalogItems}
-                />
+                {canAddItems ? (
+                  <AddItemForm
+                    category={category}
+                    existingItems={items}
+                    onAdd={onAdd}
+                    catalogItems={catalogItems}
+                  />
+                ) : (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    B2B customers can only add packages. Individual items are not available for B2B quotes.
+                  </div>
+                )}
               </>
             )}
           </CardContent>

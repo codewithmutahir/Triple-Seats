@@ -22,6 +22,7 @@ export default function HomePage() {
           </Button>
         </div>
       </header>
+      
 
       <main className="mx-auto flex flex-1 w-full max-w-5xl flex-col justify-center px-6 py-16">
         <p className="mb-4 text-sm font-medium uppercase tracking-wider text-emerald-300">

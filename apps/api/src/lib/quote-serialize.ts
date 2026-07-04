@@ -95,6 +95,8 @@ export function serializeQuote(quote: QuoteWithRelations) {
           eventTypeLabel: eventTypeTitle(quote.event.eventType),
           customerType: quote.event.customerType,
           eventDate: quote.event.eventDate.toISOString(),
+          startTime: quote.event.startTime?.toISOString() ?? null,
+          endTime: quote.event.endTime?.toISOString() ?? null,
           guestCountEstimate: quote.event.guestCountEstimate,
           venueAddress: quote.event.venueAddress,
           venueName: quote.event.venueName,

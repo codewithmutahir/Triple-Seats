@@ -68,7 +68,7 @@ export function LineItemRow({ item, guestCount, onUpdate, onDelete, isTemp }: Li
       ? `${formatUsd(item.unitPrice)} × ${guestCount} guests = ${formatUsd(total)}`
       : item.unitType === "by_tray"
         ? `${formatUsd(item.unitPrice)} × ${item.quantity} tray${item.quantity === 1 ? "" : "s"} = ${formatUsd(total)}`
-        : `${formatUsd(item.unitPrice)} flat = ${formatUsd(total)}`;
+        : `${formatUsd(item.unitPrice)} × ${item.quantity} = ${formatUsd(total)}`;
 
   return (
     <li
