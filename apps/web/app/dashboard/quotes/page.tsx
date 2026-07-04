@@ -152,6 +152,7 @@ function QuoteBuilderPage() {
   >(() => Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
 
   const settingsInitialized = useRef(false);
+  const skipSettingsSaveRef = useRef(true);
 
   const guestCount = quote?.event?.guestCountEstimate ?? 0;
 
@@ -194,6 +195,7 @@ function QuoteBuilderPage() {
 
   useEffect(() => {
     if (!quote) return;
+    skipSettingsSaveRef.current = true;
     settingsInitialized.current = true;
     setTaxPct(String((quote.taxRate * 100).toFixed(2).replace(/\.?0+$/, "")));
     setDepositPctInput(String(Math.round(quote.depositPct * 100)));
@@ -203,16 +205,34 @@ function QuoteBuilderPage() {
 
   const saveSettings = useDebouncedCallback(() => {
     if (!settingsInitialized.current || !quote) return;
+    if (skipSettingsSaveRef.current) {
+      skipSettingsSaveRef.current = false;
+      return;
+    }
+
     const tax = parseFloat(taxPct) / 100;
     const deposit = parseFloat(depositPctInput) / 100;
     if (!Number.isFinite(tax) || !Number.isFinite(deposit)) return;
+
+    const nextNotes = notes.trim() || null;
+    const nextDueDate = dueDate ? dueDate.toISOString() : null;
+    const currentDueDate = quote.dueDate ? new Date(quote.dueDate).toISOString() : null;
+    if (
+      tax === quote.taxRate &&
+      deposit === quote.depositPct &&
+      nextNotes === (quote.notes ?? null) &&
+      nextDueDate === currentDueDate
+    ) {
+      return;
+    }
+
     updateQuoteMutation.mutate({
       quoteId: quote.id,
       data: {
         taxRate: tax,
         depositPct: deposit,
-        notes: notes.trim() || null,
-        dueDate: dueDate ? dueDate.toISOString() : null
+        notes: nextNotes,
+        dueDate: nextDueDate
       }
     });
   }, 800);
@@ -232,7 +252,7 @@ function QuoteBuilderPage() {
   useEffect(() => {
     if (!quote || !settingsInitialized.current) return;
     saveSettings();
-  }, [taxPct, depositPctInput, notes, dueDate, saveSettings, quote]);
+  }, [taxPct, depositPctInput, notes, dueDate, saveSettings]);
 
   const addLineItemOptimistic = useCallback(
     (category: ItemCategory, payload: AddItemPayload) => {
