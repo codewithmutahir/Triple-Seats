@@ -42,6 +42,8 @@ enum ReminderStatus {
 
 enum QuoteStatus {
   draft
+  sending
+  send_failed
   sent
   accepted
   declined

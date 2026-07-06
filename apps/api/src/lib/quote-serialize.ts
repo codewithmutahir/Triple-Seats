@@ -19,6 +19,11 @@ export const quoteInclude = {
   event: { include: { primaryGuest: true } }
 } satisfies Prisma.QuoteInclude;
 
+/** Builder batch — no nested event (fetched in parallel on the route). */
+export const quoteBuilderInclude = {
+  lineItems: quoteInclude.lineItems
+} satisfies Prisma.QuoteInclude;
+
 export type QuoteWithRelations = Prisma.QuoteGetPayload<{ include: typeof quoteInclude }>;
 type QuoteLineItem = QuoteWithRelations["lineItems"][number];
 type QuoteStatus = QuoteWithRelations["status"];
@@ -118,7 +123,14 @@ export function serializeQuote(quote: QuoteWithRelations) {
 }
 
 export function parseQuoteStatus(value: unknown): QuoteStatus | null {
-  if (value === "draft" || value === "sent" || value === "accepted" || value === "declined") {
+  if (
+    value === "draft" ||
+    value === "sending" ||
+    value === "send_failed" ||
+    value === "sent" ||
+    value === "accepted" ||
+    value === "declined"
+  ) {
     return value;
   }
   return null;
