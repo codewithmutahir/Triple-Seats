@@ -1,6 +1,6 @@
 "use client";
 
-import { endOfMonth, format, startOfMonth } from "date-fns";
+import { endOfMonth, format, parseISO, startOfMonth } from "date-fns";
 import { CalendarDays, Loader2, MapPin, RefreshCw, Users } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -22,7 +22,8 @@ import { cn } from "@/lib/utils";
 import { browserTimer } from "@/lib/perf";
 import { useCalendarStore } from "@/lib/stores/calendar-store";
 
-import { adjacentMonthRanges, fetchCalendarEvents, fetchCalendarInit, groupEventsByMonth, monthKey } from "./calendar-utils";
+import { adjacentMonthRanges, collectEventsForGrid, eventCalendarDay, eventsForMonthKey, fetchCalendarEvents, fetchCalendarInit, groupEventsByMonth, monthKey, monthStartFromKey, monthsOverlappingRange } from "./calendar-utils";
+import type { CalendarDatesChange } from "./calendar-widget";
 import type { CalendarEvent } from "./types";
 
 const CalendarWidget = dynamic(
@@ -59,7 +60,7 @@ function guestInitials(name?: string | null) {
 }
 
 function formatEventDateTime(event: CalendarEvent) {
-  const date = format(new Date(event.start), "EEEE, MMMM d, yyyy");
+  const date = format(parseISO(eventCalendarDay(event.start)), "EEEE, MMMM d, yyyy");
   if (!event.startTime) return date;
   const timeStart = format(new Date(event.startTime), "h:mm a");
   const timeEnd = event.endTime ? format(new Date(event.endTime), "h:mm a") : null;
@@ -74,7 +75,7 @@ function resolveInitialEvents(
   const store = useCalendarStore.getState();
   if (store.isFresh(key)) {
     const cached = store.getMonthEvents(key);
-    if (cached) return cached;
+    if (cached !== null) return cached;
   }
   return initialEvents;
 }
@@ -107,21 +108,16 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
     startOfMonth(new Date(initialRange.start))
   );
 
-  const activeRangeRef = useRef<{ start: Date; end: Date } | null>(null);
+  const activeRangeRef = useRef<CalendarDatesChange | null>(null);
   const requestIdRef = useRef(0);
   const seededRef = useRef(false);
   const initLoadedRef = useRef(false);
 
   if (!seededRef.current) {
     seededRef.current = true;
-    const store = useCalendarStore.getState();
     if (initialEvents.length > 0) {
+      const store = useCalendarStore.getState();
       store.seedEventsByMonth(groupEventsByMonth(initialEvents));
-    } else {
-      const key = monthKey(new Date(initialRange.start));
-      if (!store.isFresh(key)) {
-        store.setMonthEvents(key, initialEvents);
-      }
     }
   }
 
@@ -138,7 +134,7 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
     const key = monthKey(new Date(initialRange.start));
     if (isFresh(key)) {
       const cached = getMonthEvents(key);
-      if (cached) {
+      if (cached !== null) {
         setEvents(cached);
         setEventsVisible(true);
         return;
@@ -146,7 +142,7 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
     }
 
     if (initialEvents.length > 0) {
-      setEvents(getMonthEvents(key) ?? initialEvents.filter((e) => monthKey(new Date(e.start)) === key));
+      setEvents(getMonthEvents(key) ?? eventsForMonthKey(initialEvents, key));
       setEventsVisible(true);
       return;
     }
@@ -165,7 +161,7 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
 
       const all = result.data ?? [];
       seedEventsByMonth(groupEventsByMonth(all));
-      const current = getMonthEvents(key) ?? all.filter((e) => monthKey(new Date(e.start)) === key);
+      const current = getMonthEvents(key) ?? eventsForMonthKey(all, key);
       setEvents(current);
       setEventsVisible(true);
       setError(null);
@@ -174,22 +170,10 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
   }, [getMonthEvents, initialEvents, initialRange.start, isFresh, seedEventsByMonth, setLoading]);
 
   const loadMonthEvents = useCallback(
-    async (start: Date, end: Date, silent = false) => {
-      const key = monthKey(start);
-      if (!silent) {
-        activeRangeRef.current = { start, end };
-      }
-
+    async (monthStart: Date, monthEnd: Date, key: string, silent = false) => {
       if (isFresh(key)) {
         const cached = getMonthEvents(key);
-        if (cached) {
-          if (!silent) {
-            setEvents(cached);
-            setError(null);
-            setEventsVisible(true);
-          }
-          return;
-        }
+        if (cached !== null) return cached;
       }
 
       const requestId = ++requestIdRef.current;
@@ -199,51 +183,89 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
       }
 
       perfRef.current?.step("fetch:start");
-      const result = await fetchCalendarEvents(start, end);
+      const result = await fetchCalendarEvents(monthStart, monthEnd);
       perfRef.current?.step("fetch:done");
-      if (requestId !== requestIdRef.current) return;
+      if (requestId !== requestIdRef.current) return null;
 
       if (result.error) {
         if (!silent) {
           setError(result.error);
-          setEvents([]);
         }
-      } else {
-        const data = result.data ?? [];
-        setMonthEvents(key, data);
-        if (!silent) {
-          setEvents(data);
-          setEventsVisible(true);
-          setError(null);
-        }
+        return null;
       }
 
-      if (!silent) {
-        setLoading(false);
-      }
+      const data = eventsForMonthKey(result.data ?? [], key);
+      setMonthEvents(key, data);
+      return data;
     },
     [getMonthEvents, isFresh, setLoading, setMonthEvents]
+  );
+
+  const ensureGridMonthsLoaded = useCallback(
+    async (gridStart: Date, gridEnd: Date) => {
+      const loads = monthsOverlappingRange(gridStart, gridEnd).map(async (key) => {
+        if (isFresh(key) && getMonthEvents(key) !== null) return;
+        const monthStart = monthStartFromKey(key);
+        await loadMonthEvents(monthStart, endOfMonth(monthStart), key, true);
+      });
+      await Promise.all(loads);
+    },
+    [getMonthEvents, isFresh, loadMonthEvents]
+  );
+
+  const applyGridEvents = useCallback(
+    (gridStart: Date, gridEnd: Date) => {
+      setEvents(collectEventsForGrid(gridStart, gridEnd, getMonthEvents));
+      setEventsVisible(true);
+      setError(null);
+    },
+    [getMonthEvents]
   );
 
   const prefetchAdjacent = useCallback(
     (anchor: Date) => {
       for (const range of adjacentMonthRanges(anchor)) {
         const key = monthKey(range.start);
-        if (!isFresh(key)) {
-          void loadMonthEvents(range.start, range.end, true);
+        if (!isFresh(key) || getMonthEvents(key) === null) {
+          void loadMonthEvents(range.start, range.end, key, true);
         }
       }
     },
-    [isFresh, loadMonthEvents]
+    [getMonthEvents, isFresh, loadMonthEvents]
   );
 
-  const handleDatesChange = useCallback(
-    (start: Date, end: Date) => {
-      setCurrentViewStart(startOfMonth(start));
-      void loadMonthEvents(start, end, false);
-      prefetchAdjacent(start);
+  const handleViewChange = useCallback(
+    async ({ gridStart, gridEnd, anchorStart, viewType }: CalendarDatesChange) => {
+      activeRangeRef.current = { gridStart, gridEnd, anchorStart, viewType };
+      setCurrentViewStart(
+        viewType === "dayGridMonth" ? startOfMonth(anchorStart) : anchorStart
+      );
+
+      if (viewType === "timeGridWeek") {
+        setLoading(true);
+        setError(null);
+        const result = await fetchCalendarEvents(gridStart, gridEnd);
+        if (result.error) {
+          setError(result.error);
+          setEvents([]);
+        } else {
+          setEvents(result.data ?? []);
+          setEventsVisible(true);
+          setError(null);
+        }
+        setLoading(false);
+        return;
+      }
+
+      const visibleMonth = startOfMonth(anchorStart);
+      const key = monthKey(visibleMonth);
+      await loadMonthEvents(visibleMonth, endOfMonth(visibleMonth), key, false);
+      await ensureGridMonthsLoaded(gridStart, gridEnd);
+      applyGridEvents(gridStart, gridEnd);
+      setLoading(false);
+      prefetchAdjacent(visibleMonth);
     },
-    [loadMonthEvents, prefetchAdjacent]
+    [applyGridEvents, ensureGridMonthsLoaded, loadMonthEvents, prefetchAdjacent, setLoading]
   );
 
   useEffect(() => {
@@ -256,16 +278,18 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
   }, [isLoading, eventsVisible]);
 
   const handleRetry = useCallback(() => {
-    if (activeRangeRef.current) {
-      const { start, end } = activeRangeRef.current;
-      const key = monthKey(start);
-      useCalendarStore.setState((state) => {
-        const { [key]: _removed, ...rest } = state.cache;
-        return { cache: rest };
-      });
-      void loadMonthEvents(start, end, false);
-    }
-  }, [loadMonthEvents]);
+    const active = activeRangeRef.current;
+    if (!active) return;
+
+    useCalendarStore.setState((state) => {
+      const cache = { ...state.cache };
+      for (const key of monthsOverlappingRange(active.gridStart, active.gridEnd)) {
+        delete cache[key];
+      }
+      return { cache };
+    });
+    void handleViewChange(active);
+  }, [handleViewChange]);
 
   const handleEventClick = useCallback((event: CalendarEvent) => {
     setSelectedEvent(event);
@@ -330,7 +354,7 @@ export default function CalendarClient({ initialEvents, initialRange }: Calendar
           <CalendarWidget
             events={events}
             initialView={initialView}
-            onDatesChange={handleDatesChange}
+            onDatesChange={handleViewChange}
             onEventClick={handleEventClick}
             onReady={handleReady}
           />

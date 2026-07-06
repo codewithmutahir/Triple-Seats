@@ -1,9 +1,20 @@
-import { addMonths, endOfMonth, format, startOfMonth, subMonths } from "date-fns";
+import { addMonths, endOfMonth, format, parseISO, startOfMonth, subMonths } from "date-fns";
 
 import { apiFetchJson } from "@/lib/api-client";
 import { supportsApiFeature } from "@/lib/api-features";
 
 import type { CalendarEvent } from "./types";
+
+/** YYYY-MM-DD from API start (date-only or legacy ISO timestamp). */
+export function eventCalendarDay(start: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start)) return start;
+  return start.slice(0, 10);
+}
+
+/** yyyy-MM month bucket for an event start value. */
+export function monthKeyFromStart(start: string): string {
+  return eventCalendarDay(start).slice(0, 7);
+}
 
 export function monthKey(date: Date): string {
   return format(startOfMonth(date), "yyyy-MM");
@@ -22,15 +33,64 @@ export function adjacentMonthRanges(anchor: Date) {
   ] as const;
 }
 
+/** Parse yyyy-MM to local start-of-month. */
+export function monthStartFromKey(key: string): Date {
+  const [year, month] = key.split("-").map(Number);
+  return startOfMonth(new Date(year!, month! - 1, 15));
+}
+
+/** Month keys (yyyy-MM) touched by a FullCalendar grid range (incl. padding days). */
+export function monthsOverlappingRange(gridStart: Date, gridEnd: Date): string[] {
+  const keys: string[] = [];
+  let cursor = startOfMonth(gridStart);
+  const last = startOfMonth(new Date(gridEnd.getTime() - 1));
+  while (cursor <= last) {
+    keys.push(monthKey(cursor));
+    cursor = addMonths(cursor, 1);
+  }
+  return keys;
+}
+
+export function collectEventsForGrid(
+  gridStart: Date,
+  gridEnd: Date,
+  getMonthEvents: (monthKey: string) => CalendarEvent[] | null
+): CalendarEvent[] {
+  const seen = new Set<string>();
+  const result: CalendarEvent[] = [];
+  const startDay = format(gridStart, "yyyy-MM-dd");
+  const endDay = format(new Date(gridEnd.getTime() - 1), "yyyy-MM-dd");
+
+  for (const key of monthsOverlappingRange(gridStart, gridEnd)) {
+    const monthEvents = getMonthEvents(key);
+    if (monthEvents === null) continue;
+    for (const ev of monthEvents) {
+      if (seen.has(ev.id)) continue;
+      const eventDay = eventCalendarDay(ev.start);
+      if (eventDay >= startDay && eventDay <= endDay) {
+        seen.add(ev.id);
+        result.push(ev);
+      }
+    }
+  }
+
+  return result;
+}
+
 /** Group events by yyyy-MM month key for Zustand cache seeding */
 export function groupEventsByMonth(events: CalendarEvent[]): Record<string, CalendarEvent[]> {
   const grouped: Record<string, CalendarEvent[]> = {};
   for (const ev of events) {
-    const key = monthKey(new Date(ev.start));
+    const key = monthKeyFromStart(ev.start);
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(ev);
   }
   return grouped;
+}
+
+/** Keep only events whose calendar month matches the requested cache key. */
+export function eventsForMonthKey(events: CalendarEvent[], key: string): CalendarEvent[] {
+  return events.filter((ev) => monthKeyFromStart(ev.start) === key);
 }
 
 function initMonthRanges(anchor = new Date()) {
