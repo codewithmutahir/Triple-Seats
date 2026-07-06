@@ -17,7 +17,7 @@
 
 ### API (required)
 
-- [ ] `DATABASE_URL`
+- [ ] `DATABASE_URL` — transaction pooler (`:6543`) with `?pgbouncer=true&connection_limit=6&sslmode=require` (single VPS / single process)
 - [ ] `DIRECT_URL`
 - [ ] `BETTER_AUTH_SECRET` (32+ chars)
 - [ ] `BETTER_AUTH_URL`

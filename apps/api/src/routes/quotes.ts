@@ -8,8 +8,10 @@ import {
   parseItemCategory,
   parseQuoteStatus,
   parseQuoteUnit,
+  quoteBuilderInclude,
   quoteInclude,
   serializeQuote,
+  serializeQuoteTotalsPatch,
   type QuoteWithRelations
 } from "../lib/quote-serialize";
 import { getResend, resendFromEmail } from "../lib/mail";
@@ -45,13 +47,28 @@ async function loadQuoteForCaterer(quoteId: string, catererId: string) {
 async function persistQuoteTotals(quoteId: string) {
   const quote = await prisma.quote.findUnique({
     where: { id: quoteId },
-    include: {
+    select: {
+      id: true,
+      catererId: true,
+      taxRate: true,
+      depositPct: true,
       lineItems: {
-        include: {
-          package: { include: { tiers: { orderBy: { minGuests: "asc" } } } }
+        select: {
+          id: true,
+          unitType: true,
+          appliedTier: true,
+          packageId: true,
+          unitPrice: true,
+          quantity: true,
+          category: true
         }
       },
-      event: true
+      event: {
+        select: {
+          guestCountEstimate: true,
+          customerType: true
+        }
+      }
     }
   });
   if (!quote) return null;
@@ -59,39 +76,103 @@ async function persistQuoteTotals(quoteId: string) {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
   const customerType = quote.event?.customerType ?? "b2c";
 
-  for (const item of quote.lineItems) {
-    if (item.unitType === "tiered_per_head" && item.appliedTier == null && item.package) {
-      const activeTier = getActiveTier(item.package.tiers, guestCount, customerType);
-      if (activeTier) {
-        await prisma.quoteLineItem.update({
-          where: { id: item.id },
-          data: {
-            unitPrice: activeTier.pricePerHead,
-            notes: formatTierLabel(activeTier)
-          }
-        });
-      }
+  const tieredNeedingPackage = quote.lineItems.filter(
+    (item) => item.unitType === "tiered_per_head" && item.appliedTier == null && item.packageId
+  );
+
+  const packageMap = new Map<
+    string,
+    Awaited<
+      ReturnType<
+        typeof prisma.cateringPackage.findMany<{
+          include: { tiers: { orderBy: { minGuests: "asc" } } };
+        }>
+      >
+    >[number]
+  >();
+
+  if (tieredNeedingPackage.length > 0) {
+    const packageIds = [
+      ...new Set(tieredNeedingPackage.map((item) => item.packageId).filter(Boolean))
+    ] as string[];
+
+    const packages = await prisma.cateringPackage.findMany({
+      where: { id: { in: packageIds }, catererId: quote.catererId },
+      include: { tiers: { orderBy: { minGuests: "asc" } } }
+    });
+
+    for (const pkg of packages) {
+      packageMap.set(pkg.id, pkg);
     }
   }
 
-  const refreshed = await prisma.quote.findUnique({
-    where: { id: quoteId },
-    include: { lineItems: true, event: true }
+  const lineItemUpdates: Prisma.PrismaPromise<unknown>[] = [];
+  const lineItemsForTotals = quote.lineItems.map((item) => {
+    if (item.unitType !== "tiered_per_head" || item.appliedTier != null || !item.packageId) {
+      return item;
+    }
+
+    const pkg = packageMap.get(item.packageId);
+    if (!pkg) return item;
+
+    const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
+    if (!activeTier) return item;
+
+    lineItemUpdates.push(
+      prisma.quoteLineItem.update({
+        where: { id: item.id },
+        data: {
+          unitPrice: activeTier.pricePerHead,
+          notes: formatTierLabel(activeTier)
+        }
+      })
+    );
+
+    return { ...item, unitPrice: activeTier.pricePerHead };
   });
-  if (!refreshed) return null;
 
   const { grandTotal } = calculateQuoteTotals(
-    refreshed.lineItems,
-    refreshed.taxRate,
-    refreshed.depositPct,
+    lineItemsForTotals,
+    quote.taxRate,
+    quote.depositPct,
     guestCount
   );
 
-  return prisma.quote.update({
+  await prisma.$transaction([
+    ...lineItemUpdates,
+    prisma.quote.update({
+      where: { id: quoteId },
+      data: { totalAmount: grandTotal }
+    })
+  ]);
+
+  const refreshed = await prisma.quote.findUnique({
     where: { id: quoteId },
-    data: { totalAmount: grandTotal },
-    include: quoteInclude
+    select: {
+      id: true,
+      taxRate: true,
+      depositPct: true,
+      totalAmount: true,
+      lineItems: {
+        orderBy: { createdAt: "asc" },
+        include: {
+          package: {
+            include: {
+              tiers: { orderBy: { minGuests: "asc" } },
+              items: { orderBy: { sortOrder: "asc" } }
+            }
+          }
+        }
+      }
+    }
   });
+
+  if (!refreshed) return null;
+
+  return {
+    ...refreshed,
+    guestCount
+  };
 }
 
 async function addPackageToQuote(quoteId: string, catererId: string, packageId: string) {
@@ -154,21 +235,57 @@ async function updateGuestCountAndPackageTiers(
   catererId: string,
   guestCount: number
 ) {
-  const quote = await loadQuoteForCaterer(quoteId, catererId);
-  if (!quote?.eventId) return null;
+  const quoteMeta = await prisma.quote.findFirst({
+    where: { id: quoteId, catererId },
+    select: {
+      id: true,
+      eventId: true,
+      taxRate: true,
+      depositPct: true,
+      event: { select: { customerType: true } }
+    }
+  });
+  if (!quoteMeta?.eventId) return null;
 
   await prisma.event.update({
-    where: { id: quote.eventId },
+    where: { id: quoteMeta.eventId },
     data: { guestCountEstimate: guestCount }
   });
+
+  const packageLineItems = await prisma.quoteLineItem.findMany({
+    where: { quoteId, unitType: "tiered_per_head" },
+    select: { id: true, packageId: true, unitType: true }
+  });
+
+  if (packageLineItems.length === 0) {
+    const lineItems = await prisma.quoteLineItem.findMany({ where: { quoteId } });
+    const { grandTotal } = calculateQuoteTotals(
+      lineItems,
+      quoteMeta.taxRate,
+      quoteMeta.depositPct,
+      guestCount
+    );
+    await prisma.quote.update({
+      where: { id: quoteId },
+      data: { totalAmount: grandTotal }
+    });
+
+    const full = await loadQuoteForCaterer(quoteId, catererId);
+    if (!full) return null;
+    return {
+      ...full,
+      totalAmount: grandTotal,
+      event: full.event ? { ...full.event, guestCountEstimate: guestCount } : full.event
+    };
+  }
 
   const freshQuote = await loadQuoteForCaterer(quoteId, catererId);
   if (!freshQuote) return null;
 
   const customerType = freshQuote.event?.customerType ?? "b2c";
-  const packageLineItems = freshQuote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+  const tieredLineItems = freshQuote.lineItems.filter((item) => item.unitType === "tiered_per_head");
   const packageIds = [
-    ...new Set(packageLineItems.map((item) => item.packageId).filter(Boolean))
+    ...new Set(tieredLineItems.map((item) => item.packageId).filter(Boolean))
   ] as string[];
 
   const packages =
@@ -210,7 +327,7 @@ async function updateGuestCountAndPackageTiers(
     guestCount
   );
 
-  const lineItemUpdates = packageLineItems.map((item) => {
+  const lineItemUpdates = tieredLineItems.map((item) => {
     const next = nextLineItems.find((n) => n.id === item.id)!;
     return prisma.quoteLineItem.update({
       where: { id: item.id },
@@ -319,24 +436,77 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
     const [event, quoteRow, packagesRaw, menuItemsRaw] = await Promise.all([
       prisma.event.findFirst({
         where: { id: eventId, catererId: caterer.id },
-        include: { primaryGuest: true }
+        select: {
+          id: true,
+          title: true,
+          eventType: true,
+          customerType: true,
+          eventDate: true,
+          startTime: true,
+          endTime: true,
+          guestCountEstimate: true,
+          venueName: true,
+          venueAddress: true,
+          primaryGuest: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              phone: true
+            }
+          }
+        }
       }),
       prisma.quote.findFirst({
         where: { eventId, catererId: caterer.id },
         orderBy: { createdAt: "desc" },
-        include: quoteInclude
+        include: quoteBuilderInclude
       }),
       prisma.cateringPackage.findMany({
         where: { catererId: caterer.id },
         orderBy: { sortOrder: "asc" },
-        include: {
-          tiers: { orderBy: { minGuests: "asc" } },
-          items: { orderBy: { sortOrder: "asc" } }
+        select: {
+          id: true,
+          catererId: true,
+          name: true,
+          description: true,
+          sortOrder: true,
+          minGuests: true,
+          tiers: {
+            orderBy: { minGuests: "asc" },
+            select: {
+              id: true,
+              customerType: true,
+              minGuests: true,
+              maxGuests: true,
+              pricePerHead: true
+            }
+          },
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: {
+              id: true,
+              label: true,
+              quantity: true,
+              sortOrder: true
+            }
+          }
         }
       }),
       prisma.menuItem.findMany({
         where: { catererId: caterer.id },
-        orderBy: [{ usageCount: "desc" }, { name: "asc" }]
+        orderBy: [{ usageCount: "desc" }, { name: "asc" }],
+        select: {
+          id: true,
+          catererId: true,
+          category: true,
+          name: true,
+          defaultPrice: true,
+          defaultUnit: true,
+          usageCount: true,
+          isDefault: true
+        }
       })
     ]);
 
@@ -351,9 +521,32 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
       packages = await prisma.cateringPackage.findMany({
         where: { catererId: caterer.id },
         orderBy: { sortOrder: "asc" },
-        include: {
-          tiers: { orderBy: { minGuests: "asc" } },
-          items: { orderBy: { sortOrder: "asc" } }
+        select: {
+          id: true,
+          catererId: true,
+          name: true,
+          description: true,
+          sortOrder: true,
+          minGuests: true,
+          tiers: {
+            orderBy: { minGuests: "asc" },
+            select: {
+              id: true,
+              customerType: true,
+              minGuests: true,
+              maxGuests: true,
+              pricePerHead: true
+            }
+          },
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: {
+              id: true,
+              label: true,
+              quantity: true,
+              sortOrder: true
+            }
+          }
         }
       });
     }
@@ -363,7 +556,17 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
       await seedMenuItemsForCaterer(caterer.id);
       menuItems = await prisma.menuItem.findMany({
         where: { catererId: caterer.id },
-        orderBy: [{ usageCount: "desc" }, { name: "asc" }]
+        orderBy: [{ usageCount: "desc" }, { name: "asc" }],
+        select: {
+          id: true,
+          catererId: true,
+          category: true,
+          name: true,
+          defaultPrice: true,
+          defaultUnit: true,
+          usageCount: true,
+          isDefault: true
+        }
       });
     }
 
@@ -402,7 +605,10 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
     perf.end();
 
     return res.json({
-      quote: serializeQuote(quote as QuoteWithRelations),
+      quote: serializeQuote({
+        ...quote,
+        event
+      } as QuoteWithRelations),
       packages: packages.map((p) => serializeBuilderPackage(p, customerType)),
       menuItemsByCategory,
       event: {
@@ -661,7 +867,10 @@ router.post("/:id/items", async (req: Request, res: Response) => {
       menuItemId?: string | null;
     };
 
-    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
+    const quote = await prisma.quote.findFirst({
+      where: { id: quoteId, catererId: caterer.id },
+      select: { id: true }
+    });
     if (!quote) {
       return res.status(404).json({ error: "Quote not found." });
     }
@@ -702,7 +911,10 @@ router.post("/:id/items", async (req: Request, res: Response) => {
     });
 
     const updated = await persistQuoteTotals(quoteId);
-    return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
+    if (!updated) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+    return res.status(201).json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
     return handleSessionError(res, e);
   }
@@ -770,13 +982,18 @@ router.patch("/:id/items/:itemId", async (req: Request, res: Response) => {
       data.category = category;
     }
 
-    let updated: QuoteWithRelations | null;
     if (Object.keys(data).length === 0) {
-      updated = (await loadQuoteForCaterer(quoteId, caterer.id)) as QuoteWithRelations | null;
-    } else {
-      await prisma.quoteLineItem.update({ where: { id: itemId }, data });
-      updated = (await persistQuoteTotals(quoteId)) as QuoteWithRelations | null;
+      const full = await loadQuoteForCaterer(quoteId, caterer.id);
+      if (!full) {
+        return res.status(404).json({ error: "Quote not found." });
+      }
+      perf.step("db:update");
+      perf.end();
+      return res.json({ quote: serializeQuote(full as QuoteWithRelations) });
     }
+
+    await prisma.quoteLineItem.update({ where: { id: itemId }, data });
+    const updated = await persistQuoteTotals(quoteId);
 
     if (!updated) {
       return res.status(404).json({ error: "Quote not found." });
@@ -785,7 +1002,7 @@ router.patch("/:id/items/:itemId", async (req: Request, res: Response) => {
     perf.step("db:update");
     perf.end();
 
-    return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
+    return res.json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
     const status =
       e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
@@ -823,7 +1040,10 @@ router.delete("/:id/items/:itemId", async (req: Request, res: Response) => {
 
     await prisma.quoteLineItem.delete({ where: { id: itemId } });
     const updated = await persistQuoteTotals(quoteId);
-    return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
+    if (!updated) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+    return res.json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
     return handleSessionError(res, e);
   }
@@ -848,7 +1068,7 @@ router.post("/:id/package", async (req: Request, res: Response) => {
     perf.step("db:add-package");
     perf.end();
 
-    return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
+    return res.json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
     const status =
       e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
@@ -876,7 +1096,7 @@ router.delete("/:id/package", async (req: Request, res: Response) => {
     perf.step("db:remove-package");
     perf.end();
 
-    return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
+    return res.json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
     const status =
       e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
@@ -926,9 +1146,10 @@ router.post("/:id/duplicate", async (req: Request, res: Response) => {
       include: quoteInclude
     });
 
-    const updated = await persistQuoteTotals(duplicate.id);
+    await persistQuoteTotals(duplicate.id);
+    const full = await loadQuoteForCaterer(duplicate.id, caterer.id);
     return res.status(201).json({
-      quote: serializeQuote((updated ?? duplicate) as QuoteWithRelations)
+      quote: serializeQuote((full ?? duplicate) as QuoteWithRelations)
     });
   } catch (e) {
     return handleSessionError(res, e);
@@ -957,36 +1178,31 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/:id/send", async (req: Request, res: Response) => {
-  try {
-    const { caterer } = await getSession(req);
-    const quoteId = paramId(req);
-    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
-    if (!quote) {
-      return res.status(404).json({ error: "Quote not found." });
-    }
+type SessionCaterer = Prisma.CatererGetPayload<Record<string, never>>;
 
-    const guestEmail = quote.event?.primaryGuest?.email?.trim();
-    if (!guestEmail) {
-      return res.status(400).json({ error: "Guest email is required to send the quote." });
-    }
+async function applySendTierFixes(
+  quoteId: string,
+  catererId: string,
+  lineItems: QuoteWithRelations["lineItems"],
+  guestCount: number,
+  customerType: CustomerTypeValue
+) {
+  const tierUpdates: Prisma.PrismaPromise<unknown>[] = [];
 
-    const guestCount = quote.event?.guestCountEstimate ?? 0;
-    const customerType = quote.event?.customerType ?? "b2c";
+  for (const item of lineItems) {
+    if (item.unitType !== "tiered_per_head" || item.appliedTier != null) continue;
 
-    for (const item of quote.lineItems) {
-      if (item.unitType !== "tiered_per_head" || item.appliedTier != null) continue;
+    const pkg = item.packageId
+      ? await prisma.cateringPackage.findFirst({
+          where: { id: item.packageId, catererId },
+          include: { tiers: { orderBy: { minGuests: "asc" } } }
+        })
+      : null;
 
-      const pkg = item.packageId
-        ? await prisma.cateringPackage.findFirst({
-            where: { id: item.packageId, catererId: caterer.id },
-            include: { tiers: { orderBy: { minGuests: "asc" } } }
-          })
-        : null;
-
-      const activeTier = pkg ? getActiveTier(pkg.tiers, guestCount, customerType) : null;
-      if (activeTier) {
-        await prisma.quoteLineItem.update({
+    const activeTier = pkg ? getActiveTier(pkg.tiers, guestCount, customerType) : null;
+    if (activeTier) {
+      tierUpdates.push(
+        prisma.quoteLineItem.update({
           where: { id: item.id },
           data: {
             appliedTier: activeTier.pricePerHead,
@@ -994,25 +1210,49 @@ router.post("/:id/send", async (req: Request, res: Response) => {
             unitPrice: activeTier.pricePerHead,
             notes: formatTierLabel(activeTier)
           }
-        });
-      }
+        })
+      );
     }
+  }
+
+  if (tierUpdates.length > 0) {
+    await prisma.$transaction(tierUpdates);
+  }
+}
+
+async function processSendJob(quoteId: string, caterer: SessionCaterer) {
+  try {
+    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
+    if (!quote) {
+      throw new Error(`Quote ${quoteId} not found for send job.`);
+    }
+
+    const guestEmail = quote.event?.primaryGuest?.email?.trim();
+    if (!guestEmail) {
+      throw new Error(`Quote ${quoteId} has no guest email.`);
+    }
+
+    const guestCount = quote.event?.guestCountEstimate ?? 0;
+    const customerType = quote.event?.customerType ?? "b2c";
+
+    await applySendTierFixes(quoteId, caterer.id, quote.lineItems, guestCount, customerType);
 
     const quoteForSend = await loadQuoteForCaterer(quoteId, caterer.id);
     if (!quoteForSend) {
-      return res.status(404).json({ error: "Quote not found." });
+      throw new Error(`Quote ${quoteId} not found after tier fixes.`);
     }
 
     const resend = getResend();
     if (!resend) {
-      return res.status(503).json({ error: "Email service is not configured." });
+      throw new Error("Email service is not configured.");
     }
 
     const quoteData = quoteForSend as QuoteWithRelations;
     const pdfBuffer = await generateQuotePdfBuffer(quoteData);
     if (!pdfBuffer.length) {
-      return res.status(500).json({ error: "Generated PDF was empty." });
+      throw new Error("Generated PDF was empty.");
     }
+
     const html = buildQuoteEmailHtml(quoteData, caterer);
 
     const { error: sendError } = await resend.emails.send({
@@ -1029,24 +1269,64 @@ router.post("/:id/send", async (req: Request, res: Response) => {
       ]
     });
     if (sendError) {
-      console.error("Failed to send quote email:", sendError);
-      return res.status(502).json({ error: "Failed to send quote email." });
+      throw sendError;
     }
 
-    const updated = await prisma.quote.update({
+    await prisma.quote.update({
       where: { id: quoteId },
-      data: { status: "sent" },
-      include: quoteInclude
+      data: { status: "sent" }
     });
 
     await persistQuoteTotals(quoteId);
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error(`Quote send job failed for ${quoteId}:`, err);
+    } else {
+      console.error(`Quote send job failed for ${quoteId}:`, err instanceof Error ? err.message : err);
+    }
 
-    const finalQuote = await loadQuoteForCaterer(quoteId, caterer.id);
+    await prisma.quote.update({
+      where: { id: quoteId },
+      data: { status: "send_failed" }
+    });
+  }
+}
 
-    return res.json({
-      ok: true,
-      emailSent: true,
-      quote: serializeQuote((finalQuote ?? updated) as QuoteWithRelations)
+router.post("/:id/send", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const quoteId = paramId(req);
+    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
+    if (!quote) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    const guestEmail = quote.event?.primaryGuest?.email?.trim();
+    if (!guestEmail) {
+      return res.status(400).json({ error: "Guest email is required to send the quote." });
+    }
+
+    const resend = getResend();
+    if (!resend) {
+      return res.status(503).json({ error: "Email service is not configured." });
+    }
+
+    if (quote.status === "sending") {
+      return res.status(202).json({ status: "processing", quoteId });
+    }
+
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, catererId: caterer.id },
+      data: { status: "sending" }
+    });
+    if (updated.count === 0) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    res.status(202).json({ status: "processing", quoteId });
+
+    setImmediate(() => {
+      void processSendJob(quoteId, caterer);
     });
   } catch (e) {
     return handleSessionError(res, e);

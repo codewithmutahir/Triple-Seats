@@ -1,4 +1,10 @@
-export type QuoteStatusValue = "draft" | "sent" | "accepted" | "declined";
+export type QuoteStatusValue =
+  | "draft"
+  | "sending"
+  | "send_failed"
+  | "sent"
+  | "accepted"
+  | "declined";
 
 export type QuotePick = {
   id: string;
@@ -10,7 +16,9 @@ export type QuotePick = {
 const QUOTE_STATUS_PRIORITY: Record<QuoteStatusValue, number> = {
   accepted: 4,
   sent: 3,
+  sending: 3,
   draft: 2,
+  send_failed: 2,
   declined: 1
 };
 

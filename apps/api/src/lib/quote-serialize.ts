@@ -19,6 +19,11 @@ export const quoteInclude = {
   event: { include: { primaryGuest: true } }
 } satisfies Prisma.QuoteInclude;
 
+/** Builder batch — no nested event (fetched in parallel on the route). */
+export const quoteBuilderInclude = {
+  lineItems: quoteInclude.lineItems
+} satisfies Prisma.QuoteInclude;
+
 export type QuoteWithRelations = Prisma.QuoteGetPayload<{ include: typeof quoteInclude }>;
 type QuoteLineItem = QuoteWithRelations["lineItems"][number];
 type QuoteStatus = QuoteWithRelations["status"];
@@ -59,6 +64,34 @@ export function serializeLineItem(item: QuoteLineItem) {
           }))
         }
       : null
+  };
+}
+
+export type QuoteTotalsPatchSource = {
+  id: string;
+  taxRate: number;
+  depositPct: number;
+  totalAmount: number;
+  lineItems: QuoteLineItem[];
+  guestCount: number;
+};
+
+/** Slim mutation response — line items + totals only (no nested event graph). */
+export function serializeQuoteTotalsPatch(quote: QuoteTotalsPatchSource) {
+  const totals = calculateQuoteTotals(
+    quote.lineItems,
+    quote.taxRate,
+    quote.depositPct,
+    quote.guestCount
+  );
+
+  return {
+    id: quote.id,
+    totalAmount: quote.totalAmount,
+    taxRate: quote.taxRate,
+    depositPct: quote.depositPct,
+    lineItems: quote.lineItems.map(serializeLineItem),
+    totals
   };
 }
 
@@ -118,7 +151,14 @@ export function serializeQuote(quote: QuoteWithRelations) {
 }
 
 export function parseQuoteStatus(value: unknown): QuoteStatus | null {
-  if (value === "draft" || value === "sent" || value === "accepted" || value === "declined") {
+  if (
+    value === "draft" ||
+    value === "sending" ||
+    value === "send_failed" ||
+    value === "sent" ||
+    value === "accepted" ||
+    value === "declined"
+  ) {
     return value;
   }
   return null;

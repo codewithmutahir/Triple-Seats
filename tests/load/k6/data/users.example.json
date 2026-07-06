@@ -1,0 +1,14 @@
+{
+  "baseUrl": "http://127.0.0.1:4000",
+  "webOrigin": "http://localhost:3000",
+  "password": "LoadTest123!",
+  "users": [
+    {
+      "email": "loadtest+1@loadtest.local",
+      "name": "Load Test Caterer 1",
+      "catererId": "replace-after-seed",
+      "eventId": "replace-after-seed",
+      "quoteId": "replace-after-seed"
+    }
+  ]
+}

@@ -24,7 +24,12 @@
     "db:migrate:prod": "pnpm db:migrate:deploy",
     "db:push": "pnpm --filter @tripeseats/database prisma db push",
     "db:push:pooler": "node packages/database/scripts/push-via-pooler.mjs",
-    "db:patch-slug": "pnpm --filter api db:patch-slug"
+    "db:patch-slug": "pnpm --filter api db:patch-slug",
+    "load:seed": "pnpm --filter api exec tsx ../../tests/load/scripts/seed-load-test-data.ts",
+    "load:smoke": "k6 run tests/load/k6/scenarios/smoke.js",
+    "load:quote-journey": "k6 run tests/load/k6/scenarios/quote-journey.js",
+    "load:ramp-up": "k6 run tests/load/k6/scenarios/ramp-up.js",
+    "load:all": "pnpm load:smoke && pnpm load:quote-journey && pnpm load:ramp-up"
   },
   "devDependencies": {
     "axios": "^1.18.1",

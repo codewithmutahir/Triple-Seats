@@ -221,7 +221,7 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
 }
 
 const sessionCache = new Map<string, { data: SessionData; ts: number }>();
-const SESSION_TTL = 15_000;
+const SESSION_TTL = 30_000;
 
 async function resolveAuthSession(req: Request): Promise<SessionData> {
   const token = extractSessionToken(req);

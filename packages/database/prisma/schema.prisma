@@ -42,6 +42,8 @@ enum ReminderStatus {
 
 enum QuoteStatus {
   draft
+  sending
+  send_failed
   sent
   accepted
   declined
@@ -274,6 +276,7 @@ model Quote {
 
   @@index([catererId])
   @@index([eventId])
+  @@index([catererId, eventId])
   @@index([catererId, createdAt])
   @@map("quotes")
 }
@@ -360,6 +363,7 @@ model MenuItem {
 
   @@unique([catererId, category, name])
   @@index([catererId, category])
+  @@index([catererId, usageCount])
   @@map("menu_items")
 }
 
