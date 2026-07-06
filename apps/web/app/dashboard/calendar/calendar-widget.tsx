@@ -9,10 +9,17 @@ import { useCallback, useRef } from "react";
 
 import type { CalendarEvent } from "./types";
 
+export type CalendarDatesChange = {
+  gridStart: Date;
+  gridEnd: Date;
+  anchorStart: Date;
+  viewType: string;
+};
+
 type CalendarWidgetProps = {
   events: CalendarEvent[];
   initialView: "dayGridMonth" | "timeGridWeek";
-  onDatesChange: (start: Date, end: Date) => void;
+  onDatesChange: (info: CalendarDatesChange) => void;
   onEventClick: (event: CalendarEvent) => void;
   onReady?: () => void;
 };
@@ -46,7 +53,12 @@ export function CalendarWidget({
       readyRef.current = true;
       onReadyRef.current?.();
     }
-    onDatesChangeRef.current(arg.start, arg.end);
+    onDatesChangeRef.current({
+      gridStart: arg.start,
+      gridEnd: arg.end,
+      anchorStart: arg.view.currentStart,
+      viewType: arg.view.type
+    });
   }, []);
 
   const handleEventClick = useCallback(
