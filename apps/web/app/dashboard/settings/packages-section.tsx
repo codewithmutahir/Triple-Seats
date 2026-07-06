@@ -271,6 +271,9 @@ function ItemsEditor({
   items: { label: string; quantity: number }[];
   onChange: (items: { label: string; quantity: number }[]) => void;
 }) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
   function updateItem(index: number, field: "label" | "quantity", value: string | number) {
     const updated = [...items];
     updated[index] = { ...updated[index]!, [field]: value };
@@ -286,13 +289,64 @@ function ItemsEditor({
     onChange(items.filter((_, i) => i !== index));
   }
 
+  function moveItem(from: number, to: number) {
+    if (from === to) return;
+    const updated = [...items];
+    const [moved] = updated.splice(from, 1);
+    if (!moved) return;
+    updated.splice(to, 0, moved);
+    onChange(updated);
+  }
+
+  function handleDrop(targetIndex: number) {
+    if (dragIndex === null) return;
+    moveItem(dragIndex, targetIndex);
+    setDragIndex(null);
+    setOverIndex(null);
+  }
+
   return (
     <div className="space-y-3">
       <Label className="text-sm font-medium">Included Items</Label>
       <div className="space-y-2">
         {items.map((item, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <GripVertical className="h-4 w-4 text-muted-foreground/50" />
+          <div
+            key={i}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setOverIndex(i);
+            }}
+            onDragLeave={() => {
+              if (overIndex === i) setOverIndex(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleDrop(i);
+            }}
+            className={cn(
+              "flex items-center gap-2 rounded-md transition-colors",
+              dragIndex === i && "opacity-50",
+              overIndex === i && dragIndex !== null && dragIndex !== i && "bg-muted/60"
+            )}
+          >
+            <button
+              type="button"
+              draggable
+              aria-label={`Reorder ${item.label || "item"}`}
+              onDragStart={(e) => {
+                setDragIndex(i);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", String(i));
+              }}
+              onDragEnd={() => {
+                setDragIndex(null);
+                setOverIndex(null);
+              }}
+              className="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground/50 hover:bg-muted hover:text-muted-foreground active:cursor-grabbing"
+            >
+              <GripVertical className="h-4 w-4" />
+            </button>
             <Input
               value={item.label}
               onChange={(e) => updateItem(i, "label", e.target.value)}
