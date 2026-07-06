@@ -664,6 +664,13 @@ if (isError) {
 ❌ Never serialize independent mutations with a queue
 ❌ Never commit secrets or .env files
 ❌ Never skip pnpm typecheck before saying "done"
+❌ Never trust req.body without schema validation (Zod)
+❌ Never mutate/delete a record by ID without re-checking catererId ownership
+❌ Never run heavy/slow work (PDF gen, bulk email) inline in the request — use a queue
+❌ Never call external services (Resend, payment gateway) without retry/backoff
+❌ Never merge to main without CI (lint + typecheck + tests) passing
+❌ Never log full request/response bodies containing PII
+❌ Never expose internal error stacks or Prisma error messages to the client
 ```
 
 ---
@@ -681,6 +688,12 @@ if (isError) {
 [ ] Environment variables documented in .env.example
 [ ] No new UI libraries installed without approval
 [ ] No breaking changes to existing API response shapes
+[ ] New API inputs validated with a Zod schema (body, query, params)
+[ ] Update/delete routes verify record ownership before mutating
+[ ] New external calls (email, payment, webhook) have error handling + retry
+[ ] Unit/integration tests added or updated for new logic
+[ ] No secrets, tokens, or PII written to logs
+[ ] Accessibility basics checked (labels, keyboard nav, focus) for new UI
 ```
 
 ---
@@ -714,6 +727,170 @@ if (isError) {
 | App store (UI) | `apps/web/lib/stores/app-store.ts` |
 | Save indicator | `apps/web/components/save-indicator.tsx` |
 | Deployment guide | `DEPLOYMENT.md` |
+
+---
+
+## 21. Production Hardening Rules (Security, Scaling, Reliability)
+
+### 21.1 Input Validation (CRITICAL — currently missing)
+Every API route that accepts `body`, `query`, or `params` MUST validate with a schema (Zod recommended) before touching Prisma.
+
+```typescript
+// ✅ CORRECT
+import { z } from 'zod'
+
+const createLeadSchema = z.object({
+  contactEmail: z.string().email(),
+  guestCount: z.number().int().positive().max(10000),
+  eventDate: z.coerce.date(),
+})
+
+router.post('/leads', async (req, res, next) => {
+  try {
+    const parsed = createLeadSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid input' })
+    }
+    // use parsed.data, never raw req.body
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ❌ WRONG — trusting raw body
+const { guestCount } = req.body
+await prisma.lead.create({ data: { guestCount } })
+```
+
+### 21.2 Ownership Check on Mutations (CRITICAL — currently missing)
+`catererId` filtering on reads is not enough. Every update/delete MUST re-verify the record belongs to the session's caterer before mutating — never trust an ID from the client alone.
+
+```typescript
+// ✅ CORRECT
+const event = await prisma.event.findFirst({
+  where: { id: eventId, catererId: caterer.id },
+})
+if (!event) return res.status(404).json({ error: 'Not found' })
+await prisma.event.update({ where: { id: eventId }, data: { ...changes } })
+
+// ❌ WRONG — no ownership re-check, relies only on the ID
+await prisma.event.update({ where: { id: eventId }, data: { ...changes } })
+```
+
+### 21.3 Background Jobs for Slow Work
+PDF generation, bulk emails, and other slow/non-critical work must NOT block the request-response cycle. Use a queue (BullMQ + Redis, or similar).
+
+```typescript
+// ✅ CORRECT
+router.post('/quotes/:id/send', async (req, res, next) => {
+  await quotePdfQueue.add('generate-and-send', { quoteId: req.params.id })
+  return res.status(202).json({ status: 'queued' })
+})
+
+// ❌ WRONG — generating PDF + sending email inline, blocking the request
+const pdf = await generateQuotePdf(quoteId)
+await resend.emails.send({ attachments: [pdf] })
+```
+
+### 21.4 Idempotency for Critical Mutations
+Payment, booking-confirmation, and deposit-charge endpoints must accept an `Idempotency-Key` header to avoid duplicate creation on retry/double-click/network hiccup.
+
+```typescript
+// ✅ CORRECT
+const key = req.headers['idempotency-key']
+const existing = await prisma.paymentIntent.findUnique({ where: { idempotencyKey: key } })
+if (existing) return res.json(existing)
+```
+
+### 21.5 Retry/Backoff for External Services
+Any call to Resend, Supabase, or a future payment gateway must handle transient failures with retry + exponential backoff — never fire-and-forget.
+
+```typescript
+// ✅ CORRECT (simplified)
+async function sendWithRetry(fn: () => Promise<any>, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try { return await fn() } 
+    catch (err) {
+      if (i === attempts - 1) throw err
+      await new Promise(r => setTimeout(r, 2 ** i * 200))
+    }
+  }
+}
+```
+
+### 21.6 Session Cache Does Not Scale Horizontally
+The 30s in-memory `getSession()` cache is per-instance. If `apps/api` ever runs as more than one process/container behind a load balancer, cache state will be inconsistent across instances. Before scaling horizontally, move session cache to Redis (shared) instead of in-memory.
+
+### 21.7 DB Connection Pooling
+Supabase/Postgres has a hard connection limit. Use PgBouncer (Supabase provides this via the pooled connection string) or Prisma's `connection_limit` param — never let each Express instance open unbounded raw connections.
+
+```
+# .env — use the pooled port for the app, direct port only for migrations
+DATABASE_URL="postgresql://...:6543/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://...:5432/postgres"
+```
+
+### 21.8 Pagination on All List Endpoints
+Every list endpoint (leads, events, bookings) MUST paginate — never return unbounded result sets.
+
+```typescript
+// ✅ CORRECT
+const { cursor, limit = 25 } = req.query
+const events = await prisma.event.findMany({
+  where: { catererId: caterer.id },
+  take: limit,
+  ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  orderBy: { createdAt: 'desc' },
+})
+```
+
+### 21.9 CSRF & Cookie Hardening
+Better Auth session cookies must be set with `SameSite=Lax` (or `Strict` where possible) and `Secure` in production. State-changing routes accessed cross-site should be rejected by the `WEB_ORIGIN` check in `origins.ts` — verify this on every new route that accepts non-GET requests.
+
+### 21.10 Dependency & Secret Scanning
+- Run `pnpm audit` (or Snyk/Dependabot) in CI on every PR
+- Never store secrets in code or `.env` committed to git — use the hosting platform's secret manager in production
+- Rotate `BETTER_AUTH_SECRET` and API keys on any suspected leak
+
+### 21.11 Audit Logging for Sensitive Actions
+Log (to a dedicated `AuditLog` table, not console) who did what for: deletions, refunds/deposit changes, role/permission changes, and login from a new device. Never log full PII payloads or tokens.
+
+### 21.12 Testing Requirements
+- **Unit tests** (Vitest/Jest) for: `quote-totals.ts`, `session.ts`, any pure business logic
+- **Integration tests** for API routes that touch money (quotes, deposits, payments)
+- **E2E smoke test** (Playwright) for: login → create lead → build quote → send quote
+- CI must run `pnpm typecheck && pnpm test` before merge — never merge on a red pipeline
+
+### 21.13 Observability
+- Add an APM/error tracker (Sentry or equivalent) in production — `console.log` alone is not sufficient once deployed
+- `/api/health` should check DB connectivity, not just return 200
+- Handle `SIGTERM` gracefully in `apps/api/src/index.ts` — finish in-flight requests before exiting (needed for zero-downtime deploys)
+
+### 21.14 Accessibility Baseline
+- All interactive elements (buttons, inputs) need visible focus states and proper `aria-label` where text isn't self-descriptive
+- Forms must associate `<label>` with inputs (via `htmlFor`/`id`), not placeholder-only labels
+- Modals/dialogs must trap focus and be closable via `Escape`
+
+---
+
+## 22. Production Hardening Checklist — Before Scaling Past MVP
+
+```
+[ ] All mutation routes validate input with Zod
+[ ] All update/delete routes re-check catererId ownership, not just reads
+[ ] Slow operations (PDF, bulk email) moved to a job queue
+[ ] Payment/booking endpoints support idempotency keys
+[ ] External API calls (Resend, etc.) wrapped in retry/backoff
+[ ] Session cache plan exists for horizontal scaling (Redis)
+[ ] DB uses pooled connection string (PgBouncer) in production
+[ ] All list endpoints are paginated
+[ ] Cookies set with SameSite + Secure in production
+[ ] CI runs pnpm audit, typecheck, and tests on every PR
+[ ] Sensitive actions write to an audit log
+[ ] Error tracking (Sentry or similar) wired up in production
+[ ] Health check verifies DB connectivity, not just process liveness
+[ ] Graceful shutdown (SIGTERM) implemented for zero-downtime deploys
+```
 
 ---
 

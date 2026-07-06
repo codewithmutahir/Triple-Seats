@@ -15,7 +15,7 @@ import { ensureQuotePackageSelectionsSchema } from "./lib/ensure-quote-package-s
 import { ensureQuoteUnitEnum } from "./lib/ensure-quote-units";
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { getResend } from "./lib/mail";
-import { authWriteLimiter, generalLimiter } from "./lib/rate-limit";
+import { authWriteLimiter, generalLimiter, isLoadTestMode } from "./lib/rate-limit";
 import { bookingsRouter } from "./routes/bookings";
 import { calendarRouter } from "./routes/calendar";
 import { catererRouter } from "./routes/caterer";
@@ -103,7 +103,8 @@ function createApp() {
     res.json({
       status: "ok",
       timestamp: new Date().toISOString(),
-      version: process.env.npm_package_version ?? "1.0.0"
+      version: process.env.npm_package_version ?? "1.0.0",
+      ...(!isProd ? { loadTestMode: isLoadTestMode() } : {})
     });
   });
 

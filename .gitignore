@@ -30,3 +30,6 @@ deploy/
 
 # playwright
 playwright-test-results/
+
+# Load test generated data (run pnpm load:seed)
+tests/load/k6/data/users.json
