@@ -67,6 +67,34 @@ export function serializeLineItem(item: QuoteLineItem) {
   };
 }
 
+export type QuoteTotalsPatchSource = {
+  id: string;
+  taxRate: number;
+  depositPct: number;
+  totalAmount: number;
+  lineItems: QuoteLineItem[];
+  guestCount: number;
+};
+
+/** Slim mutation response — line items + totals only (no nested event graph). */
+export function serializeQuoteTotalsPatch(quote: QuoteTotalsPatchSource) {
+  const totals = calculateQuoteTotals(
+    quote.lineItems,
+    quote.taxRate,
+    quote.depositPct,
+    quote.guestCount
+  );
+
+  return {
+    id: quote.id,
+    totalAmount: quote.totalAmount,
+    taxRate: quote.taxRate,
+    depositPct: quote.depositPct,
+    lineItems: quote.lineItems.map(serializeLineItem),
+    totals
+  };
+}
+
 export function serializeQuote(quote: QuoteWithRelations) {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
   const totals = calculateQuoteTotals(
