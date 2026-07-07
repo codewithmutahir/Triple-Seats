@@ -27,8 +27,7 @@ export function initPostHog() {
       }
 
       // Only start replay after the application has obtained explicit user consent.
-    }
-    }
+    },
   });
 }
 
