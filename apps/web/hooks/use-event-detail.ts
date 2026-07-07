@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -18,6 +19,7 @@ export function useEventDetailQuery(eventId: string | null) {
 export function useEventDetailMutations(eventId: string | null) {
   const qc = useQueryClient();
   const detailKey = queryKeys.events.detail(eventId ?? "");
+  const statusSeqRef = useRef(0);
 
   const invalidateListsLater = () => {
     window.setTimeout(() => {
@@ -34,6 +36,7 @@ export function useEventDetailMutations(eventId: string | null) {
   const statusMutation = useMutation({
     mutationFn: (status: string) => api.events.updateStatus(eventId!, status),
     onMutate: async (status) => {
+      const opId = ++statusSeqRef.current;
       await qc.cancelQueries({ queryKey: detailKey });
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
       if (prev && prev.status !== status && eventId) {
@@ -58,13 +61,15 @@ export function useEventDetailMutations(eventId: string | null) {
                 }
               ]
       }));
-      return { prev };
+      return { prev, opId };
     },
     onError: (_err, _status, ctx) => {
-      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+      if (!ctx || ctx.opId !== statusSeqRef.current) return;
+      if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
       toast.error("Failed to update status");
     },
-    onSuccess: (event) => {
+    onSuccess: (event, _status, ctx) => {
+      if (!ctx || ctx.opId !== statusSeqRef.current) return;
       qc.setQueryData(detailKey, event);
       invalidateListsLater();
     }

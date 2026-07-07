@@ -83,35 +83,14 @@ export function buildOptimisticPackageLine(
   };
 }
 
-function swapTempPackageLineId(
-  old: BuilderData,
-  packageId: string,
-  serverQuote: BuilderData["quote"]
-): BuilderData {
-  const serverLine = serverQuote.lineItems.find(
-    (item) => item.unitType === "tiered_per_head" && item.packageId === packageId
-  );
-  if (!serverLine) return old;
-
-  return {
-    ...old,
-    quote: {
-      ...old.quote,
-      lineItems: old.quote.lineItems.map((item) =>
-        item.id.startsWith("temp_pkg_") && item.packageId === packageId
-          ? { ...item, id: serverLine.id }
-          : item
-      )
-    }
-  };
-}
-
 export function useQuoteBuilderMutations(eventId: string | null) {
   const qc = useQueryClient();
   const builderKey = queryKeys.quotes.builder(eventId ?? "");
   const latestGuestCountRef = useRef<number | null>(null);
   const latestPackageIdRef = useRef<string | null>(null);
   const packageRemovedRef = useRef(false);
+  const packageOpSeqRef = useRef(0);
+  const quoteUpdateSeqRef = useRef(0);
   const lineItemSeqRef = useRef(0);
 
   const bumpLineItemOp = () => ++lineItemSeqRef.current;
@@ -208,7 +187,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev, tempItem, opId };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx?.tempItem) return;
+      if (!ctx?.tempItem || !isLatestLineItemOp(ctx.opId)) return;
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -338,6 +317,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, data }: { quoteId: string; data: Record<string, unknown> }) =>
       api.quotes.update(quoteId, data),
     onMutate: async ({ data }) => {
+      const opId = ++quoteUpdateSeqRef.current;
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const ctx = builderContext();
 
@@ -398,9 +378,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
             : {})
         }
       }));
-      return { prev };
+      return { prev, opId };
     },
-    onSuccess: (result) => {
+    onSuccess: (result, _vars, ctx) => {
+      if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -415,7 +396,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(builderKey, ctx.prev);
+      if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
+      if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
     }
   });
 
@@ -423,14 +405,31 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, packageId }: { quoteId: string; packageId: string }) =>
       api.quotes.addPackage(quoteId, packageId),
     onMutate: async ({ packageId }) => {
+      const opId = ++packageOpSeqRef.current;
       const snapshot = qc.getQueryData<BuilderData>(builderKey);
-      return { snapshot, packageId };
+      return { snapshot, packageId, opId };
     },
-    onSuccess: (result, { packageId }) => {
+    onSuccess: (result, { packageId }, ctx) => {
+      if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
-      patchBuilder((old) => swapTempPackageLineId(old, packageId, result.quote));
+
+      const serverPackageLines = result.quote.lineItems.filter(
+        (item) => item.unitType === "tiered_per_head"
+      );
+
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          lineItems: [
+            ...old.quote.lineItems.filter((item) => item.unitType !== "tiered_per_head"),
+            ...serverPackageLines
+          ]
+        }
+      }));
     },
     onError: (_err, { packageId }, ctx) => {
+      if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
       if (ctx?.snapshot) qc.setQueryData(builderKey, ctx.snapshot);
       latestPackageIdRef.current =
@@ -444,13 +443,16 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const removePackageMutation = useMutation({
     mutationFn: (quoteId: string) => api.quotes.removePackage(quoteId),
     onMutate: async () => {
+      const opId = ++packageOpSeqRef.current;
       const snapshot = qc.getQueryData<BuilderData>(builderKey);
-      return { snapshot };
+      return { snapshot, opId };
     },
-    onSuccess: () => {
+    onSuccess: (_result, _vars, ctx) => {
+      if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       // Cache already correct from optimistic remove
     },
     onError: (_err, _vars, ctx) => {
+      if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (!packageRemovedRef.current || latestPackageIdRef.current !== null) return;
       if (ctx?.snapshot) qc.setQueryData(builderKey, ctx.snapshot);
       latestPackageIdRef.current =

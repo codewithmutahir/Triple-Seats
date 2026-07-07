@@ -176,44 +176,51 @@ async function persistQuoteTotals(quoteId: string) {
 }
 
 async function addPackageToQuote(quoteId: string, catererId: string, packageId: string) {
-  const quote = await loadQuoteForCaterer(quoteId, catererId);
-  if (!quote) return null;
+  await prisma.$transaction(async (tx) => {
+    const quote = await tx.quote.findFirst({
+      where: { id: quoteId, catererId },
+      include: {
+        lineItems: true,
+        event: { select: { guestCountEstimate: true, customerType: true } }
+      }
+    });
+    if (!quote) {
+      throw Object.assign(new Error("Quote not found."), { status: 404 });
+    }
 
-  const pkg = await prisma.cateringPackage.findFirst({
-    where: { id: packageId, catererId },
-    include: { tiers: { orderBy: { minGuests: "asc" } } }
-  });
-  if (!pkg) {
-    throw Object.assign(new Error("Package not found."), { status: 404 });
-  }
+    const pkg = await tx.cateringPackage.findFirst({
+      where: { id: packageId, catererId },
+      include: { tiers: { orderBy: { minGuests: "asc" } } }
+    });
+    if (!pkg) {
+      throw Object.assign(new Error("Package not found."), { status: 404 });
+    }
 
-  const guestCount = quote.event?.guestCountEstimate ?? 0;
-  const customerType = quote.event?.customerType ?? "b2c";
-  const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
-  if (!activeTier) {
-    throw Object.assign(new Error("No pricing tier matches the guest count."), { status: 400 });
-  }
+    const guestCount = quote.event?.guestCountEstimate ?? 0;
+    const customerType = quote.event?.customerType ?? "b2c";
+    const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
+    if (!activeTier) {
+      throw Object.assign(new Error("No pricing tier matches the guest count."), { status: 400 });
+    }
 
-  const existingPackageLine = quote.lineItems.find((item) => item.unitType === "tiered_per_head");
-  if (existingPackageLine) {
-    await prisma.quoteLineItem.deleteMany({
+    await tx.quoteLineItem.deleteMany({
       where: { quoteId, unitType: "tiered_per_head" }
     });
-  }
 
-  await prisma.quoteLineItem.create({
-    data: {
-      quoteId,
-      packageId: pkg.id,
-      category: "other",
-      name: pkg.name,
-      quantity: 1,
-      unitPrice: activeTier.pricePerHead,
-      unitType: "tiered_per_head",
-      appliedTier: activeTier.pricePerHead,
-      appliedTierLabel: formatTierLabel(activeTier),
-      notes: formatTierLabel(activeTier)
-    }
+    await tx.quoteLineItem.create({
+      data: {
+        quoteId,
+        packageId: pkg.id,
+        category: "other",
+        name: pkg.name,
+        quantity: 1,
+        unitPrice: activeTier.pricePerHead,
+        unitType: "tiered_per_head",
+        appliedTier: activeTier.pricePerHead,
+        appliedTierLabel: formatTierLabel(activeTier),
+        notes: formatTierLabel(activeTier)
+      }
+    });
   });
 
   return persistQuoteTotals(quoteId);
