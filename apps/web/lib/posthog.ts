@@ -6,9 +6,12 @@ export function initPostHog() {
   if (process.env.NODE_ENV !== "production") return;
 
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
-    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://app.posthog.com",
+    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
+    ui_host: "https://us.posthog.com",
+    disable_session_recording: false,
     session_recording: {
       maskAllInputs: false,
+      recordCrossOriginIframes: false,
       maskInputOptions: {
         password: true,
         email: false
@@ -20,8 +23,11 @@ export function initPostHog() {
     loaded: (ph) => {
       if (process.env.NODE_ENV === "development") {
         ph.opt_out_capturing();
+        return;
       }
-    }
+
+      // Only start replay after the application has obtained explicit user consent.
+    },
   });
 }
 
