@@ -1,5 +1,6 @@
 import { apiFetchJson } from "@/lib/api-client";
 import { supportsApiFeature } from "@/lib/api-features";
+import { quoteAnalytics } from "@/lib/quote-analytics";
 import {
   MENU_SECTIONS,
   type CateringPackage,
@@ -29,6 +30,11 @@ async function fetchQuoteBuilderLegacy(eventId: string) {
     });
     if (!createRes.ok) return createRes;
     quote = createRes.data.quote;
+    quoteAnalytics.quoteCreated({
+      eventId,
+      quoteId: quote.id,
+      hasPackage: quote.lineItems.some((item) => item.unitType === "tiered_per_head")
+    });
   }
 
   const customerType = quote.event?.customerType ?? "b2c";

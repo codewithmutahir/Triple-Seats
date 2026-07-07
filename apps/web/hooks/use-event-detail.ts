@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import type { EventDetailPayload } from "@/lib/event-types";
+import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
 
 export function useEventDetailQuery(eventId: string | null) {
@@ -35,6 +36,13 @@ export function useEventDetailMutations(eventId: string | null) {
     onMutate: async (status) => {
       await qc.cancelQueries({ queryKey: detailKey });
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
+      if (prev && prev.status !== status && eventId) {
+        quoteAnalytics.eventStatusChanged({
+          eventId,
+          fromStatus: prev.status,
+          toStatus: status
+        });
+      }
       patchCache((old) => ({
         ...old,
         status,

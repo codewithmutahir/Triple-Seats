@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
 import type { Conversation, DiscussionThread } from "@/lib/stores/app-store";
 
@@ -31,7 +32,14 @@ export function useDiscussionMutations(eventId: string | null) {
   const sendMutation = useMutation({
     mutationFn: (data: { body: string; sendAsEmail?: boolean; direction?: string }) =>
       api.messages.send({ ...data, eventId }),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
+      if (eventId) {
+        quoteAnalytics.messageSent({
+          eventId,
+          direction: variables.direction,
+          asEmail: variables.sendAsEmail
+        });
+      }
       qc.setQueryData<DiscussionThread>(threadKey, (old) =>
         old
           ? { ...old, messages: [...old.messages, result.message] }

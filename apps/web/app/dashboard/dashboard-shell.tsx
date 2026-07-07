@@ -22,6 +22,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
 import { getApiFeatures } from "@/lib/api-features";
 import { signOut, useSession } from "@/lib/auth-client";
+import { posthog } from "@/lib/posthog";
 import { queryKeys } from "@/lib/query-keys";
 import type { ServerAuthUser } from "@/lib/server-auth-session";
 import { cn } from "@/lib/utils";
@@ -262,6 +263,15 @@ export function DashboardShell({
   useEffect(() => {
     void getApiFeatures();
   }, []);
+
+  useEffect(() => {
+    if (user && process.env.NODE_ENV === "production") {
+      posthog.identify(user.id, {
+        email: user.email,
+        name: user.name
+      });
+    }
+  }, [user]);
 
   async function handleSignOut() {
     await signOut();
