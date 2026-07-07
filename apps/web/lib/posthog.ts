@@ -6,9 +6,12 @@ export function initPostHog() {
   if (process.env.NODE_ENV !== "production") return;
 
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
-    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://app.posthog.com",
+    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
+    ui_host: "https://us.posthog.com",
+    disable_session_recording: false,
     session_recording: {
       maskAllInputs: false,
+      recordCrossOriginIframes: false,
       maskInputOptions: {
         password: true,
         email: false
@@ -16,11 +19,16 @@ export function initPostHog() {
     },
     autocapture: true,
     capture_pageview: false,
-    respect_dnt: true,
+    // DNT can block session replay even when events still flow.
+    respect_dnt: false,
     loaded: (ph) => {
       if (process.env.NODE_ENV === "development") {
         ph.opt_out_capturing();
+        return;
       }
+
+      // posthog-js 1.39x lazy-loads the recorder; explicitly start after init.
+      ph.startSessionRecording();
     }
   });
 }
