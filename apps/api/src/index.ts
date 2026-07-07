@@ -151,6 +151,19 @@ function createApp() {
     });
   });
 
+  app.post("/api/observability-test", (_req, res) => {
+    if (!isProd) {
+      return res.status(404).json({ ok: false, error: "Production only." });
+    }
+    if (!process.env.SENTRY_DSN) {
+      return res.status(503).json({ ok: false, error: "SENTRY_DSN not configured." });
+    }
+    Sentry.captureException(new Error("Tripeseats API Sentry observability test"), {
+      tags: { observability_test: "true", service: "api" }
+    });
+    return res.json({ ok: true });
+  });
+
   app.use("/api/auth/sign-in", authWriteLimiter);
   app.use("/api/auth/sign-up", authWriteLimiter);
   app.use("/api/auth/forgot-password", authWriteLimiter);
