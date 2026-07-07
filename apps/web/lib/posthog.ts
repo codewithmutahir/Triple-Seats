@@ -19,17 +19,15 @@ export function initPostHog() {
     },
     autocapture: true,
     capture_pageview: false,
-    // DNT can block session replay even when events still flow.
-    respect_dnt: false,
+    respect_dnt: true,
     loaded: (ph) => {
       if (process.env.NODE_ENV === "development") {
         ph.opt_out_capturing();
         return;
       }
 
-      // posthog-js 1.39x lazy-loads the recorder; explicitly start after init.
-      ph.startSessionRecording();
-    }
+      // Only start replay after the application has obtained explicit user consent.
+    },
   });
 }
 
