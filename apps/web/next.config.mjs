@@ -24,9 +24,7 @@ const sentryBuildOptions = {
   authToken: process.env.SENTRY_AUTH_TOKEN,
   silent: !process.env.CI,
   widenClientFileUpload: true,
-  disableLogger: true
+  tunnelRoute: "/monitoring"
 };
 
-export default process.env.SENTRY_AUTH_TOKEN
-  ? withSentryConfig(nextConfig, sentryBuildOptions)
-  : nextConfig;
+export default withSentryConfig(nextConfig, sentryBuildOptions);

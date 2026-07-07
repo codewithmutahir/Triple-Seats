@@ -49,7 +49,7 @@ export default function ObservabilityTestPage() {
     }
   }
 
-  function testSentryClient() {
+  async function testSentryClient() {
     setMessage(null);
     try {
       if (!isProd) {
@@ -58,15 +58,20 @@ export default function ObservabilityTestPage() {
         return;
       }
       if (!hasSentryDsn) {
-        setMessage("NEXT_PUBLIC_SENTRY_DSN is missing on this deployment.");
+        setMessage(
+          "NEXT_PUBLIC_SENTRY_DSN is missing. Add it in Vercel Production env vars and redeploy — NEXT_PUBLIC_* vars are baked in at build time."
+        );
         setSentryClientStatus("error");
         return;
       }
       Sentry.captureException(new Error("Tripeseats client Sentry observability test"), {
-        tags: { observability_test: "true" }
+        tags: { observability_test: "true", runtime: "browser" }
       });
+      await Sentry.flush(2000);
       setSentryClientStatus("ok");
-      setMessage("Sentry client error sent — check Issues in Sentry within ~1 min.");
+      setMessage(
+        "Sentry client error sent — check Issues in Sentry within ~1 min. Note: typing myUndefinedFunction() in the browser console does NOT reach Sentry."
+      );
     } catch (err) {
       setSentryClientStatus("error");
       setMessage(err instanceof Error ? err.message : "Sentry client test failed");
@@ -112,7 +117,7 @@ export default function ObservabilityTestPage() {
               Test PostHog event
               {posthogStatus === "ok" ? " ✓" : posthogStatus === "error" ? " ✗" : ""}
             </Button>
-            <Button type="button" variant="secondary" onClick={testSentryClient}>
+            <Button type="button" variant="secondary" onClick={() => void testSentryClient()}>
               Test Sentry (browser)
               {sentryClientStatus === "ok" ? " ✓" : sentryClientStatus === "error" ? " ✗" : ""}
             </Button>
