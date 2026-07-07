@@ -63,6 +63,7 @@ import { useEventDetailMutations, useEventDetailQuery } from "@/hooks/use-event-
 import { usePrefetchOnHover } from "@/hooks/use-prefetch";
 import { api } from "@/lib/api";
 import type { EventDetailPayload, TaskPayload } from "@/lib/event-types";
+import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
 import type { EventsListResponse, EventsStats } from "@/lib/stores/app-store";
 import { browserTimer } from "@/lib/perf";
@@ -496,6 +497,11 @@ function EventDetailInner() {
         old ? { ...old, tasks: [...old.tasks, toTaskPayload(task)] } : old
       );
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      quoteAnalytics.taskAdded({
+        eventId,
+        taskTitle: newTaskTitle.trim(),
+        source: fromQuick ? "quick" : "list"
+      });
       setNewTaskTitle("");
       if (fromQuick) setShowQuickTaskForm(false);
     } catch {
@@ -537,6 +543,13 @@ function EventDetailInner() {
           : old
       );
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      if (eventId) {
+        quoteAnalytics.taskUpdated({
+          eventId,
+          taskId: task.id,
+          completed
+        });
+      }
     } catch {
       if (!isLatestTaskOp(opId)) return;
       if (prev) qc.setQueryData(detailKey, prev);
@@ -556,6 +569,9 @@ function EventDetailInner() {
       await api.tasks.delete(id);
       if (!isLatestTaskOp(opId)) return;
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      if (eventId) {
+        quoteAnalytics.taskDeleted({ eventId, taskId: id });
+      }
     } catch {
       if (!isLatestTaskOp(opId)) return;
       if (prev) qc.setQueryData(detailKey, prev);
@@ -852,7 +868,10 @@ function EventDetailInner() {
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
               <Button variant="outline" className="justify-between bg-white" asChild>
-                <Link href={`/dashboard/quotes?eventId=${encodeURIComponent(event.id)}`}>
+                <Link
+                  href={`/dashboard/quotes?eventId=${encodeURIComponent(event.id)}`}
+                  onClick={() => quoteAnalytics.createQuoteClicked({ eventId: event.id })}
+                >
                   Create Quote
                   <ChevronRight className="h-4 w-4" />
                 </Link>

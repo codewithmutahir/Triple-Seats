@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import * as Sentry from "@sentry/node";
 
 import { auth } from "./auth";
 import { prisma, type Prisma } from "@tripeseats/database";
@@ -267,6 +268,14 @@ export async function getSession(req: Request) {
     name: data.user.name ?? null
   });
   perf.step("ensureCaterer");
+
+  if (process.env.NODE_ENV === "production" && process.env.SENTRY_DSN) {
+    Sentry.setUser({
+      id: data.user.id,
+      email: data.user.email ?? undefined
+    });
+    Sentry.setTag("catererId", caterer.id);
+  }
 
   perf.end();
   return { session: data.session, user: data.user, caterer };

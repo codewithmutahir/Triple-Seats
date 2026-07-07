@@ -23,6 +23,7 @@ import {
   type CustomerTypeValue
 } from "@/lib/event-customer-types";
 import { broadcastNewLead } from "@/lib/caterpro-events";
+import { captureAnalytics } from "@/lib/posthog";
 import { parseApiError } from "@/lib/user-facing-error";
 import { Check, CircleCheck, UtensilsCrossed } from "lucide-react";
 
@@ -206,6 +207,11 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
         const body = (await response.json()) as { error?: string };
         throw new Error(parseApiError(body, response.status, response.statusText));
       }
+
+      captureAnalytics("lead_form_submitted", {
+        eventType,
+        guestCount: Number(numberOfGuests)
+      });
 
       broadcastNewLead();
 

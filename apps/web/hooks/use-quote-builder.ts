@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
 import { api } from "@/lib/api";
 import type { QuoteBuilderPayload } from "@/lib/quote-builder-api";
+import { quoteAnalytics } from "@/lib/quote-analytics";
 import { resolveCreatedLineItem } from "@/lib/quote-line-items";
 import { queryKeys } from "@/lib/query-keys";
 import { formatTierLabel, getActiveTier } from "@/lib/quote-totals";
@@ -116,6 +117,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const bumpLineItemOp = () => ++lineItemSeqRef.current;
   const isLatestLineItemOp = (opId: number) => opId === lineItemSeqRef.current;
 
+  const builderContext = () => {
+    const data = qc.getQueryData<BuilderData>(builderKey);
+    return {
+      eventId: eventId ?? undefined,
+      quoteId: data?.quote?.id
+    };
+  };
+
   const patchBuilder = (updater: (old: BuilderData) => BuilderData) => {
     qc.setQueryData<BuilderData>(builderKey, (old) => (old ? updater(old) : old));
   };
@@ -180,6 +189,15 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onMutate: async ({ tempItem }) => {
       const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
+      quoteAnalytics.itemAdded({
+        ...builderContext(),
+        category: tempItem.category,
+        name: tempItem.name,
+        unitType: tempItem.unitType,
+        quantity: tempItem.quantity,
+        unitPrice: tempItem.unitPrice,
+        menuItemId: tempItem.menuItemId
+      });
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -229,6 +247,15 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onMutate: async ({ itemId }) => {
       const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
+      const removed = prev?.quote.lineItems.find((item) => item.id === itemId);
+      if (removed) {
+        quoteAnalytics.itemRemoved({
+          ...builderContext(),
+          category: removed.category,
+          name: removed.name,
+          itemId
+        });
+      }
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -275,6 +302,15 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const current = prev?.quote.lineItems.find((item) => item.id === itemId);
       const patch = normalizeItemPatch(current, data);
+      if (current) {
+        quoteAnalytics.itemUpdated({
+          ...builderContext(),
+          category: current.category,
+          name: current.name,
+          itemId,
+          fields: Object.keys(patch)
+        });
+      }
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -303,6 +339,47 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       api.quotes.update(quoteId, data),
     onMutate: async ({ data }) => {
       const prev = qc.getQueryData<BuilderData>(builderKey);
+      const ctx = builderContext();
+
+      if (typeof data.status === "string" && prev?.quote && prev.quote.status !== data.status) {
+        quoteAnalytics.statusChanged({
+          ...ctx,
+          fromStatus: prev.quote.status,
+          toStatus: data.status
+        });
+      } else {
+        const fields: string[] = [];
+        if (typeof data.taxRate === "number") fields.push("taxRate");
+        if (typeof data.depositPct === "number") fields.push("depositPct");
+        if (data.notes !== undefined) fields.push("notes");
+        if (data.dueDate !== undefined) fields.push("dueDate");
+        if (data.packageSelections !== undefined) {
+          const stored = data.packageSelections as Record<string, Record<string, unknown[]>>;
+          const categories = Object.keys(stored);
+          const totalSelections = categories.reduce(
+            (sum, cat) =>
+              sum +
+              Object.values(stored[cat] ?? {}).reduce(
+                (inner, items) => inner + (Array.isArray(items) ? items.length : 0),
+                0
+              ),
+            0
+          );
+          quoteAnalytics.packageItemsUpdated({
+            ...ctx,
+            categories,
+            totalSelections
+          });
+        } else if (fields.length > 0) {
+          quoteAnalytics.settingsUpdated({
+            ...ctx,
+            fields,
+            taxRate: typeof data.taxRate === "number" ? data.taxRate : undefined,
+            depositPct: typeof data.depositPct === "number" ? data.depositPct : undefined
+          });
+        }
+      }
+
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -390,6 +467,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onMutate: async ({ guestCount }) => {
       latestGuestCountRef.current = guestCount;
       const prev = qc.getQueryData<BuilderData>(builderKey);
+      const from = prev?.quote.event?.guestCountEstimate ?? 0;
+      if (from !== guestCount) {
+        quoteAnalytics.guestCountChanged({
+          ...builderContext(),
+          from,
+          to: guestCount
+        });
+      }
       if (!prev?.quote) return { prev, guestCount };
 
       const customerType = prev.quote.event?.customerType ?? "b2c";
@@ -441,6 +526,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const duplicateMutation = useMutation({
     mutationFn: (quoteId: string) => api.quotes.duplicate(quoteId),
     onSuccess: (result) => {
+      quoteAnalytics.duplicate(builderContext());
       patchBuilder((old) => ({ ...old, quote: result.quote }));
       toast.success("Quote duplicated.");
     },

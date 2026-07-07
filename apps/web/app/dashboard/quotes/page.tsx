@@ -58,6 +58,7 @@ import {
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { useDebouncedCallback } from "@/lib/use-debounce";
 import { parseApiError } from "@/lib/user-facing-error";
+import { quoteAnalytics } from "@/lib/quote-analytics";
 import { browserTimer } from "@/lib/perf";
 import { cn } from "@/lib/utils";
 
@@ -166,6 +167,8 @@ function QuoteBuilderPage() {
   const packageSelectionsInitialized = useRef(false);
   const skipPackageSelectionsSaveRef = useRef(true);
   const quoteLoadedRef = useRef<string | null>(null);
+  const quoteCreatedTrackedRef = useRef<string | null>(null);
+  const quoteOpenedTrackedRef = useRef<string | null>(null);
 
   const [selectedPkgId, setSelectedPkgId] = useState<string | null>(null);
 
@@ -245,6 +248,43 @@ function QuoteBuilderPage() {
     setSelectedPkgId(initialPackageId);
     latestPackageIdRef.current = initialPackageId;
   }, [quote?.id, quote?.lineItems, latestPackageIdRef]);
+
+  useEffect(() => {
+    if (!quote || !eventId) return;
+    if (quoteCreatedTrackedRef.current === quote.id) return;
+
+    const storageKey = `ph_quote_created_${quote.id}`;
+    if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(storageKey)) {
+      quoteCreatedTrackedRef.current = quote.id;
+      return;
+    }
+
+    const ageMs = quote.createdAt ? Date.now() - new Date(quote.createdAt).getTime() : Number.POSITIVE_INFINITY;
+    if (ageMs < 30_000) {
+      quoteCreatedTrackedRef.current = quote.id;
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem(storageKey, "1");
+      }
+      quoteAnalytics.quoteCreated({
+        eventId,
+        quoteId: quote.id,
+        hasPackage: lineItems.some((item) => item.unitType === "tiered_per_head")
+      });
+    }
+  }, [quote, eventId, lineItems]);
+
+  useEffect(() => {
+    if (!quote || !eventId) return;
+    if (quoteOpenedTrackedRef.current === quote.id) return;
+    quoteOpenedTrackedRef.current = quote.id;
+    quoteAnalytics.opened({
+      eventId,
+      quoteId: quote.id,
+      status: quote.status,
+      guestCount: liveGuestCount,
+      lineItemCount: lineItems.length
+    });
+  }, [quote, eventId, liveGuestCount, lineItems.length]);
 
   useEffect(() => {
     if (!quote) return;
@@ -391,9 +431,16 @@ function QuoteBuilderPage() {
       unitPrice: deliveryTotal,
       unitType: "flat"
     });
+    quoteAnalytics.deliveryAdded({
+      eventId: eventId ?? undefined,
+      quoteId: quote.id,
+      distance: dist,
+      rate,
+      total: deliveryTotal
+    });
     setDeliveryDistance("");
     setDeliveryRate("");
-  }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic]);
+  }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic, eventId]);
 
   const clearPackageSelections = useCallback(() => {
     // Cancel any pending debounced save and skip the next auto-save after clearing.
@@ -410,6 +457,15 @@ function QuoteBuilderPage() {
       setSelectedPkgId(packageId);
       selectPackageOptimistic(pkg, packages);
       clearPackageSelections();
+      const activeTier = getActiveTier(pkg.tiers, liveGuestCount, quote.event?.customerType ?? "b2c");
+      quoteAnalytics.packageSelected({
+        eventId,
+        quoteId: quote.id,
+        packageId: pkg.id,
+        packageName: pkg.name,
+        guestCount: liveGuestCount,
+        tierPrice: activeTier?.pricePerHead
+      });
       addPackageMutation.mutate(
         { quoteId: quote.id, packageId },
         {
@@ -427,12 +483,19 @@ function QuoteBuilderPage() {
       addPackageMutation,
       clearPackageSelections,
       selectPackageOptimistic,
-      latestPackageIdRef
+      latestPackageIdRef,
+      liveGuestCount
     ]
   );
 
   const removePackageFromQuote = useCallback(() => {
     if (!quote) return;
+    quoteAnalytics.packageRemoved({
+      eventId,
+      quoteId: quote.id,
+      packageId: selectedPkgId,
+      packageName: selectedPackage?.name ?? null
+    });
     setSelectedPkgId(null);
     removePackageOptimistic();
     clearPackageSelections();
@@ -443,6 +506,9 @@ function QuoteBuilderPage() {
     });
   }, [
     quote,
+    eventId,
+    selectedPkgId,
+    selectedPackage,
     removePackageMutation,
     clearPackageSelections,
     removePackageOptimistic,
@@ -469,11 +535,12 @@ function QuoteBuilderPage() {
 
   const saveDraft = useCallback(() => {
     if (!quote) return;
+    quoteAnalytics.draftSaved({ eventId, quoteId: quote.id });
     updateQuoteMutation.mutate(
       { quoteId: quote.id, data: { status: "draft" } },
       { onSuccess: () => toast.success("Draft saved.") }
     );
-  }, [quote, updateQuoteMutation]);
+  }, [quote, eventId, updateQuoteMutation]);
 
   const duplicateQuote = useCallback(() => {
     if (!quote) return;
@@ -787,9 +854,15 @@ function QuoteBuilderPage() {
                 items={itemsByCategory.get(section.category) ?? []}
                 guestCount={liveGuestCount}
                 isOpen={openSections[section.category] ?? true}
-                onOpenChange={(open) =>
-                  setOpenSections((prev) => ({ ...prev, [section.category]: open }))
-                }
+                onOpenChange={(open) => {
+                  setOpenSections((prev) => ({ ...prev, [section.category]: open }));
+                  quoteAnalytics.sectionToggled({
+                    eventId,
+                    quoteId: quote.id,
+                    category: section.category,
+                    isOpen: open
+                  });
+                }}
                 onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
                 onUpdate={updateLineItemOptimistic}
                 onDelete={removeLineItemOptimistic}
@@ -987,6 +1060,11 @@ function QuoteBuilderPage() {
                   a.click();
                   setTimeout(() => URL.revokeObjectURL(url), 150);
                   toast.success("PDF downloaded!");
+                  quoteAnalytics.pdfGenerated({
+                    eventId,
+                    quoteId: quote.id,
+                    grandTotal: totals.grandTotal
+                  });
                 } catch {
                   toast.error("Failed to generate PDF.");
                 } finally {
@@ -1026,6 +1104,18 @@ function QuoteBuilderPage() {
                     quote.event?.primaryGuest?.email ??
                     "guest";
                   toast.success(`Quote sent to ${guestEmail}!`);
+                  quoteAnalytics.sent({
+                    eventId,
+                    quoteId: quote.id,
+                    grandTotal: totals.grandTotal,
+                    guestEmail
+                  });
+                  quoteAnalytics.statusChanged({
+                    eventId,
+                    quoteId: quote.id,
+                    fromStatus: quote.status,
+                    toStatus: "sent"
+                  });
                 } catch {
                   toast.error("Failed to send quote.");
                 } finally {

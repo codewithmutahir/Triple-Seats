@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import type { ReactNode } from "react";
 
+import { ErrorBoundary } from "@/components/error-boundary";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 
 import { DashboardShell } from "./dashboard-shell";
@@ -18,5 +19,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     redirect("/login");
   }
 
-  return <DashboardShell initialUser={auth.user}>{children}</DashboardShell>;
+  return (
+    <DashboardShell initialUser={auth.user}>
+      <ErrorBoundary>{children}</ErrorBoundary>
+    </DashboardShell>
+  );
 }

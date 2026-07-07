@@ -2,11 +2,13 @@
 
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { useEffect, useState, type ReactNode } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Toaster } from "sonner";
 
 import { CATERPRO_EVENTS_CHANNEL, type CaterProEventMessage } from "@/lib/caterpro-events";
+import { initPostHog, posthog } from "@/lib/posthog";
 import { queryKeys } from "@/lib/query-keys";
 
 function makeQueryClient() {
@@ -69,12 +71,31 @@ function QueryRealtimeSync() {
   return null;
 }
 
+function PostHogPageViews() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") return;
+    posthog.capture("$pageview");
+  }, [pathname, searchParams]);
+
+  return null;
+}
+
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(makeQueryClient);
+
+  useEffect(() => {
+    initPostHog();
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
       <QueryRealtimeSync />
+      <Suspense fallback={null}>
+        <PostHogPageViews />
+      </Suspense>
       {children}
       <Toaster position="bottom-right" richColors />
       {process.env.NODE_ENV === "development" ? (

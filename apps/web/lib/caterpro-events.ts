@@ -1,6 +1,8 @@
 export const CATERPRO_EVENTS_CHANNEL = "caterpro_events";
 
-export type CaterProEventMessage = { type: "NEW_LEAD" };
+export type CaterProEventMessage = {
+  type: "NEW_LEAD";
+};
 
 export function broadcastNewLead() {
   if (typeof window === "undefined") return;

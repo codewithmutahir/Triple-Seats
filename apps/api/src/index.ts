@@ -2,6 +2,12 @@ import { loadEnv } from "./lib/load-env";
 
 loadEnv();
 
+import * as Sentry from "@sentry/node";
+
+import { initSentry } from "./lib/sentry";
+
+initSentry();
+
 import { connectDB, disconnectDB, prisma } from "@tripeseats/database";
 import { toNodeHandler } from "better-auth/node";
 import cors from "cors";
@@ -14,6 +20,7 @@ import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-sch
 import { ensureQuotePackageSelectionsSchema } from "./lib/ensure-quote-package-selections";
 import { ensureQuoteUnitEnum } from "./lib/ensure-quote-units";
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
+import { logger } from "./lib/logger";
 import { getResend } from "./lib/mail";
 import { authWriteLimiter, generalLimiter, isLoadTestMode } from "./lib/rate-limit";
 import { bookingsRouter } from "./routes/bookings";
@@ -165,12 +172,14 @@ function createApp() {
   app.use("/api/reports", reportsRouter);
   app.use("/api/tasks", tasksRouter);
 
+  Sentry.setupExpressErrorHandler(app);
+
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const e = err as { status?: number; statusCode?: number; message?: string; stack?: string };
     const status = e.status ?? e.statusCode ?? 500;
 
     if (status >= 500) {
-      console.error("[error]", {
+      logger.error("Request failed", {
         method: req.method,
         path: req.path,
         status,
