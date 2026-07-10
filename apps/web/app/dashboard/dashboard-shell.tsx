@@ -17,6 +17,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
@@ -262,6 +263,7 @@ export function DashboardShell({
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
+  const { role, catererName, isTeamMember } = usePermissions();
 
   const pageTitle = TITLE_MAP[pathname] ?? "Dashboard";
   const user = session?.user ?? initialUser;
@@ -296,7 +298,12 @@ export function DashboardShell({
         <div className="border-b border-white/10 px-5 py-6">
           <Link href="/dashboard" className="block">
             <p className="font-heading text-2xl font-semibold tracking-tight text-white">Tripeseats</p>
-            <p className="text-xs text-white/60">Caterer workspace</p>
+            <p className="text-xs text-white/60">
+              {isTeamMember && catererName ? catererName : "Caterer workspace"}
+            </p>
+            {isTeamMember ? (
+              <Badge className="mt-2 border-white/20 bg-white/10 text-white capitalize">{role}</Badge>
+            ) : null}
           </Link>
         </div>
         <NavLinks />

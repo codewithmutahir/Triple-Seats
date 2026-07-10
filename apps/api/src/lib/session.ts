@@ -78,8 +78,28 @@ export function extractSessionToken(req: Request): string | null {
 
 type AuthUser = { id: string; email: string | null; name: string | null };
 
+export function clearCatererCacheForUser(userId: string) {
+  catererCache.delete(userId);
+}
+
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() ?? "";
+}
+
+async function catererHasBusinessData(catererId: string): Promise<boolean> {
+  const [events, leads] = await Promise.all([
+    prisma.event.count({ where: { catererId } }),
+    prisma.lead.count({ where: { catererId } })
+  ]);
+  return events > 0 || leads > 0;
+}
+
+async function findAcceptedTeamMembership(userId: string) {
+  return prisma.teamMember.findFirst({
+    where: { userId, inviteStatus: "accepted" },
+    orderBy: { joinedAt: "desc" },
+    include: { caterer: true }
+  });
 }
 
 /**
@@ -157,26 +177,49 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
     }
 
     const email = user.email.trim();
+    const emailNorm = normalizeEmail(email);
 
-    const byEmail = await prisma.caterer.findFirst({
-      where: { email }
-    });
+    const acceptedTeam = await findAcceptedTeamMembership(user.id);
+    if (acceptedTeam) {
+      caterer = acceptedTeam.caterer;
+    }
 
-    if (byEmail) {
-      if (!byEmail.userId) {
-        caterer = await prisma.caterer.update({
-          where: { id: byEmail.id },
-          data: { userId: user.id }
-        });
-      } else if (byEmail.userId === user.id) {
-        caterer = byEmail;
-      } else {
+    if (!caterer) {
+      const byEmail = await prisma.caterer.findFirst({
+        where: { email }
+      });
+
+      if (byEmail) {
+        if (!byEmail.userId) {
+          caterer = await prisma.caterer.update({
+            where: { id: byEmail.id },
+            data: { userId: user.id }
+          });
+        } else if (byEmail.userId === user.id) {
+          caterer = byEmail;
+        } else {
+          throw new SessionError(
+            "This email is already linked to another caterer account. Contact support if you need access.",
+            409
+          );
+        }
+      }
+    }
+
+    if (!caterer) {
+      const pendingInvite = await prisma.teamMember.findFirst({
+        where: {
+          email: emailNorm,
+          inviteStatus: "pending"
+        }
+      });
+      if (pendingInvite) {
         throw new SessionError(
-          "This email is already linked to another caterer account. Contact support if you need access.",
-          409
+          "You have a pending team invitation. Open your invite link and accept it before using the dashboard.",
+          403
         );
       }
-    } else {
+
       const displayName = user.name?.trim() || email.split("@")[0] || "My catering business";
 
       try {
@@ -208,6 +251,20 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
           throw new SessionError("Unable to create caterer profile. Try again or contact support.", 500);
         }
       }
+    }
+  }
+
+  if (caterer) {
+    const ownedCaterer = await prisma.caterer.findFirst({ where: { userId: user.id } });
+    const teamMembership = await findAcceptedTeamMembership(user.id);
+
+    if (
+      ownedCaterer &&
+      teamMembership &&
+      ownedCaterer.id !== teamMembership.catererId &&
+      !(await catererHasBusinessData(ownedCaterer.id))
+    ) {
+      caterer = teamMembership.caterer;
     }
   }
 
@@ -279,8 +336,7 @@ export async function getSession(req: Request) {
 
   perf.step("team:role");
 
-  perf.end();
-  const member = await prisma.teamMember.findFirst({
+  const teamMembership = await prisma.teamMember.findFirst({
     where: {
       catererId: caterer.id,
       userId: data.user.id,
@@ -289,7 +345,10 @@ export async function getSession(req: Request) {
     select: { role: true }
   });
 
-  const role: TeamRole = member?.role ?? "owner";
+  const isCatererOwner = caterer.userId === data.user.id;
+  const role: TeamRole = isCatererOwner ? "owner" : (teamMembership?.role ?? "owner");
+
+  perf.end();
 
   return { session: data.session, user: data.user, caterer, role };
 }

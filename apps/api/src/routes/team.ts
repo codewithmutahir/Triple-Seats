@@ -5,7 +5,7 @@ import { Router, type Request, type Response } from "express";
 
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { canAssignRole, requirePermission } from "../lib/permissions";
-import { getSession, SessionError } from "../lib/session";
+import { clearCatererCacheForUser, getSession, SessionError } from "../lib/session";
 
 const router = Router();
 const inviteRouter = Router();
@@ -56,8 +56,12 @@ function webOrigin(): string {
 
 router.get("/me", async (req: Request, res: Response) => {
   try {
-    const { role } = await getSession(req);
-    return res.json({ role });
+    const { role, caterer, user } = await getSession(req);
+    return res.json({
+      role,
+      catererName: caterer.name,
+      isTeamMember: caterer.userId !== user.id
+    });
   } catch (e) {
     return handleSessionError(res, e);
   }
@@ -80,7 +84,7 @@ router.get("/", async (req: Request, res: Response) => {
       inviteStatus: "accepted",
       joinedAt: caterer.createdAt.toISOString(),
       createdAt: caterer.createdAt.toISOString(),
-      userId: user.id,
+      userId: caterer.userId,
       isOwner: true
     };
 
@@ -293,6 +297,8 @@ inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
         joinedAt: new Date()
       }
     });
+
+    clearCatererCacheForUser(user.id);
 
     return res.json({ member: serializeMember(updated), redirect: "/dashboard" });
   } catch (e) {
