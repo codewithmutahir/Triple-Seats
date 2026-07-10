@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
 import type { TeamRole } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -98,15 +99,56 @@ function prependActivityLog(
       id: `temp_activity_${Date.now()}`,
       actorId: "",
       actorEmail: entry.actorEmail ?? null,
-      action: "team.role_change",
+      action: "team.activity",
       entityType: "team_member",
       entityId: null,
       summary: entry.summary,
       createdAt: new Date().toISOString()
     };
     const logs = old?.logs ?? [];
-    return { logs: [optimistic, ...logs.filter((log) => !log.id.startsWith("temp_activity_"))] };
+    return { logs: [optimistic, ...logs] };
   });
+}
+
+function ActivityLogPanel({
+  logs,
+  isLoading
+}: {
+  logs: ActivityLogCache["logs"];
+  isLoading: boolean;
+}) {
+  return (
+    <section className="space-y-4">
+      <SectionHeader
+        icon={History}
+        title="Activity Log"
+        description="Recent staff and access changes in your workspace"
+        count={logs.length}
+      />
+      {isLoading && logs.length === 0 ? (
+        <div className="flex justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : logs.length === 0 ? (
+        <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+          No activity recorded yet.
+        </p>
+      ) : (
+        <div className="divide-y rounded-lg border">
+          {logs.map((log) => (
+            <div key={log.id} className="flex items-start justify-between gap-4 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{log.summary}</p>
+                <p className="text-xs text-muted-foreground">
+                  {log.actorEmail ?? "System"} · {format(new Date(log.createdAt), "MMM d, yyyy h:mm a")}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function profileUnchanged(member: TeamMemberRow, name: string, phone: string, jobTitle: string) {
@@ -205,55 +247,6 @@ function StaffRow({
   );
 }
 
-function ActivityLogSection() {
-  const { can } = usePermissions();
-  const canView = can("team:read");
-
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.team.activity(),
-    queryFn: api.team.activity,
-    staleTime: 60_000,
-    enabled: canView
-  });
-
-  if (!canView) return null;
-
-  const logs = data?.logs ?? [];
-
-  return (
-    <section className="space-y-4">
-      <SectionHeader
-        icon={History}
-        title="Activity Log"
-        description="Recent staff and access changes in your workspace"
-        count={logs.length}
-      />
-      {isLoading && !data ? (
-        <div className="flex justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      ) : logs.length === 0 ? (
-        <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-          No activity recorded yet.
-        </p>
-      ) : (
-        <div className="divide-y rounded-lg border">
-          {logs.map((log) => (
-            <div key={log.id} className="flex items-start justify-between gap-4 px-4 py-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">{log.summary}</p>
-                <p className="text-xs text-muted-foreground">
-                  {log.actorEmail ?? "System"} · {format(new Date(log.createdAt), "MMM d, yyyy h:mm a")}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
 function SectionHeader({
   icon: Icon,
   title,
@@ -291,15 +284,26 @@ function SectionHeader({
 export function TeamSection() {
   const qc = useQueryClient();
   const { can } = usePermissions();
+  const { data: session } = useSession();
   const canManage = can("team:write");
-  const activityRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canViewActivity = can("team:read");
+  const actorEmail = session?.user?.email ?? null;
   const roleSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  function scheduleActivityRefresh() {
-    if (activityRefreshTimer.current) clearTimeout(activityRefreshTimer.current);
-    activityRefreshTimer.current = setTimeout(() => {
-      void qc.refetchQueries({ queryKey: queryKeys.team.activity() });
-    }, 300);
+  const activityQuery = useQuery({
+    queryKey: queryKeys.team.activity(),
+    queryFn: api.team.activity,
+    staleTime: 0,
+    enabled: canViewActivity
+  });
+
+  async function syncActivityLog() {
+    await qc.cancelQueries({ queryKey: queryKeys.team.activity() });
+    await qc.refetchQueries({ queryKey: queryKeys.team.activity(), type: "active" });
+  }
+
+  function pushActivityLog(summary: string) {
+    prependActivityLog(qc, { summary, actorEmail });
   }
 
   const { data, isLoading } = useQuery({
@@ -356,7 +360,7 @@ export function TeamSection() {
     },
     onSuccess: (_data, _vars, ctx) => {
       if (ctx?.skipped) return;
-      scheduleActivityRefresh();
+      void syncActivityLog();
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(queryKeys.team.list(), ctx.prev);
@@ -398,8 +402,11 @@ export function TeamSection() {
       return { prev };
     },
     onSuccess: () => {
+      const email = inviteEmail.trim();
+      const role = inviteMode === "admin" ? "admin" : inviteRole;
       const label = inviteMode === "admin" ? "administrator" : "employee";
-      toast.success(`Invitation sent to ${inviteEmail.trim()} as ${label}`);
+      toast.success(`Invitation sent to ${email} as ${label}`);
+      pushActivityLog(`Invited ${email} as ${role}`);
       setInviteOpen(false);
       setInviteEmail("");
     },
@@ -409,7 +416,7 @@ export function TeamSection() {
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
-      scheduleActivityRefresh();
+      void syncActivityLog();
     }
   });
 
@@ -435,32 +442,30 @@ export function TeamSection() {
       }
       return { prev, skipped: false as const, previousRole };
     },
-    onSuccess: (_data, { memberId, role, previousRole }, ctx) => {
+    onSuccess: async (_data, _vars, ctx) => {
       if (ctx?.skipped) return;
-      prependActivityLog(qc, {
-        summary: `Changed role for ${
-          ctx?.prev?.members.find((m) => m.id === memberId)?.email ?? "member"
-        } from ${previousRole} to ${role}`
-      });
-      scheduleActivityRefresh();
+      await syncActivityLog();
     },
-    onError: (_err, _vars, ctx) => {
+    onError: async (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(queryKeys.team.list(), ctx.prev);
       toast.error("Role update failed — reverted");
+      await syncActivityLog();
     }
   });
 
   function handleRoleChange(member: TeamMemberRow, role: TeamRole) {
     if (role === member.role) return;
 
+    const previousRole = member.role;
     patchMemberInCache(qc, member.id, { role });
+    pushActivityLog(`Changed role for ${member.email} from ${previousRole} to ${role}`);
 
     const existing = roleSaveTimers.current[member.id];
     if (existing) clearTimeout(existing);
 
     roleSaveTimers.current[member.id] = setTimeout(() => {
       delete roleSaveTimers.current[member.id];
-      roleMutation.mutate({ memberId: member.id, role, previousRole: member.role });
+      roleMutation.mutate({ memberId: member.id, role, previousRole });
     }, 120);
   }
 
@@ -469,6 +474,10 @@ export function TeamSection() {
     onMutate: async (memberId) => {
       await qc.cancelQueries({ queryKey: queryKeys.team.list() });
       const prev = qc.getQueryData<{ members: TeamMemberRow[] }>(queryKeys.team.list());
+      const removed = prev?.members.find((m) => m.id === memberId);
+      if (removed) {
+        pushActivityLog(`Removed ${removed.email} (${removed.role})`);
+      }
       if (prev) {
         qc.setQueryData(queryKeys.team.list(), {
           members: prev.members.filter((m) => m.id !== memberId)
@@ -481,7 +490,7 @@ export function TeamSection() {
       toast.error("Failed to remove member");
     },
     onSettled: () => {
-      scheduleActivityRefresh();
+      void syncActivityLog();
     }
   });
 
@@ -662,7 +671,12 @@ export function TeamSection() {
         </section>
       ) : null}
 
-      <ActivityLogSection />
+      {canViewActivity ? (
+        <ActivityLogPanel
+          logs={activityQuery.data?.logs ?? []}
+          isLoading={activityQuery.isLoading}
+        />
+      ) : null}
 
       {/* Invite Dialog */}
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
