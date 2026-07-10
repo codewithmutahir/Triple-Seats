@@ -14,6 +14,7 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { useUpdateProfileMutation, type ProfileUpdatePayload } from "@/hooks/use-settings-queries";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { CatererProfile } from "./page";
 
 const TIMEZONES = [
@@ -64,6 +65,8 @@ function formToPayload(form: ReturnType<typeof profileToForm>): ProfileUpdatePay
 
 export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
   const updateProfileMutation = useUpdateProfileMutation();
+  const { can } = usePermissions();
+  const canWrite = can("settings:write");
   const [form, setForm] = useState(() => profileToForm(profile));
 
   const savedPayload = formToPayload(profileToForm(profile));
@@ -92,7 +95,7 @@ export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
   }
 
   function handleSave() {
-    if (!isDirty) return;
+    if (!isDirty || !canWrite) return;
     updateProfileMutation.mutate(formToPayload(form), {
       onSuccess: () => {
         onDirtyChange?.(false);
@@ -108,6 +111,8 @@ export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
           <Input
             id="business-name"
             value={form.name}
+            readOnly={!canWrite}
+            disabled={!canWrite}
             onChange={(e) => updateField("name", e.target.value)}
             placeholder="Your business name"
           />
@@ -119,6 +124,8 @@ export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
             id="business-email"
             type="email"
             value={form.email}
+            readOnly={!canWrite}
+            disabled={!canWrite}
             onChange={(e) => updateField("email", e.target.value)}
             placeholder="contact@example.com"
           />
@@ -188,9 +195,11 @@ export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
         ) : (
           <span />
         )}
+        {canWrite ? (
         <Button type="button" onClick={handleSave}>
           Save Profile
         </Button>
+        ) : null}
       </div>
 
       <SaveIndicator

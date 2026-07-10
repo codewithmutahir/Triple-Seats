@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
+import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
 import type { Conversation, DiscussionThread } from "@/lib/stores/app-store";
@@ -27,11 +28,16 @@ export function useDiscussionThreadQuery(eventId: string | null) {
 
 export function useDiscussionMutations(eventId: string | null) {
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can("discussions:write");
   const threadKey = queryKeys.messages.thread(eventId ?? "");
 
   const sendMutation = useMutation({
     mutationFn: (data: { body: string; sendAsEmail?: boolean; direction?: string }) =>
       api.messages.send({ ...data, eventId }),
+    onMutate: () => {
+      if (!canWrite) return denyMutation();
+    },
     onSuccess: (result, variables) => {
       if (eventId) {
         quoteAnalytics.messageSent({
@@ -58,8 +64,8 @@ export function useDiscussionMutations(eventId: string | null) {
         );
       });
     },
-    onError: () => toast.error("Failed to send message")
+    onError: (err, _vars, ctx) => handleMutationError(err, ctx, "Failed to send message")
   });
 
-  return { sendMutation };
+  return { sendMutation, canWriteDiscussions: canWrite };
 }

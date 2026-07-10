@@ -3,7 +3,9 @@ import { useRef } from "react";
 import { toast } from "sonner";
 
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
+import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import type { QuoteBuilderPayload } from "@/lib/quote-builder-api";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { resolveCreatedLineItem } from "@/lib/quote-line-items";
@@ -18,7 +20,7 @@ export function useQuoteBuilderQuery(eventId: string | null) {
     staleTime: 2 * 60 * 1000
   });
 }
-
+0.
 type BuilderData = QuoteBuilderPayload;
 
 function normalizeItemPatch(
@@ -85,6 +87,8 @@ export function buildOptimisticPackageLine(
 
 export function useQuoteBuilderMutations(eventId: string | null) {
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can("quotes:write");
   const builderKey = queryKeys.quotes.builder(eventId ?? "");
   const latestGuestCountRef = useRef<number | null>(null);
   const latestPackageIdRef = useRef<string | null>(null);
@@ -105,10 +109,12 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const patchBuilder = (updater: (old: BuilderData) => BuilderData) => {
+    if (!canWrite) return;
     qc.setQueryData<BuilderData>(builderKey, (old: BuilderData | undefined) => (old ? updater(old) : old));
   };
 
   const selectPackageOptimistic = (pkg: CateringPackage, packages: CateringPackage[]) => {
+    if (!canWrite) return;
     latestPackageIdRef.current = pkg.id;
     packageRemovedRef.current = false;
 
@@ -141,6 +147,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const removePackageOptimistic = () => {
+    if (!canWrite) return;
     latestPackageIdRef.current = null;
     packageRemovedRef.current = true;
 
@@ -166,6 +173,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       tempItem: QuoteLineItem;
     }) => api.quotes.addItem(quoteId, item),
     onMutate: async ({ tempItem }) => {
+      if (!canWrite) return denyMutation();
       const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
       quoteAnalytics.itemAdded({
@@ -213,10 +221,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         }
       }));
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
-      toast.error("Failed to add item");
+      handleMutationError(err, ctx, "Failed to add item");
     }
   });
 
@@ -224,6 +232,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, itemId }: { quoteId: string; itemId: string }) =>
       api.quotes.removeItem(quoteId, itemId),
     onMutate: async ({ itemId }) => {
+      if (!canWrite) return denyMutation();
       const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const removed = prev?.quote.lineItems.find((item) => item.id === itemId);
@@ -254,10 +263,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         }
       }));
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
-      toast.error("Failed to remove item");
+      handleMutationError(err, ctx, "Failed to remove item");
     }
   });
 
@@ -277,6 +286,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return api.quotes.updateItem(quoteId, itemId, normalizeItemPatch(current, data));
     },
     onMutate: async ({ itemId, data }) => {
+      if (!canWrite) return denyMutation();
       const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const current = prev?.quote.lineItems.find((item) => item.id === itemId);
@@ -308,8 +318,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onError: (err, _vars, ctx) => {
       if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
-      const message = err instanceof Error ? err.message : "Failed to update item";
-      toast.error(message);
+      handleMutationError(err, ctx, "Failed to update item");
     }
   });
 
@@ -317,6 +326,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, data }: { quoteId: string; data: Record<string, unknown> }) =>
       api.quotes.update(quoteId, data),
     onMutate: async ({ data }) => {
+      if (!canWrite) return denyMutation();
       const opId = ++quoteUpdateSeqRef.current;
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const ctx = builderContext();
@@ -402,9 +412,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         }
       }));
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
       if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
+      handleMutationError(err, ctx, "Failed to save quote");
     }
   });
 
@@ -412,6 +423,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, packageId }: { quoteId: string; packageId: string }) =>
       api.quotes.addPackage(quoteId, packageId),
     onMutate: async ({ packageId }) => {
+      if (!canWrite) return denyMutation();
       const opId = ++packageOpSeqRef.current;
       const snapshot = qc.getQueryData<BuilderData>(builderKey);
       return { snapshot, packageId, opId };
@@ -435,7 +447,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         }
       }));
     },
-    onError: (_err, { packageId }, ctx) => {
+    onError: (err, { packageId }, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
       if (ctx?.snapshot) qc.setQueryData(builderKey, ctx.snapshot);
@@ -443,13 +455,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         ctx?.snapshot?.quote.lineItems.find((i) => i.unitType === "tiered_per_head")?.packageId ??
         null;
       packageRemovedRef.current = false;
-      // Note: the page-level onError callback shows the specific error message from the API.
+      handleMutationError(err, ctx, "Failed to add package");
     }
   });
 
   const removePackageMutation = useMutation({
     mutationFn: (quoteId: string) => api.quotes.removePackage(quoteId),
     onMutate: async () => {
+      if (!canWrite) return denyMutation();
       const opId = ++packageOpSeqRef.current;
       const snapshot = qc.getQueryData<BuilderData>(builderKey);
       return { snapshot, opId };
@@ -458,7 +471,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       // Cache already correct from optimistic remove
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (!packageRemovedRef.current || latestPackageIdRef.current !== null) return;
       if (ctx?.snapshot) qc.setQueryData(builderKey, ctx.snapshot);
@@ -466,7 +479,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         ctx?.snapshot?.quote.lineItems.find((i) => i.unitType === "tiered_per_head")?.packageId ??
         null;
       packageRemovedRef.current = false;
-      toast.error("Failed to remove package");
+      handleMutationError(err, ctx, "Failed to remove package");
     }
   });
 
@@ -474,6 +487,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     mutationFn: ({ quoteId, guestCount }: { quoteId: string; guestCount: number }) =>
       api.quotes.updateGuestCount(quoteId, guestCount),
     onMutate: async ({ guestCount }) => {
+      if (!canWrite) return denyMutation();
       latestGuestCountRef.current = guestCount;
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const from = prev?.quote.event?.guestCountEstimate ?? 0;
@@ -526,26 +540,31 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onSuccess: () => {
       // Client-side tiers already updated — no server merge
     },
-    onError: (_err, { guestCount }) => {
+    onError: (err, { guestCount }, ctx) => {
       if (guestCount !== latestGuestCountRef.current) return;
-      toast.error("Failed to update guest count");
+      if (ctx?.prev) qc.setQueryData(builderKey, ctx.prev);
+      handleMutationError(err, ctx, "Failed to update guest count");
     }
   });
 
   const duplicateMutation = useMutation({
     mutationFn: (quoteId: string) => api.quotes.duplicate(quoteId),
+    onMutate: () => {
+      if (!canWrite) return denyMutation();
+    },
     onSuccess: (result) => {
       quoteAnalytics.duplicate(builderContext());
       patchBuilder((old) => ({ ...old, quote: result.quote }));
       toast.success("Quote duplicated.");
     },
-    onError: () => toast.error("Failed to duplicate quote")
+    onError: (err, _vars, ctx) => handleMutationError(err, ctx, "Failed to duplicate quote")
   });
 
   const updateLineItemOptimistic = (
     itemId: string,
     patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>
   ) => {
+    if (!canWrite) return;
     const current = qc.getQueryData<BuilderData>(builderKey)?.quote.lineItems.find(
       (item) => item.id === itemId
     );
@@ -576,6 +595,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const removeLineItemOptimistic = (itemId: string) => {
+    if (!canWrite) return;
     const quoteId = qc.getQueryData<BuilderData>(builderKey)?.quote.id;
     if (!quoteId) return;
 
@@ -616,6 +636,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     isGuestCountMutating,
     isSaving: updateQuoteMutation.isPending,
     isSaveSuccess: updateQuoteMutation.isSuccess,
-    isSaveError: updateQuoteMutation.isError
+    isSaveError: updateQuoteMutation.isError,
+    canWriteQuotes: canWrite
   };
 }

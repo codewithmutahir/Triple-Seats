@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
+import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import { queryKeys } from "@/lib/query-keys";
 import type { TaskItem, TasksStats } from "@/lib/stores/app-store";
 
@@ -25,11 +26,14 @@ export function useTasksQuery() {
 
 export function useTaskMutations() {
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can("tasks:write");
 
   const addMutation = useMutation({
     mutationFn: (data: { title: string; eventId?: string | null }) =>
       api.tasks.create(data).then((r) => r.task),
     onMutate: async (newTask) => {
+      if (!canWrite) return denyMutation();
       await qc.cancelQueries({ queryKey: ALL_TASKS_KEY });
       const prev = qc.getQueryData<TaskItem[]>(ALL_TASKS_KEY);
       const optimistic: TaskItem = {
@@ -48,9 +52,9 @@ export function useTaskMutations() {
       );
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.stats() });
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(ALL_TASKS_KEY, ctx.prev);
-      toast.error("Failed to add task");
+      handleMutationError(err, ctx, "Failed to add task");
     }
   });
 
@@ -58,6 +62,7 @@ export function useTaskMutations() {
     mutationFn: ({ id, status }: { id: string; status: TaskItem["status"] }) =>
       api.tasks.update(id, { status }).then((r) => r.task),
     onMutate: async ({ id, status }) => {
+      if (!canWrite) return denyMutation();
       const prev = qc.getQueryData<TaskItem[]>(ALL_TASKS_KEY);
       qc.setQueryData<TaskItem[]>(ALL_TASKS_KEY, (old = []) =>
         old.map((t) => (t.id === id ? { ...t, status } : t))
@@ -65,27 +70,28 @@ export function useTaskMutations() {
       return { prev };
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.tasks.stats() }),
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(ALL_TASKS_KEY, ctx.prev);
-      toast.error("Failed to update task");
+      handleMutationError(err, ctx, "Failed to update task");
     }
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.tasks.delete(id),
     onMutate: async (id) => {
+      if (!canWrite) return denyMutation();
       const prev = qc.getQueryData<TaskItem[]>(ALL_TASKS_KEY);
       qc.setQueryData<TaskItem[]>(ALL_TASKS_KEY, (old = []) => old.filter((t) => t.id !== id));
       return { prev };
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.tasks.stats() }),
-    onError: (_err, id, ctx) => {
+    onError: (err, id, ctx) => {
       if (ctx?.prev) qc.setQueryData(ALL_TASKS_KEY, ctx.prev);
-      toast.error("Failed to delete task");
+      handleMutationError(err, ctx, "Failed to delete task");
     }
   });
 
-  return { addMutation, toggleMutation, deleteMutation };
+  return { addMutation, toggleMutation, deleteMutation, canWriteTasks: canWrite };
 }
 
 export type { TasksStats };

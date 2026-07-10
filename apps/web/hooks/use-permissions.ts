@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
-import { hasPermission, type Permission, type TeamRole } from "@/lib/permissions";
+import { hasPermission, isReadOnlyRole, type Permission, type TeamRole } from "@/lib/permissions";
 import { queryKeys } from "@/lib/query-keys";
 
 export function usePermissions() {
@@ -13,13 +13,16 @@ export function usePermissions() {
 
   const role = (data?.role ?? "owner") as TeamRole;
   const isOwner = data?.isOwner ?? role === "owner";
+  const isReadOnly = isReadOnlyRole(role);
 
   return {
     role,
     catererName: data?.catererName ?? null,
     isTeamMember: data?.isTeamMember ?? !isOwner,
     isOwner,
+    isReadOnly,
     can: (permission: Permission) => hasPermission(role, permission),
+    canWrite: (permission: Permission) => hasPermission(role, permission),
     isAdmin: role === "admin" || isOwner
   };
 }

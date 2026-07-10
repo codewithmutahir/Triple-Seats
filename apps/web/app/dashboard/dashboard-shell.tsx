@@ -20,6 +20,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { ViewOnlyBanner } from "@/components/view-only-banner";
 import { api } from "@/lib/api";
 import { getApiFeatures } from "@/lib/api-features";
 import { signOut, useSession } from "@/lib/auth-client";
@@ -264,7 +265,7 @@ export function DashboardShell({
   const pathname = usePathname();
   const router = useRouter();
   const { data: session, refetch } = useSession();
-  const { role, catererName, isOwner } = usePermissions();
+  const { role, catererName, isOwner, isReadOnly } = usePermissions();
 
   const pageTitle = TITLE_MAP[pathname] ?? "Dashboard";
   const user = session?.user ?? initialUser;
@@ -362,6 +363,8 @@ export function DashboardShell({
             <Avatar title={user.name ?? user.email ?? ""}>{initials}</Avatar>
           </div>
         </header>
+
+        {isReadOnly ? <ViewOnlyBanner role={role} /> : null}
 
         <main className="flex-1 px-4 py-6 md:px-8">{children}</main>
       </div>

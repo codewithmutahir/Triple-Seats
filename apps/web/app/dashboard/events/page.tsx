@@ -60,6 +60,7 @@ import {
 } from "@/lib/client-list-filter";
 import { useEventsListQuery } from "@/hooks/use-list-queries";
 import { useEventDetailMutations, useEventDetailQuery } from "@/hooks/use-event-detail";
+import { usePermissions } from "@/hooks/use-permissions";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch";
 import { api } from "@/lib/api";
 import type { EventDetailPayload, TaskPayload } from "@/lib/event-types";
@@ -402,8 +403,12 @@ function EventDetailInner() {
     notesMutation,
     guestMutation,
     updateMutation,
-    changeCustomerType
+    changeCustomerType,
+    canWriteEvents
   } = useEventDetailMutations(eventId);
+
+  const { can } = usePermissions();
+  const canWriteTasks = can("tasks:write");
 
   const error = queryError?.message ?? null;
   const detailKey = queryKeys.events.detail(eventId ?? "");
@@ -497,7 +502,7 @@ function EventDetailInner() {
   }
 
   async function addTask(fromQuick: boolean) {
-    if (!eventId || !newTaskTitle.trim()) return;
+    if (!eventId || !newTaskTitle.trim() || !canWriteTasks) return;
     setTaskSaving(true);
     try {
       const { task } = await api.tasks.create({ eventId, title: newTaskTitle.trim() });
@@ -520,6 +525,7 @@ function EventDetailInner() {
   }
 
   async function toggleTask(task: TaskPayload, completed: boolean) {
+    if (!canWriteTasks) return;
     const opId = bumpTaskOp();
     const nextStatus = completed ? "done" : "todo";
     const prev = qc.getQueryData<EventDetailPayload>(detailKey);
@@ -566,6 +572,7 @@ function EventDetailInner() {
   }
 
   async function deleteTask(id: string) {
+    if (!canWriteTasks) return;
     const opId = bumpTaskOp();
     const prev = qc.getQueryData<EventDetailPayload>(detailKey);
 
@@ -638,6 +645,7 @@ function EventDetailInner() {
                     {event.status}
                   </Badge>
                   <CustomerTypeBadge type={event.customerType} />
+                  {canWriteEvents ? (
                   <Select
                     value={event.customerType}
                     onValueChange={(v) => patchCustomerType(v as CustomerTypeValue)}
@@ -650,6 +658,8 @@ function EventDetailInner() {
                       <SelectItem value="b2b">{CUSTOMER_TYPE_LABELS.b2b}</SelectItem>
                     </SelectContent>
                   </Select>
+                  ) : null}
+                  {canWriteEvents ? (
                   <div className="flex items-center gap-2">
                     <Select value={event.status} onValueChange={(v) => patchStatus(v)}>
                       <SelectTrigger className="w-[180px] bg-white">
@@ -664,6 +674,7 @@ function EventDetailInner() {
                       </SelectContent>
                     </Select>
                   </div>
+                  ) : null}
                 </div>
               </div>
             </CardContent>
@@ -673,7 +684,7 @@ function EventDetailInner() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-lg">Guest Details</CardTitle>
-              {event.primaryGuest ? (
+              {event.primaryGuest && canWriteEvents ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -794,6 +805,7 @@ function EventDetailInner() {
                 </div>
                 <div className="sm:col-span-2 space-y-2">
                   <p className="text-xs font-medium text-muted-foreground">Event</p>
+                  {canWriteEvents ? (
                   <Select
                     value={event.eventType}
                     disabled={fieldSaving}
@@ -810,6 +822,9 @@ function EventDetailInner() {
                       ))}
                     </SelectContent>
                   </Select>
+                  ) : (
+                    <p className="text-sm">{event.eventTypeLabel ?? formatEventType(event.eventType)}</p>
+                  )}
                 </div>
               </div>
               {event.preferredSlots.length > 0 ? (
@@ -834,7 +849,8 @@ function EventDetailInner() {
                   value={additionalNotes}
                   onChange={(e) => setAdditionalNotes(e.target.value)}
                   onBlur={() => void saveNotes()}
-                  disabled={notesSaving}
+                  readOnly={!canWriteEvents}
+                  disabled={!canWriteEvents || notesSaving}
                 />
                 {notesSaving ? (
                   <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
@@ -884,6 +900,7 @@ function EventDetailInner() {
                   <ChevronRight className="h-4 w-4" />
                 </Link>
               </Button>
+              {canWriteTasks ? (
               <Button
                 type="button"
                 variant="outline"
@@ -893,7 +910,8 @@ function EventDetailInner() {
                 Add task
                 <Plus className="h-4 w-4" />
               </Button>
-              {showQuickTaskForm ? (
+              ) : null}
+              {canWriteTasks && showQuickTaskForm ? (
                 <div className="flex gap-2 pt-1">
                   <Input
                     placeholder="Task title"
@@ -922,6 +940,7 @@ function EventDetailInner() {
               <CardTitle className="text-lg">Tasks</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {canWriteTasks ? (
               <div className="flex gap-2">
                 <Input
                   placeholder="New task…"
@@ -935,6 +954,7 @@ function EventDetailInner() {
                   {taskSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                 </Button>
               </div>
+              ) : null}
               {event.tasks.length === 0 ? (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <ClipboardList className="h-4 w-4" />
@@ -950,14 +970,17 @@ function EventDetailInner() {
                       <Checkbox
                         className="mt-1"
                         checked={t.status === "done"}
+                        disabled={!canWriteTasks}
                         onCheckedChange={(c) => void toggleTask(t, c === true)}
                       />
                       <span className={cn("flex-1 text-sm", t.status === "done" && "text-muted-foreground line-through")}>
                         {t.title}
                       </span>
+                      {canWriteTasks ? (
                       <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => void deleteTask(t.id)}>
                         <Trash2 className="h-4 w-4 text-muted-foreground" />
                       </Button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

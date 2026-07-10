@@ -42,6 +42,7 @@ import {
   useUpdateTierPriceMutation,
   type PackageWriteBody
 } from "@/hooks/use-settings-queries";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { SettingsPackage } from "@/lib/settings-types";
 import { formatUsd } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
@@ -507,12 +508,14 @@ function PackageCard({
   pkg,
   onEdit,
   onDelete,
-  onTierPriceSave
+  onTierPriceSave,
+  canWrite = true
 }: {
   pkg: Package;
   onEdit: () => void;
   onDelete: () => void;
   onTierPriceSave: (tierId: string, price: number) => void;
+  canWrite?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [tierView, setTierView] = useState<"b2c" | "b2b">("b2c");
@@ -543,6 +546,8 @@ function PackageCard({
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {canWrite ? (
+              <>
               <Button
                 type="button"
                 variant="ghost"
@@ -567,6 +572,8 @@ function PackageCard({
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
+              </>
+              ) : null}
               <ChevronDown
                 className={cn(
                   "h-4 w-4 text-muted-foreground transition-transform",
@@ -672,6 +679,8 @@ export function PackagesSection() {
   const updatePackageMutation = useUpdatePackageMutation();
   const deletePackageMutation = useDeletePackageMutation();
   const updateTierPriceMutation = useUpdateTierPriceMutation();
+  const { can } = usePermissions();
+  const canWrite = can("settings:write");
 
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -715,6 +724,7 @@ export function PackagesSection() {
           {packages.length} package{packages.length !== 1 ? "s" : ""} configured
           {refreshing ? " · refreshing…" : ""}
         </p>
+        {canWrite ? (
         <Button
           onClick={() => {
             setEditingId(null);
@@ -724,6 +734,7 @@ export function PackagesSection() {
           <Plus className="mr-2 h-4 w-4" />
           New Package
         </Button>
+        ) : null}
       </div>
 
       {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
@@ -746,6 +757,7 @@ export function PackagesSection() {
               onTierPriceSave={(tierId, price) =>
                 updateTierPriceMutation.mutate({ tierId, pricePerHead: price })
               }
+              canWrite={canWrite}
             />
           ))}
         </div>

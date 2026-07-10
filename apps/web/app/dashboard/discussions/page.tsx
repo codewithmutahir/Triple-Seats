@@ -168,7 +168,7 @@ function DiscussionsInner() {
     error: threadError
   } = useDiscussionThreadQuery(selectedEventId);
 
-  const { sendMutation } = useDiscussionMutations(selectedEventId);
+  const { sendMutation, canWriteDiscussions } = useDiscussionMutations(selectedEventId);
 
   const listRefreshing = listFetching && !listLoading;
   const threadRefreshing = threadFetching && !threadLoading;
@@ -452,6 +452,7 @@ function DiscussionsInner() {
                 )}
               </div>
 
+              {canWriteDiscussions ? (
               <div className="border-t bg-slate-50/50 p-4">
                 <div className="space-y-3">
                   <Textarea
@@ -505,6 +506,11 @@ function DiscussionsInner() {
                   </div>
                 </div>
               </div>
+              ) : (
+                <div className="border-t bg-slate-50/50 px-4 py-3 text-sm text-muted-foreground">
+                  You have view-only access — you cannot send messages.
+                </div>
+              )}
             </>
           )}
         </div>

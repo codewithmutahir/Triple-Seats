@@ -33,6 +33,7 @@ type PackagesSectionProps = {
   onGuestCountCommit: (guestCount: number) => void;
   onAdd: (packageId: string) => void;
   onRemove: () => void;
+  readOnly?: boolean;
 };
 
 function formatIncludedItems(items: CateringPackage["items"]): string {
@@ -56,7 +57,8 @@ function PackageCard({
   tierUnavailable,
   onAdd,
   onRemove,
-  onSelectTier
+  onSelectTier,
+  readOnly = false
 }: {
   pkg: CateringPackage;
   guestCount: number;
@@ -67,6 +69,7 @@ function PackageCard({
   onAdd: () => void;
   onRemove: () => void;
   onSelectTier: (guestCount: number) => void;
+  readOnly?: boolean;
 }) {
   const [tiersOpen, setTiersOpen] = useState(false);
   const [itemsOpen, setItemsOpen] = useState(false);
@@ -133,7 +136,8 @@ function PackageCard({
                   <button
                     key={`${tier.minGuests}-${tier.maxGuests ?? "plus"}`}
                     type="button"
-                    onClick={() => onSelectTier(guestCountForTier(tier))}
+                    disabled={readOnly}
+                    onClick={() => !readOnly && onSelectTier(guestCountForTier(tier))}
                     className={cn(
                       "grid w-full grid-cols-2 border-t px-3 py-2 text-left tabular-nums transition-colors hover:bg-muted/80",
                       isActive && "bg-primary text-primary-foreground hover:bg-primary/90"
@@ -170,7 +174,7 @@ function PackageCard({
           </CollapsibleContent>
         </Collapsible>
 
-        {isSelected ? (
+        {!readOnly && (isSelected ? (
           <Button
             type="button"
             variant="outline"
@@ -188,7 +192,7 @@ function PackageCard({
           >
             Add Package
           </Button>
-        )}
+        ))}
       </CardContent>
     </Card>
   );
@@ -206,7 +210,8 @@ export function PackagesSection({
   onGuestCountPreview,
   onGuestCountCommit,
   onAdd,
-  onRemove
+  onRemove,
+  readOnly = false
 }: PackagesSectionProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [guestInput, setGuestInput] = useState(String(guestCount || ""));
@@ -345,8 +350,10 @@ export function PackagesSection({
                   min={0}
                   step={1}
                   value={guestInput}
-                  onChange={(e) => handleGuestInputChange(e.target.value)}
-                  onBlur={handleBlur}
+                  readOnly={readOnly}
+                  disabled={readOnly}
+                  onChange={(e) => !readOnly && handleGuestInputChange(e.target.value)}
+                  onBlur={readOnly ? undefined : handleBlur}
                   placeholder="e.g. 200"
                   className={guestCountUpdating ? "pr-7" : undefined}
                 />
@@ -394,6 +401,7 @@ export function PackagesSection({
                     onSelectTier={handleTierGuestCount}
                     onAdd={() => onAdd(pkg.id)}
                     onRemove={onRemove}
+                    readOnly={readOnly}
                   />
                 ))}
               </div>
@@ -423,6 +431,7 @@ export function PackagesSection({
                     {formatUsd(lineItemTotal(previewPackageLineItem, previewGuestCount))}
                   </p>
                 </div>
+                {!readOnly ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -432,6 +441,7 @@ export function PackagesSection({
                 >
                   Remove package
                 </Button>
+                ) : null}
               </div>
             ) : null}
           </CardContent>

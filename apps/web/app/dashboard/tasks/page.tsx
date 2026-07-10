@@ -75,7 +75,7 @@ export default function TasksPage() {
   const [completedOpen, setCompletedOpen] = useState(false);
 
   const { listQuery, statsQuery } = useTasksQuery();
-  const { addMutation, toggleMutation, deleteMutation } = useTaskMutations();
+  const { addMutation, toggleMutation, deleteMutation, canWriteTasks } = useTaskMutations();
   const { listQuery: eventsListQuery } = useEventsListQuery();
 
   const allTasks = listQuery.data ?? [];
@@ -216,6 +216,7 @@ export default function TasksPage() {
           <Checkbox
             className="mt-0.5"
             checked={task.status === "completed"}
+            disabled={!canWriteTasks}
             onCheckedChange={(c) => toggleTask(task, c === true)}
           />
           <div className="min-w-0 flex-1 space-y-1">
@@ -240,6 +241,7 @@ export default function TasksPage() {
               </span>
             </div>
           </div>
+          {canWriteTasks ? (
           <Button
             type="button"
             size="icon"
@@ -249,6 +251,7 @@ export default function TasksPage() {
           >
             <Trash2 className="h-4 w-4 text-muted-foreground" />
           </Button>
+          ) : null}
         </CardContent>
       </Card>
     );
@@ -343,6 +346,7 @@ export default function TasksPage() {
         </CardContent>
       </Card>
 
+      {canWriteTasks ? (
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
           placeholder="Add a task..."
@@ -376,6 +380,7 @@ export default function TasksPage() {
           <Plus className="h-4 w-4" />
         </Button>
       </div>
+      ) : null}
 
       {loading ? (
         <div className="space-y-2">

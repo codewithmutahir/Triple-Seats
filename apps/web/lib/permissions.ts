@@ -76,3 +76,16 @@ export type Permission = (typeof ROLE_PERMISSIONS)["owner"][number];
 export function hasPermission(role: TeamRole, permission: Permission): boolean {
   return (ROLE_PERMISSIONS[role] as readonly string[] | undefined)?.includes(permission) ?? false;
 }
+
+/** Viewer has read-only access across the workspace (Option C). */
+export function isReadOnlyRole(role: TeamRole): boolean {
+  return role === "viewer";
+}
+
+const WRITE_PERMISSION_SUFFIX = ":write" as const;
+
+/** True if role has any write capability (not pure viewer). */
+export function roleHasAnyWrite(role: TeamRole): boolean {
+  const perms = ROLE_PERMISSIONS[role] as readonly string[];
+  return perms.some((p) => p.endsWith(WRITE_PERMISSION_SUFFIX));
+}

@@ -1,4 +1,4 @@
-import type { EventDetailPayload } from "@/lib/event-types";
+import { ApiError } from "@/lib/api-error";
 import { fetchDashboardAll } from "@/lib/dashboard-api";
 import { fetchQuoteBuilder, type QuoteBuilderPayload } from "@/lib/quote-builder-api";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -22,6 +22,7 @@ import {
   type SettingsProfile
 } from "@/lib/settings-types";
 import type { CatererProfile } from "@/lib/caterer-profile";
+import type { EventDetailPayload } from "@/lib/event-types";
 import { CLIENT_LIST_FETCH_SIZE, fetchAllListPages } from "@/lib/client-list-filter";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -36,7 +37,8 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const error = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-    throw new Error(error.error ?? error.message ?? parseApiError(error, res.status, res.statusText));
+    const message = error.error ?? error.message ?? parseApiError(error, res.status, res.statusText);
+    throw new ApiError(message, res.status);
   }
 
   if (res.status === 204) {
