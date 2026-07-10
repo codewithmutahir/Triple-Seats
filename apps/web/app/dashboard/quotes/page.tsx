@@ -59,6 +59,7 @@ import {
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { useDebouncedCallback } from "@/lib/use-debounce";
 import { parseApiError } from "@/lib/user-facing-error";
+import { isForbiddenError } from "@/lib/api-error";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { browserTimer } from "@/lib/perf";
 import { cn } from "@/lib/utils";
@@ -131,7 +132,8 @@ function QuoteBuilderPage() {
     isGuestCountMutating,
     isSaving,
     isSaveSuccess,
-    isSaveError
+    isSaveError,
+    canWriteQuotes
   } = useQuoteBuilderMutations(eventId);
 
   const quote = builderData?.quote ?? null;
@@ -837,6 +839,7 @@ function QuoteBuilderPage() {
             onGuestCountCommit={updateGuestCount}
             onAdd={addPackageToQuote}
             onRemove={removePackageFromQuote}
+            readOnly={!canWriteQuotes}
           />
 
           {MENU_SECTION_GROUPS.map((group) => (
@@ -864,6 +867,8 @@ function QuoteBuilderPage() {
                                 min={0}
                                 step="any"
                                 value={deliveryDistance}
+                                readOnly={!canWriteQuotes}
+                                disabled={!canWriteQuotes}
                                 onChange={(e) => setDeliveryDistance(e.target.value)}
                                 placeholder="e.g. 12"
                               />
@@ -875,6 +880,8 @@ function QuoteBuilderPage() {
                                 min={0}
                                 step="0.01"
                                 value={deliveryRate}
+                                readOnly={!canWriteQuotes}
+                                disabled={!canWriteQuotes}
                                 onChange={(e) => setDeliveryRate(e.target.value)}
                                 placeholder="e.g. 2.50"
                               />
@@ -884,6 +891,7 @@ function QuoteBuilderPage() {
                             Delivery total:{" "}
                             <span className="font-medium text-foreground">{formatUsd(deliveryTotal)}</span>
                           </p>
+                          {canWriteQuotes ? (
                           <Button
                             type="button"
                             variant="secondary"
@@ -892,6 +900,7 @@ function QuoteBuilderPage() {
                           >
                             Add delivery to quote
                           </Button>
+                          ) : null}
                           {(itemsByCategory.get("delivery") ?? []).length > 0 ? (
                             <ul className="space-y-2 border-t pt-3">
                               {(itemsByCategory.get("delivery") ?? []).map((item) => (
@@ -902,6 +911,7 @@ function QuoteBuilderPage() {
                                   <span>{item.name}</span>
                                   <div className="flex items-center gap-2">
                                     <span className="font-medium">{formatUsd(item.unitPrice)}</span>
+                                    {canWriteQuotes ? (
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -911,6 +921,7 @@ function QuoteBuilderPage() {
                                     >
                                       <Trash2 className="h-4 w-4 text-destructive" />
                                     </Button>
+                                    ) : null}
                                   </div>
                                 </li>
                               ))}
@@ -961,6 +972,7 @@ function QuoteBuilderPage() {
                       onPackageItemsChange={(selections) =>
                         handlePackageItemsChange(section.category, selections)
                       }
+                      readOnly={!canWriteQuotes}
                     />
                   );
                 })}
@@ -987,6 +999,8 @@ function QuoteBuilderPage() {
                     min={0}
                     step="0.1"
                     value={taxPct}
+                    readOnly={!canWriteQuotes}
+                    disabled={!canWriteQuotes}
                     onChange={(e) => setTaxPct(e.target.value)}
                   />
                 </div>
@@ -998,12 +1012,15 @@ function QuoteBuilderPage() {
                     min={0}
                     max={100}
                     value={depositPctInput}
+                    readOnly={!canWriteQuotes}
+                    disabled={!canWriteQuotes}
                     onChange={(e) => setDepositPctInput(e.target.value)}
                   />
                 </div>
               </div>
               <div>
                 <Label>Due date</Label>
+                {canWriteQuotes ? (
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button variant="outline" className="mt-1 w-full justify-start font-normal">
@@ -1014,6 +1031,11 @@ function QuoteBuilderPage() {
                     <Calendar mode="single" selected={dueDate} onSelect={setDueDate} />
                   </PopoverContent>
                 </Popover>
+                ) : (
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {dueDate ? format(dueDate, "PPP") : "—"}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="quote-notes">Notes</Label>
@@ -1021,6 +1043,8 @@ function QuoteBuilderPage() {
                   id="quote-notes"
                   rows={3}
                   value={notes}
+                  readOnly={!canWriteQuotes}
+                  disabled={!canWriteQuotes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Terms, special requests…"
                 />
@@ -1028,6 +1052,7 @@ function QuoteBuilderPage() {
             </CardContent>
           </Card>
 
+          {canWriteQuotes ? (
           <div className="flex flex-col gap-2 pb-2">
             <Button type="button" variant="outline" onClick={() => void saveDraft()}>
               <FileText className="mr-2 h-4 w-4" />
@@ -1061,6 +1086,7 @@ function QuoteBuilderPage() {
                     { method: "POST", credentials: "include" }
                   );
                   if (!res.ok) {
+                    if (res.status === 403) return;
                     const body = (await res.json().catch(() => null)) as { error?: string } | null;
                     toast.error(parseApiError(body, res.status, res.statusText));
                     return;
@@ -1113,6 +1139,7 @@ function QuoteBuilderPage() {
                     quote?: { event?: { primaryGuest?: { email?: string | null } } };
                   } | null;
                   if (!res.ok) {
+                    if (res.status === 403) return;
                     toast.error(parseApiError(body, res.status, res.statusText));
                     return;
                   }
@@ -1148,6 +1175,7 @@ function QuoteBuilderPage() {
               Send to Guest
             </Button>
           </div>
+          ) : null}
         </div>
       </div>
     </div>

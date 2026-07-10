@@ -39,6 +39,7 @@ import {
   useSettingsMenuItemsQuery,
   useUpdateMenuItemMutation
 } from "@/hooks/use-settings-queries";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   EMPTY_MENU_ITEMS_BY_CATEGORY,
   type SettingsItemCategory,
@@ -250,10 +251,12 @@ function ItemRow({
   item,
   onEdit,
   onDelete,
+  canWrite = true
 }: {
   item: MenuItem;
   onEdit: () => void;
   onDelete: () => void;
+  canWrite?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3">
@@ -273,6 +276,7 @@ function ItemRow({
           )}
         </p>
       </div>
+      {canWrite ? (
       <div className="flex items-center gap-1">
         <Button
           type="button"
@@ -293,6 +297,7 @@ function ItemRow({
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
+      ) : null}
     </div>
   );
 }
@@ -303,7 +308,8 @@ function CategorySection({
   items = [],
   onCreate,
   onUpdate,
-  onDelete
+  onDelete,
+  canWrite = true
 }: {
   category: ItemCategory;
   label: string;
@@ -311,6 +317,7 @@ function CategorySection({
   onCreate: ReturnType<typeof useCreateMenuItemMutation>["mutateAsync"];
   onUpdate: ReturnType<typeof useUpdateMenuItemMutation>["mutateAsync"];
   onDelete: ReturnType<typeof useDeleteMenuItemMutation>["mutate"];
+  canWrite?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -354,6 +361,7 @@ function CategorySection({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canWrite ? (
           <Button
             type="button"
             variant="outline"
@@ -367,6 +375,7 @@ function CategorySection({
             <Plus className="mr-1 h-3 w-3" />
             Add
           </Button>
+          ) : null}
           <X
             className={cn(
               "h-4 w-4 rotate-45 text-muted-foreground transition-transform",
@@ -393,6 +402,7 @@ function CategorySection({
                     setDialogOpen(true);
                   }}
                   onDelete={() => setDeleteId(item.id)}
+                  canWrite={canWrite}
                 />
               ))}
             </div>
@@ -442,6 +452,8 @@ export function MenuItemsSection() {
   const createMenuItemMutation = useCreateMenuItemMutation();
   const updateMenuItemMutation = useUpdateMenuItemMutation();
   const deleteMenuItemMutation = useDeleteMenuItemMutation();
+  const { can } = usePermissions();
+  const canWrite = can("settings:write");
 
   const totalItems = Object.values(itemsByCategory).flat().length;
   const error = queryError?.message ?? null;
@@ -475,6 +487,7 @@ export function MenuItemsSection() {
             onCreate={createMenuItemMutation.mutateAsync}
             onUpdate={updateMenuItemMutation.mutateAsync}
             onDelete={deleteMenuItemMutation.mutate}
+            canWrite={canWrite}
           />
         ))}
       </div>

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
-import { toast } from "sonner";
 
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import type { EventDetailPayload } from "@/lib/event-types";
+import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -18,6 +19,8 @@ export function useEventDetailQuery(eventId: string | null) {
 
 export function useEventDetailMutations(eventId: string | null) {
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can("events:write");
   const detailKey = queryKeys.events.detail(eventId ?? "");
   const statusSeqRef = useRef(0);
   const customerTypeSeqRef = useRef(0);
@@ -30,13 +33,14 @@ export function useEventDetailMutations(eventId: string | null) {
   };
 
   const patchCache = (updater: (old: EventDetailPayload) => EventDetailPayload) => {
-    if (!eventId) return;
+    if (!canWrite || !eventId) return;
     qc.setQueryData<EventDetailPayload>(detailKey, (old) => (old ? updater(old) : old));
   };
 
   const statusMutation = useMutation({
     mutationFn: (status: string) => api.events.updateStatus(eventId!, status),
     onMutate: async (status) => {
+      if (!canWrite) return denyMutation();
       const opId = ++statusSeqRef.current;
       await qc.cancelQueries({ queryKey: detailKey });
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
@@ -64,10 +68,10 @@ export function useEventDetailMutations(eventId: string | null) {
       }));
       return { prev, opId };
     },
-    onError: (_err, _status, ctx) => {
+    onError: (err, _status, ctx) => {
       if (!ctx || ctx.opId !== statusSeqRef.current) return;
       if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
-      toast.error("Failed to update status");
+      handleMutationError(err, ctx, "Failed to update status");
     },
     onSuccess: (event, _status, ctx) => {
       if (!ctx || ctx.opId !== statusSeqRef.current) return;
@@ -79,13 +83,14 @@ export function useEventDetailMutations(eventId: string | null) {
   const notesMutation = useMutation({
     mutationFn: (notes: string) => api.events.updateNotes(eventId!, notes),
     onMutate: async (notes) => {
+      if (!canWrite) return denyMutation();
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
       patchCache((old) => ({ ...old, additionalNotes: notes }));
       return { prev };
     },
-    onError: (_err, _notes, ctx) => {
+    onError: (err, _notes, ctx) => {
       if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
-      toast.error("Failed to save notes");
+      handleMutationError(err, ctx, "Failed to save notes");
     },
     onSuccess: (event) => qc.setQueryData(detailKey, event)
   });
@@ -93,6 +98,7 @@ export function useEventDetailMutations(eventId: string | null) {
   const guestMutation = useMutation({
     mutationFn: (data: Record<string, unknown>) => api.events.updateGuest(eventId!, data),
     onMutate: async (data) => {
+      if (!canWrite) return denyMutation();
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
       patchCache((old) => ({
         ...old,
@@ -112,9 +118,9 @@ export function useEventDetailMutations(eventId: string | null) {
       }));
       return { prev };
     },
-    onError: (_err, _data, ctx) => {
+    onError: (err, _data, ctx) => {
       if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
-      toast.error("Failed to update guest");
+      handleMutationError(err, ctx, "Failed to update guest");
     },
     onSuccess: (event) => qc.setQueryData(detailKey, event)
   });
@@ -122,6 +128,7 @@ export function useEventDetailMutations(eventId: string | null) {
   const updateMutation = useMutation({
     mutationFn: (data: Record<string, unknown>) => api.events.update(eventId!, data),
     onMutate: async (data) => {
+      if (!canWrite) return denyMutation();
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
       patchCache((old) => ({
         ...old,
@@ -136,9 +143,9 @@ export function useEventDetailMutations(eventId: string | null) {
       qc.setQueryData(detailKey, event);
       invalidateListsLater();
     },
-    onError: (_err, _data, ctx) => {
+    onError: (err, _data, ctx) => {
       if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
-      toast.error("Failed to update event");
+      handleMutationError(err, ctx, "Failed to update event");
     }
   });
 
@@ -146,16 +153,17 @@ export function useEventDetailMutations(eventId: string | null) {
     mutationFn: (customerType: "b2b" | "b2c") =>
       api.events.updateCustomerType(eventId!, customerType),
     onMutate: async (customerType) => {
+      if (!canWrite) return denyMutation();
       const opId = ++customerTypeSeqRef.current;
       await qc.cancelQueries({ queryKey: detailKey });
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
       patchCache((old) => ({ ...old, customerType }));
       return { prev, opId };
     },
-    onError: (_err, _customerType, ctx) => {
+    onError: (err, _customerType, ctx) => {
       if (!ctx || ctx.opId !== customerTypeSeqRef.current) return;
       if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
-      toast.error("Failed to update customer type");
+      handleMutationError(err, ctx, "Failed to update customer type");
     },
     onSuccess: (res, _customerType, ctx) => {
       if (!ctx || ctx.opId !== customerTypeSeqRef.current) return;
@@ -168,10 +176,10 @@ export function useEventDetailMutations(eventId: string | null) {
 
   const changeCustomerType = useCallback(
     (newType: "b2b" | "b2c") => {
-      if (!eventId) return;
+      if (!eventId || !canWrite) return;
       customerTypeMutation.mutate(newType);
     },
-    [eventId, customerTypeMutation]
+    [eventId, canWrite, customerTypeMutation]
   );
 
   return {
@@ -180,6 +188,7 @@ export function useEventDetailMutations(eventId: string | null) {
     guestMutation,
     updateMutation,
     changeCustomerType,
+    canWriteEvents: canWrite,
     isSaving:
       statusMutation.isPending ||
       notesMutation.isPending ||

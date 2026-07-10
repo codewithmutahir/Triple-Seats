@@ -47,6 +47,7 @@ type QuoteSectionProps = {
   customerType?: "b2b" | "b2c";
   selectedPackageItems?: Record<string, string[]>;
   onPackageItemsChange?: (selections: Record<string, string[]>) => void;
+  readOnly?: boolean;
 };
 
 export function QuoteSection({
@@ -66,7 +67,8 @@ export function QuoteSection({
   catalogItems,
   customerType = "b2c",
   selectedPackageItems,
-  onPackageItemsChange
+  onPackageItemsChange,
+  readOnly = false
 }: QuoteSectionProps) {
   const Icon = SECTION_ICONS[category] ?? Package;
   const sectionSubtotal = items.reduce(
@@ -127,6 +129,7 @@ export function QuoteSection({
                       packageName={includedPackageName!}
                       selectedPackageItems={selectedPackageItems ?? {}}
                       onPackageItemsChange={onPackageItemsChange}
+                      disabled={readOnly}
                     />
                   ) : (
                     <ul className="space-y-2">
@@ -162,12 +165,13 @@ export function QuoteSection({
                         category={category}
                         onUpdate={onUpdate}
                         onDelete={onDelete}
+                        readOnly={readOnly}
                       />
                     ))}
                   </ul>
                 )}
 
-                {canAddItems ? (
+                {canAddItems && !readOnly ? (
                   <AddItemForm
                     category={category}
                     existingItems={items}

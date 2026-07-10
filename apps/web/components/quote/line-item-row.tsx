@@ -21,9 +21,10 @@ type LineItemRowProps = {
   category?: ItemCategory;
   onUpdate: (itemId: string, patch: Partial<Pick<QuoteLineItem, "quantity" | "unitPrice" | "unitType">>) => void;
   onDelete: (itemId: string) => void;
+  readOnly?: boolean;
 };
 
-export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: LineItemRowProps) {
+export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, readOnly = false }: LineItemRowProps) {
   const isEquipment = category === "equipment";
   const [editingField, setEditingField] = useState<"quantity" | "unitPrice" | null>(null);
   const [qtyDraft, setQtyDraft] = useState(String(item.quantity));
@@ -73,8 +74,20 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete }: 
           ? `${formatUsd(item.unitPrice)} × ${item.quantity} pieces = ${formatUsd(total)}`
           : `${formatUsd(item.unitPrice)} × ${item.quantity} = ${formatUsd(total)}`;
 
-  const showQtyInput = isEquipment || editingField === "quantity";
-  const showPriceInput = isEquipment || editingField === "unitPrice";
+  const showQtyInput = !readOnly && (isEquipment || editingField === "quantity");
+  const showPriceInput = !readOnly && (isEquipment || editingField === "unitPrice");
+
+  if (readOnly) {
+    return (
+      <li className="rounded-md border bg-muted/20 px-3 py-2 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="font-medium">{item.name}</span>
+          <span className="tabular-nums font-medium">{formatUsd(total)}</span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">{calcHint}</p>
+      </li>
+    );
+  }
 
   return (
     <li className="rounded-md border bg-muted/20 px-3 py-2 text-sm">

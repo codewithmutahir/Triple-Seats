@@ -239,12 +239,24 @@ router.patch("/:memberId/profile", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Member not found." });
     }
 
+    const nextName = parsed.data.name ?? null;
+    const nextPhone = parsed.data.phone ?? null;
+    const nextJobTitle = parsed.data.jobTitle ?? null;
+
+    if (
+      (member.name ?? null) === nextName &&
+      (member.phone ?? null) === nextPhone &&
+      (member.jobTitle ?? null) === nextJobTitle
+    ) {
+      return res.json({ member: serializeMember(member), unchanged: true });
+    }
+
     const updated = await prisma.teamMember.update({
       where: { id: memberId },
       data: {
-        name: parsed.data.name ?? null,
-        phone: parsed.data.phone ?? null,
-        jobTitle: parsed.data.jobTitle ?? null
+        name: nextName,
+        phone: nextPhone,
+        jobTitle: nextJobTitle
       }
     });
 
@@ -288,6 +300,10 @@ router.patch("/:memberId/role", async (req: Request, res: Response) => {
     }
     if (member.role === "owner") {
       return res.status(403).json({ error: "Cannot change owner role." });
+    }
+
+    if (member.role === targetRole) {
+      return res.json({ member: serializeMember(member), unchanged: true });
     }
 
     const updated = await prisma.teamMember.update({

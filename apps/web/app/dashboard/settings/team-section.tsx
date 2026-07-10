@@ -2,7 +2,7 @@
 
 import { differenceInCalendarDays, format } from "date-fns";
 import { Crown, History, Loader2, Pencil, Shield, Trash2, UserPlus, Users } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -60,6 +60,29 @@ const ROLE_BADGE: Record<TeamRole, string> = {
   ops: "bg-orange-100 text-orange-900",
   viewer: "bg-muted text-muted-foreground"
 };
+
+type TeamListCache = { members: TeamMemberRow[] };
+
+function patchMemberInCache(
+  qc: ReturnType<typeof useQueryClient>,
+  memberId: string,
+  patch: Partial<TeamMemberRow>
+) {
+  qc.setQueryData<TeamListCache>(queryKeys.team.list(), (old) => {
+    if (!old) return old;
+    return {
+      members: old.members.map((m) => (m.id === memberId ? { ...m, ...patch } : m))
+    };
+  });
+}
+
+function profileUnchanged(member: TeamMemberRow, name: string, phone: string, jobTitle: string) {
+  return (
+    (member.name ?? "").trim() === name.trim() &&
+    (member.phone ?? "").trim() === phone.trim() &&
+    (member.jobTitle ?? "").trim() === jobTitle.trim()
+  );
+}
 
 type InviteMode = "admin" | "employee";
 
@@ -236,6 +259,15 @@ export function TeamSection() {
   const qc = useQueryClient();
   const { can } = usePermissions();
   const canManage = can("team:write");
+  const activityRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const roleSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  function scheduleActivityRefresh() {
+    if (activityRefreshTimer.current) clearTimeout(activityRefreshTimer.current);
+    activityRefreshTimer.current = setTimeout(() => {
+      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
+    }, 600);
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.team.list(),
@@ -272,36 +304,30 @@ export function TeamSection() {
     },
     onMutate: async () => {
       if (!profileMember) return;
-      await qc.cancelQueries({ queryKey: queryKeys.team.list() });
-      const prev = qc.getQueryData<{ members: TeamMemberRow[] }>(queryKeys.team.list());
-      if (prev) {
-        qc.setQueryData(queryKeys.team.list(), {
-          members: prev.members.map((m) =>
-            m.id === profileMember.id
-              ? {
-                  ...m,
-                  name: profileName.trim() || null,
-                  phone: profilePhone.trim() || null,
-                  jobTitle: profileJobTitle.trim() || null
-                }
-              : m
-          )
-        });
+      if (profileUnchanged(profileMember, profileName, profilePhone, profileJobTitle)) {
+        setProfileOpen(false);
+        setProfileMember(null);
+        return { prev: undefined, skipped: true as const };
       }
-      return { prev };
-    },
-    onSuccess: () => {
-      toast.success("Employee profile updated");
+
+      await qc.cancelQueries({ queryKey: queryKeys.team.list() });
+      const prev = qc.getQueryData<TeamListCache>(queryKeys.team.list());
+      patchMemberInCache(qc, profileMember.id, {
+        name: profileName.trim() || null,
+        phone: profilePhone.trim() || null,
+        jobTitle: profileJobTitle.trim() || null
+      });
       setProfileOpen(false);
       setProfileMember(null);
+      return { prev, skipped: false as const };
+    },
+    onSuccess: (_data, _vars, ctx) => {
+      if (ctx?.skipped) return;
+      scheduleActivityRefresh();
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(queryKeys.team.list(), ctx.prev);
       toast.error("Failed to update profile");
-    },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
-      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
     }
   });
 
@@ -350,20 +376,46 @@ export function TeamSection() {
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
-      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
+      scheduleActivityRefresh();
     }
   });
 
   const roleMutation = useMutation({
     mutationFn: ({ memberId, role }: { memberId: string; role: TeamRole }) =>
       api.team.updateRole(memberId, role),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
-      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
-      toast.success("Role updated");
+    onMutate: async ({ memberId, role }) => {
+      await qc.cancelQueries({ queryKey: queryKeys.team.list() });
+      const prev = qc.getQueryData<TeamListCache>(queryKeys.team.list());
+      const current = prev?.members.find((m) => m.id === memberId);
+      if (!current || current.role === role) {
+        return { prev, skipped: true as const };
+      }
+      patchMemberInCache(qc, memberId, { role });
+      return { prev, skipped: false as const };
     },
-    onError: () => toast.error("Failed to update role")
+    onSuccess: (_data, _vars, ctx) => {
+      if (ctx?.skipped) return;
+      scheduleActivityRefresh();
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.team.list(), ctx.prev);
+      toast.error("Role update failed — reverted");
+    }
   });
+
+  function handleRoleChange(member: TeamMemberRow, role: TeamRole) {
+    if (role === member.role) return;
+
+    patchMemberInCache(qc, member.id, { role });
+
+    const existing = roleSaveTimers.current[member.id];
+    if (existing) clearTimeout(existing);
+
+    roleSaveTimers.current[member.id] = setTimeout(() => {
+      delete roleSaveTimers.current[member.id];
+      roleMutation.mutate({ memberId: member.id, role });
+    }, 120);
+  }
 
   const removeMutation = useMutation({
     mutationFn: (memberId: string) => api.team.remove(memberId),
@@ -382,8 +434,7 @@ export function TeamSection() {
       toast.error("Failed to remove member");
     },
     onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
-      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
+      scheduleActivityRefresh();
     }
   });
 
@@ -505,7 +556,7 @@ export function TeamSection() {
                 member={member}
                 canManage={canManage}
                 roleOptions={EMPLOYEE_ROLES}
-                onRoleChange={(role) => roleMutation.mutate({ memberId: member.id, role })}
+                onRoleChange={(role) => handleRoleChange(member, role)}
                 onEdit={() => openProfile(member)}
                 onRemove={() => {
                   if (window.confirm(`Remove employee ${member.email}?`)) {
@@ -682,7 +733,17 @@ export function TeamSection() {
             <Button
               type="button"
               disabled={!profileMember || profileMutation.isPending}
-              onClick={() => profileMutation.mutate()}
+              onClick={() => {
+                if (
+                  profileMember &&
+                  profileUnchanged(profileMember, profileName, profilePhone, profileJobTitle)
+                ) {
+                  setProfileOpen(false);
+                  setProfileMember(null);
+                  return;
+                }
+                profileMutation.mutate();
+              }}
             >
               Save profile
             </Button>
