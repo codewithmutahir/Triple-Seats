@@ -3,18 +3,7 @@ import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import type { EventDetailPayload } from "@/lib/event-types";
-import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
-
-export function useEventDetailQuery(eventId: string | null) {
-  return useQuery({
-    queryKey: queryKeys.events.detail(eventId ?? ""),
-    queryFn: () => api.events.detail(eventId!),
-    enabled: Boolean(eventId),
-    staleTime: 60 * 1000
-  });
-}
 
 export function useEventDetailMutations(eventId: string | null) {
   const qc = useQueryClient();
@@ -29,115 +18,74 @@ export function useEventDetailMutations(eventId: string | null) {
     }, 0);
   };
 
-  const patchCache = (updater: (old: EventDetailPayload) => EventDetailPayload) => {
-    if (!eventId) return;
-    qc.setQueryData<EventDetailPayload>(detailKey, (old) => (old ? updater(old) : old));
-  };
-
   const statusMutation = useMutation({
-    mutationFn: (status: string) => api.events.updateStatus(eventId!, status),
-    onMutate: async (status) => {
-      const opId = ++statusSeqRef.current;
+    mutationFn: (newStatus: string) => {
+      if (!eventId) return Promise.reject(new Error("No event ID"));
+      return api.events.updateStatus(eventId, newStatus);
+    },
+    onMutate: async (newStatus) => {
       await qc.cancelQueries({ queryKey: detailKey });
-      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
-      if (prev && prev.status !== status && eventId) {
-        quoteAnalytics.eventStatusChanged({
-          eventId,
-          fromStatus: prev.status,
-          toStatus: status
-        });
+      const prev = qc.getQueryData(detailKey);
+      statusSeqRef.current += 1;
+      const seq = statusSeqRef.current;
+      if (prev) {
+        qc.setQueryData(detailKey, { ...prev, status: newStatus });
       }
-      patchCache((old) => ({
-        ...old,
-        status,
-        activity:
-          old.status === status
-            ? old.activity
-            : [
-                ...old.activity,
-                {
-                  at: new Date().toISOString(),
-                  type: "status",
-                  label: `Status changed to ${status}`
-                }
-              ]
-      }));
-      return { prev, opId };
+      return { prev, seq };
     },
-    onError: (_err, _status, ctx) => {
-      if (!ctx || ctx.opId !== statusSeqRef.current) return;
-      if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
+    onSuccess: (_data, _vars, ctx) => {
+      if (ctx?.seq === statusSeqRef.current) {
+        invalidateListsLater();
+      }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
       toast.error("Failed to update status");
-    },
-    onSuccess: (event, _status, ctx) => {
-      if (!ctx || ctx.opId !== statusSeqRef.current) return;
-      qc.setQueryData(detailKey, event);
-      invalidateListsLater();
     }
   });
 
   const notesMutation = useMutation({
-    mutationFn: (notes: string) => api.events.updateNotes(eventId!, notes),
-    onMutate: async (notes) => {
-      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
-      patchCache((old) => ({ ...old, additionalNotes: notes }));
+    mutationFn: (newNotes: string | null) => {
+      if (!eventId) return Promise.reject(new Error("No event ID"));
+      return api.events.updateNotes(eventId, newNotes);
+    },
+    onMutate: async (newNotes) => {
+      await qc.cancelQueries({ queryKey: detailKey });
+      const prev = qc.getQueryData(detailKey);
+      if (prev) {
+        qc.setQueryData(detailKey, { ...prev, notes: newNotes });
+      }
       return { prev };
     },
-    onError: (_err, _notes, ctx) => {
+    onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
-      toast.error("Failed to save notes");
-    },
-    onSuccess: (event) => qc.setQueryData(detailKey, event)
+      toast.error("Failed to update notes");
+    }
   });
 
   const guestMutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.events.updateGuest(eventId!, data),
-    onMutate: async (data) => {
-      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
-      patchCache((old) => ({
-        ...old,
-        guestCountEstimate:
-          typeof data.guestCount === "number"
-            ? data.guestCount
-            : old.guestCountEstimate,
-        primaryGuest: old.primaryGuest
-          ? {
-              ...old.primaryGuest,
-              firstName: (data.firstName as string) ?? old.primaryGuest.firstName,
-              lastName: (data.lastName as string | null) ?? old.primaryGuest.lastName,
-              email: (data.email as string | null) ?? old.primaryGuest.email,
-              phone: (data.phone as string | null) ?? old.primaryGuest.phone
-            }
-          : old.primaryGuest
-      }));
-      return { prev };
+    mutationFn: (data: { guestId: string; firstName: string; lastName?: string | null; email?: string | null; phone?: string | null }) =>
+      api.events.updateGuest(eventId ?? "", data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: detailKey });
+      void qc.invalidateQueries({ queryKey: queryKeys.events.all });
     },
-    onError: (_err, _data, ctx) => {
-      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+    onError: () => {
       toast.error("Failed to update guest");
-    },
-    onSuccess: (event) => qc.setQueryData(detailKey, event)
+    }
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.events.update(eventId!, data),
-    onMutate: async (data) => {
-      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
-      patchCache((old) => ({
-        ...old,
-        ...(typeof data.eventType === "string" ? { eventType: data.eventType as EventDetailPayload["eventType"] } : {}),
-        ...(typeof data.customerType === "string"
-          ? { customerType: data.customerType as EventDetailPayload["customerType"] }
-          : {})
-      }));
-      return { prev };
+    mutationFn: async (patch: Record<string, unknown>) => {
+      if (!eventId) throw new Error("No event ID");
+      const res = await api.events.update(eventId, patch);
+      return res;
     },
-    onSuccess: (event) => {
-      qc.setQueryData(detailKey, event);
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: detailKey });
       invalidateListsLater();
     },
-    onError: (_err, _data, ctx) => {
-      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+    onError: () => {
       toast.error("Failed to update event");
     }
   });
@@ -147,7 +95,7 @@ export function useEventDetailMutations(eventId: string | null) {
       if (!eventId || customerTypeMutationInFlight.current) return;
       customerTypeMutationInFlight.current = true;
 
-      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+      qc.setQueryData(detailKey, (old: any) =>
         old ? { ...old, customerType: newType } : old
       );
 
