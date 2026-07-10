@@ -2,7 +2,7 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ["recharts"],
+  transpilePackages: ["@tripeseats/auth", "recharts"],
 
   experimental: {
     instrumentationHook: true
