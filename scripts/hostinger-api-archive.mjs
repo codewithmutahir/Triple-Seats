@@ -15,6 +15,10 @@ const copyItems = [
   "apps/api/dist",
   "apps/api/package.json",
   "apps/api/tsconfig.json",
+  "packages/auth/src",
+  "packages/auth/dist",
+  "packages/auth/package.json",
+  "packages/auth/tsconfig.json",
   "packages/database/src",
   "packages/database/dist",
   "packages/database/package.json",
@@ -111,7 +115,22 @@ function runPrebuild() {
   }
 
   runCommand("pnpm", ["--filter", "@tripeseats/database", "build"], "database build");
+  runCommand("pnpm", ["--filter", "@tripeseats/auth", "build"], "auth build");
   runCommand("pnpm", ["--filter", "api", "build"], "api build");
+}
+
+/** npm on Hostinger cannot resolve pnpm workspace:* — use file: links instead. */
+function replaceWorkspaceDeps(deps) {
+  if (!deps) return;
+  const replacements = {
+    "@tripeseats/database": "file:../../packages/database",
+    "@tripeseats/auth": "file:../../packages/auth"
+  };
+  for (const [name, filePath] of Object.entries(replacements)) {
+    if (typeof deps[name] === "string" && deps[name].startsWith("workspace:")) {
+      deps[name] = filePath;
+    }
+  }
 }
 
 function createZip(sourceDir, zipPath) {
@@ -154,9 +173,7 @@ function main() {
   const apiPkgPath = path.join(staging, "apps/api/package.json");
   const apiPkg = JSON.parse(fs.readFileSync(apiPkgPath, "utf8"));
   apiPkg.scripts.build = "echo dist prebuilt";
-  if (apiPkg.dependencies?.["@tripeseats/database"]?.startsWith("workspace:")) {
-    apiPkg.dependencies["@tripeseats/database"] = "file:../../packages/database";
-  }
+  replaceWorkspaceDeps(apiPkg.dependencies);
   writeUtf8(apiPkgPath, `${JSON.stringify(apiPkg, null, 2)}\n`);
 
   const dbPkgPath = path.join(staging, "packages/database/package.json");

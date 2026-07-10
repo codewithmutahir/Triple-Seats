@@ -1,23 +1,22 @@
 import { cookies, headers } from "next/headers";
 
+import type { AuthSession, AuthUser } from "@tripeseats/auth";
+
+/** @deprecated Use `AuthUser` from `@tripeseats/auth` */
+export type ServerAuthUser = AuthUser;
+
+/** @deprecated Use `AuthSession` from `@tripeseats/auth` */
+export type ServerAuthSession = AuthSession;
+
 /** Same default as `scripts/wait-for-api.mjs` — Express API, not the Next rewrite. */
 function internalApiOrigin(): string {
   return process.env.INTERNAL_API_URL?.replace(/\/+$/, "") ?? "http://127.0.0.1:4000";
 }
 
-export type ServerAuthUser = {
-  id: string;
-  email: string;
-  name?: string | null;
-};
-
-export type ServerAuthSession = {
-  user: ServerAuthUser;
-};
-
 /**
- * Resolves the current Better Auth session on the server by forwarding cookies to the API.
- * Avoids relying on the browser + Next rewrite for the initial dashboard gate (fewer false "logged out" states).
+ * Resolves the current Better Auth session on the server by forwarding cookies to the API,
+ * which calls `auth.api.getSession()` internally (`/api/auth/get-session`).
+ * This is the split-monorepo equivalent of `auth.api.getSession({ headers })` in a single-app setup.
  */
 export async function getServerAuthSession(): Promise<ServerAuthSession | null> {
   const forwarded = headers().get("cookie")?.trim();
@@ -39,7 +38,10 @@ export async function getServerAuthSession(): Promise<ServerAuthSession | null> 
     const data = (await res.json()) as { user?: ServerAuthUser } | null;
     if (!data?.user?.id) return null;
     return { user: data.user };
-  } catch {
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[getServerAuthSession] session lookup failed:", err);
+    }
     return null;
   }
 }

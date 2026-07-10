@@ -1,28 +1,16 @@
 import Link from "next/link";
-import { ArrowRight, UtensilsCrossed } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
+import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 
-export default function HomePage() {
+export default async function HomePage() {
+  const session = await getServerAuthSession();
+
   return (
     <div className="flex min-h-screen flex-col bg-[#1B2A4A] text-white">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/20 bg-white/10">
-            <UtensilsCrossed className="h-5 w-5" aria-hidden />
-          </div>
-          <span className="font-heading text-xl font-semibold">Tripeseats</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">
-            <Link href="/login">Log in</Link>
-          </Button>
-          <Button asChild className="bg-white text-[#1B2A4A] hover:bg-white/90">
-            <Link href="/register">Get started</Link>
-          </Button>
-        </div>
-      </header>
-      
+      <SiteHeader user={session?.user ?? null} />
 
       <main className="mx-auto flex flex-1 w-full max-w-5xl flex-col justify-center px-6 py-16">
         <p className="mb-4 text-sm font-medium uppercase tracking-wider text-emerald-300">
@@ -49,7 +37,9 @@ export default function HomePage() {
             variant="outline"
             className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white"
           >
-            <Link href="/login">Sign in to dashboard</Link>
+            <Link href={session?.user ? "/dashboard" : "/login"}>
+              {session?.user ? "Go to dashboard" : "Sign in to dashboard"}
+            </Link>
           </Button>
         </div>
       </main>

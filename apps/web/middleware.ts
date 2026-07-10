@@ -1,23 +1,31 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
+import { checkMiddlewareSession } from "@tripeseats/auth";
+
 import { getAppOrigin, getTenantSlugFromHost } from "@/lib/tenant-host";
 
-function hasBetterAuthSessionCookie(request: NextRequest): boolean {
-  const prefix = "better-auth.session_token";
-  const securePrefix = "__Secure-better-auth.session_token";
-  return request.cookies.getAll().some(({ name }) => {
-    if (name === prefix || name === securePrefix) return true;
-    if (name.startsWith(`${prefix}.`) || name.startsWith(`${securePrefix}.`)) return true;
-    return false;
-  });
+const PROTECTED_PREFIXES = ["/dashboard", "/invite"] as const;
+
+function isProtectedPath(pathname: string): boolean {
+  return PROTECTED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
 }
 
-export function middleware(request: NextRequest) {
+function loginRedirect(request: NextRequest, reason?: "session_expired") {
+  const url = new URL("/login", request.url);
+  if (reason) {
+    url.searchParams.set("reason", reason);
+  }
+  return NextResponse.redirect(url);
+}
+
+export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const host = request.headers.get("host") ?? "";
   const tenantSlug = getTenantSlugFromHost(host);
-  const session = hasBetterAuthSessionCookie(request);
+  const sessionCheck = await checkMiddlewareSession(request);
 
   // Legacy subdomain links → path-based booking on the app host
   if (tenantSlug && (pathname === "/" || pathname === "/book")) {
@@ -27,11 +35,16 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  if (pathname.startsWith("/dashboard") && !session) {
-    return NextResponse.redirect(new URL("/login", request.url));
+  if (isProtectedPath(pathname)) {
+    if (!sessionCheck.hasSessionCookie) {
+      return loginRedirect(request);
+    }
+    if (sessionCheck.isExpired) {
+      return loginRedirect(request, "session_expired");
+    }
   }
 
-  if ((pathname === "/login" || pathname === "/register") && session) {
+  if ((pathname === "/login" || pathname === "/register") && sessionCheck.hasSessionCookie && !sessionCheck.isExpired) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
@@ -39,5 +52,13 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/book", "/book/:path*", "/dashboard/:path*", "/login", "/register"]
+  matcher: [
+    "/",
+    "/book",
+    "/book/:path*",
+    "/dashboard/:path*",
+    "/invite/:path*",
+    "/login",
+    "/register"
+  ]
 };
