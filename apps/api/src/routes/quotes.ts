@@ -16,7 +16,7 @@ import {
 import { getResend, resendFromEmail } from "../lib/mail";
 import { getSession, SessionError } from "../lib/session";
 import { timer } from "../lib/perf";
-import { seedMenuItemsForCaterer } from "../lib/seed-menu-items";
+import { ensureDefaultItemsForCategory, seedMenuItemsForCaterer } from "../lib/seed-menu-items";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
 import { parsePackageSelections } from "../lib/package-selections";
 import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
@@ -564,21 +564,40 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
     let menuItems = menuItemsRaw;
     if (menuItems.length === 0) {
       await seedMenuItemsForCaterer(caterer.id);
-      menuItems = await prisma.menuItem.findMany({
-        where: { catererId: caterer.id },
-        orderBy: [{ usageCount: "desc" }, { name: "asc" }],
-        select: {
-          id: true,
-          catererId: true,
-          category: true,
-          name: true,
-          defaultPrice: true,
-          defaultUnit: true,
-          usageCount: true,
-          isDefault: true
-        }
-      });
+    } else {
+      const categories = [
+        "appetizer",
+        "veg_gravy",
+        "chicken_gravy",
+        "mutton_gravy",
+        "rice_chicken",
+        "rice_mutton",
+        "breads",
+        "side_items",
+        "bbq",
+        "dessert",
+        "beverages",
+        "equipment"
+      ] as const;
+      await Promise.all(
+        categories.map((category) => ensureDefaultItemsForCategory(caterer.id, category))
+      );
     }
+
+    menuItems = await prisma.menuItem.findMany({
+      where: { catererId: caterer.id },
+      orderBy: [{ usageCount: "desc" }, { name: "asc" }],
+      select: {
+        id: true,
+        catererId: true,
+        category: true,
+        name: true,
+        defaultPrice: true,
+        defaultUnit: true,
+        usageCount: true,
+        isDefault: true
+      }
+    });
 
     let quote = quoteRow;
     if (!quote) {

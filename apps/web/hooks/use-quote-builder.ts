@@ -105,7 +105,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const patchBuilder = (updater: (old: BuilderData) => BuilderData) => {
-    qc.setQueryData<BuilderData>(builderKey, (old) => (old ? updater(old) : old));
+    qc.setQueryData<BuilderData>(builderKey, (old: BuilderData | undefined) => (old ? updater(old) : old));
   };
 
   const selectPackageOptimistic = (pkg: CateringPackage, packages: CateringPackage[]) => {
@@ -333,24 +333,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         if (typeof data.depositPct === "number") fields.push("depositPct");
         if (data.notes !== undefined) fields.push("notes");
         if (data.dueDate !== undefined) fields.push("dueDate");
-        if (data.packageSelections !== undefined) {
-          const stored = data.packageSelections as Record<string, Record<string, unknown[]>>;
-          const categories = Object.keys(stored);
-          const totalSelections = categories.reduce(
-            (sum, cat) =>
-              sum +
-              Object.values(stored[cat] ?? {}).reduce(
-                (inner, items) => inner + (Array.isArray(items) ? items.length : 0),
-                0
-              ),
-            0
-          );
-          quoteAnalytics.packageItemsUpdated({
-            ...ctx,
-            categories,
-            totalSelections
-          });
-        } else if (fields.length > 0) {
+        if (fields.length > 0) {
           quoteAnalytics.settingsUpdated({
             ...ctx,
             fields,
@@ -380,18 +363,42 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
       return { prev, opId };
     },
-    onSuccess: (result, _vars, ctx) => {
+    onSuccess: (result, vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
+
+      if (vars.data.packageSelections !== undefined) {
+        const stored = vars.data.packageSelections as Record<string, Record<string, unknown[]>>;
+        const categories = Object.keys(stored);
+        const totalSelections = categories.reduce(
+          (sum, cat) =>
+            sum +
+            Object.values(stored[cat] ?? {}).reduce(
+              (inner, items) => inner + (Array.isArray(items) ? items.length : 0),
+              0
+            ),
+          0
+        );
+        quoteAnalytics.packageItemsUpdated({
+          ...builderContext(),
+          categories,
+          totalSelections
+        });
+      }
+
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
-          taxRate: result.quote.taxRate,
-          depositPct: result.quote.depositPct,
-          notes: result.quote.notes,
-          dueDate: result.quote.dueDate,
-          status: result.quote.status,
-          packageSelections: result.quote.packageSelections ?? old.quote.packageSelections
+          ...(typeof vars.data.taxRate === "number" ? { taxRate: result.quote.taxRate } : {}),
+          ...(typeof vars.data.depositPct === "number" ? { depositPct: result.quote.depositPct } : {}),
+          ...(vars.data.notes !== undefined ? { notes: result.quote.notes } : {}),
+          ...(vars.data.dueDate !== undefined
+            ? { dueDate: result.quote.dueDate ?? null }
+            : {}),
+          ...(typeof vars.data.status === "string"
+            ? { status: result.quote.status }
+            : {})
+          // Keep optimistic packageSelections — never replace from server response.
         }
       }));
     },

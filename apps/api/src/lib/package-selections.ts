@@ -24,7 +24,8 @@ const PACKAGE_ITEM_SECTIONS: Record<
   Naan: "breads",
   Salad: "side_items",
   Raita: "side_items",
-  "Mirchi Ka Salan": "side_items"
+  "Mirchi Ka Salan": "side_items",
+  Beverages: "beverages"
 };
 
 export type PackageSelectionEntry = { id: string; name: string };

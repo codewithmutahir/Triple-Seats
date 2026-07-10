@@ -23,7 +23,8 @@ const PACKAGE_CATEGORY_LABELS: Record<string, string> = {
   Naan: "breads",
   Salad: "side_items",
   Raita: "side_items",
-  "Mirchi Ka Salan": "side_items"
+  "Mirchi Ka Salan": "side_items",
+  Beverages: "beverages"
 };
 
 function isCategoryLabel(label: string): boolean {
