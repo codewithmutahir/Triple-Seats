@@ -153,3 +153,28 @@ export function formatPackageIncludesWithSelections(
     })
     .join(", ");
 }
+
+export type PackageIncludeLine = {
+  label: string;
+  detail: string;
+};
+
+/** One row per package slot — avoids PDF truncation from long comma-separated strings. */
+export function listPackageIncludeLines(
+  items: IncludedItem[],
+  selections: PackageSelections | null | undefined
+): PackageIncludeLine[] {
+  return items.map((item) => {
+    const picked = slotHasSelections(selections, item.label);
+    if (picked?.length) {
+      return {
+        label: item.label,
+        detail: picked.map((entry) => entry.name).join(", ")
+      };
+    }
+    return {
+      label: item.label,
+      detail: item.quantity > 1 ? `×${item.quantity}` : "Included"
+    };
+  });
+}
