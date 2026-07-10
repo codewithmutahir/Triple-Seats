@@ -26,3 +26,13 @@ export function packageItemsForSection(
 ): PackageIncludedItem[] {
   return items.filter((item) => PACKAGE_ITEM_SECTIONS[item.label] === category);
 }
+
+/** Returns package slots only when the selected package includes that category. */
+export function getPackageSlotsForSection(
+  items: PackageIncludedItem[] | undefined,
+  category: ItemCategory
+): PackageIncludedItem[] | undefined {
+  if (!items?.length) return undefined;
+  const slots = packageItemsForSection(items, category);
+  return slots.length > 0 ? slots : undefined;
+}

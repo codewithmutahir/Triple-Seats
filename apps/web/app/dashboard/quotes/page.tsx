@@ -49,7 +49,7 @@ import {
 } from "@/lib/quote-totals";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { formatEventDateWithTime } from "@/lib/event-datetime";
-import { isPackageIncludedSection, packageItemsForSection } from "@/lib/package-sections";
+import { getPackageSlotsForSection } from "@/lib/package-sections";
 import {
   packageSelectionsEqual,
   storedSelectionsToUi,
@@ -317,7 +317,7 @@ function QuoteBuilderPage() {
         data: { packageSelections: stored }
       });
     }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]),
-    400
+    500
   );
 
   const flushPackageSelections = useCallback(async () => {
@@ -924,10 +924,10 @@ function QuoteBuilderPage() {
                   const section = MENU_SECTIONS.find((s) => s.category === category);
                   if (!section) return null;
 
-                  const includedItems =
-                    selectedPackage && isPackageIncludedSection(section.category)
-                      ? packageItemsForSection(selectedPackage.items, section.category)
-                      : undefined;
+                  const includedItems = getPackageSlotsForSection(
+                    selectedPackage?.items,
+                    section.category
+                  );
 
                   return (
                     <QuoteSection
