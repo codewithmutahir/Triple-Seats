@@ -15,6 +15,8 @@ export function usePermissions() {
 
   return {
     role,
+    catererName: data?.catererName ?? null,
+    isTeamMember: data?.isTeamMember ?? false,
     can: (permission: Permission) => hasPermission(role, permission),
     isOwner: role === "owner",
     isAdmin: role === "admin" || role === "owner"

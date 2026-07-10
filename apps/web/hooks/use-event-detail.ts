@@ -20,7 +20,7 @@ export function useEventDetailMutations(eventId: string | null) {
   const qc = useQueryClient();
   const detailKey = queryKeys.events.detail(eventId ?? "");
   const statusSeqRef = useRef(0);
-  const customerTypeMutationInFlight = useRef(false);
+  const customerTypeSeqRef = useRef(0);
 
   const invalidateListsLater = () => {
     window.setTimeout(() => {
@@ -142,29 +142,36 @@ export function useEventDetailMutations(eventId: string | null) {
     }
   });
 
-  const changeCustomerType = useCallback(
-    async (newType: "b2b" | "b2c") => {
-      if (!eventId || customerTypeMutationInFlight.current) return;
-      customerTypeMutationInFlight.current = true;
-
-      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
-        old ? { ...old, customerType: newType } : old
-      );
-
-      try {
-        await api.events.updateCustomerType(eventId, newType);
-        window.setTimeout(() => {
-          void qc.invalidateQueries({ queryKey: queryKeys.events.all });
-          void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
-        }, 0);
-      } catch {
-        void qc.invalidateQueries({ queryKey: detailKey });
-        toast.error("Failed to update customer type");
-      } finally {
-        customerTypeMutationInFlight.current = false;
-      }
+  const customerTypeMutation = useMutation({
+    mutationFn: (customerType: "b2b" | "b2c") =>
+      api.events.updateCustomerType(eventId!, customerType),
+    onMutate: async (customerType) => {
+      const opId = ++customerTypeSeqRef.current;
+      await qc.cancelQueries({ queryKey: detailKey });
+      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
+      patchCache((old) => ({ ...old, customerType }));
+      return { prev, opId };
     },
-    [eventId, qc, detailKey]
+    onError: (_err, _customerType, ctx) => {
+      if (!ctx || ctx.opId !== customerTypeSeqRef.current) return;
+      if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
+      toast.error("Failed to update customer type");
+    },
+    onSuccess: (res, _customerType, ctx) => {
+      if (!ctx || ctx.opId !== customerTypeSeqRef.current) return;
+      if (res.event) {
+        qc.setQueryData(detailKey, res.event);
+      }
+      invalidateListsLater();
+    }
+  });
+
+  const changeCustomerType = useCallback(
+    (newType: "b2b" | "b2c") => {
+      if (!eventId) return;
+      customerTypeMutation.mutate(newType);
+    },
+    [eventId, customerTypeMutation]
   );
 
   return {

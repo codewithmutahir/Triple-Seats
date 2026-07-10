@@ -407,7 +407,8 @@ export const api = {
   },
 
   team: {
-    me: () => apiFetch<{ role: string }>("/api/team/me"),
+    me: () =>
+      apiFetch<{ role: string; catererName: string; isTeamMember: boolean }>("/api/team/me"),
     list: () =>
       apiFetch<{
         members: Array<{
