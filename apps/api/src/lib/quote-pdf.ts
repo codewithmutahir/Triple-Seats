@@ -21,7 +21,7 @@ import {
 import type { QuoteWithRelations } from "./quote-serialize";
 import { formatEventType } from "./event-customer-types";
 import {
-  formatPackageIncludesWithSelections,
+  listPackageIncludeLines,
   listPackageSelectionGroups,
   normalizePackageSelections,
   type PackageSelectionGroup
@@ -222,6 +222,16 @@ const styles = StyleSheet.create({
     color: "#444",
     marginBottom: 6
   },
+  packageIncludeLabel: {
+    fontSize: 9,
+    fontFamily: "Helvetica-Bold",
+    color: NAVY
+  },
+  packageIncludeDetail: {
+    fontSize: 9,
+    marginBottom: 3,
+    marginLeft: 8
+  },
   selectionGroupTitle: {
     fontSize: 10,
     fontFamily: "Helvetica-Bold",
@@ -280,11 +290,28 @@ function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: n
   return String(item.quantity);
 }
 
-function formatIncludedItems(
+function buildPackageIncludeRows(
   items: NonNullable<QuoteWithRelations["lineItems"][number]["package"]>["items"],
-  packageSelections: ReturnType<typeof normalizePackageSelections>
-): string {
-  return formatPackageIncludesWithSelections(items, packageSelections);
+  packageSelections: ReturnType<typeof normalizePackageSelections>,
+  packageKey: string
+): React.ReactElement[] {
+  if (!items?.length) {
+    return [
+      React.createElement(Text, { key: `${packageKey}-includes-empty`, style: styles.packageMeta }, "Includes: —")
+    ];
+  }
+
+  const lines = listPackageIncludeLines(items, packageSelections);
+  return [
+    React.createElement(Text, { key: `${packageKey}-includes-title`, style: styles.packageIncludeLabel }, "Includes:"),
+    ...lines.flatMap((line, index) => [
+      React.createElement(
+        Text,
+        { key: `${packageKey}-includes-${index}`, style: styles.packageIncludeDetail },
+        `${line.label}: ${line.detail}`
+      )
+    ])
+  ];
 }
 
 function buildPackageSelectionSections(
@@ -423,10 +450,6 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           getActiveTier(tiers, guestCount, customerType)
         : getActiveTier(tiers, guestCount, customerType);
 
-    const includes = item.package?.items?.length
-      ? formatIncludedItems(item.package.items, packageSelections)
-      : "—";
-
     return [
       React.createElement(
         View,
@@ -437,7 +460,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           { style: styles.packageMeta },
           `${packageTierLabel(item)} · $${activeTier?.pricePerHead ?? item.unitPrice}/person × ${guestCount} guests`
         ),
-        React.createElement(Text, { style: { fontSize: 9, marginBottom: 6 } }, `Includes: ${includes}`),
+        ...buildPackageIncludeRows(item.package?.items ?? [], packageSelections, item.id),
         React.createElement(
           Text,
           { style: { fontSize: 9, fontFamily: "Helvetica-Bold", textAlign: "right" } },
@@ -683,15 +706,17 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
                 ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
                   getActiveTier(tiers, guestCount, customerType)
                 : getActiveTier(tiers, guestCount, customerType);
-            const includes = item.package?.items?.length
-              ? escapeHtml(formatIncludedItems(item.package.items, packageSelections))
+            const includeLines = item.package?.items?.length
+              ? listPackageIncludeLines(item.package.items, packageSelections)
+                  .map((line) => `${escapeHtml(line.label)}: ${escapeHtml(line.detail)}`)
+                  .join("<br/>")
               : "—";
             const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
             return `<tr>
               <td colspan="2" style="padding:8px;border-bottom:1px solid #eee;">
                 <strong>${escapeHtml(item.name)}</strong><br/>
                 ${escapeHtml(packageTierLabel(item))} · $${pricePerHead}/person × ${guestCount} guests<br/>
-                Includes: ${includes}<br/>
+                Includes:<br/>${includeLines}<br/>
                 <div style="text-align:right;font-weight:bold;margin-top:4px;">${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</div>
               </td>
             </tr>`;

@@ -95,10 +95,29 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const packageRemovedRef = useRef(false);
   const packageOpSeqRef = useRef(0);
   const quoteUpdateSeqRef = useRef(0);
-  const lineItemSeqRef = useRef(0);
 
-  const bumpLineItemOp = () => ++lineItemSeqRef.current;
-  const isLatestLineItemOp = (opId: number) => opId === lineItemSeqRef.current;
+  type QuoteMetaRevert = Partial<
+    Pick<
+      BuilderData["quote"],
+      "taxRate" | "depositPct" | "notes" | "dueDate" | "status" | "packageSelections"
+    >
+  >;
+
+  const quoteMetaRevertFrom = (
+    quote: BuilderData["quote"],
+    data: Record<string, unknown>
+  ): QuoteMetaRevert => {
+    const revert: QuoteMetaRevert = {};
+    if (typeof data.taxRate === "number") revert.taxRate = quote.taxRate;
+    if (typeof data.depositPct === "number") revert.depositPct = quote.depositPct;
+    if (data.notes !== undefined) revert.notes = quote.notes;
+    if (data.dueDate !== undefined) revert.dueDate = quote.dueDate ?? null;
+    if (typeof data.status === "string") revert.status = quote.status;
+    if (data.packageSelections !== undefined) {
+      revert.packageSelections = quote.packageSelections;
+    }
+    return revert;
+  };
 
   const builderContext = () => {
     const data = qc.getQueryData<BuilderData>(builderKey);
@@ -174,8 +193,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     }) => api.quotes.addItem(quoteId, item),
     onMutate: async ({ tempItem }) => {
       if (!canWrite) return denyMutation();
-      const opId = bumpLineItemOp();
-      const prev = qc.getQueryData<BuilderData>(builderKey);
       quoteAnalytics.itemAdded({
         ...builderContext(),
         category: tempItem.category,
@@ -192,16 +209,16 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           lineItems: [...(old.quote.lineItems ?? []), tempItem]
         }
       }));
-      return { prev, tempItem, opId };
+      return { tempItem };
     },
     onSuccess: (result, _vars, ctx) => {
-      if (!ctx?.tempItem || !isLatestLineItemOp(ctx.opId)) return;
+      if (!ctx?.tempItem) return;
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
-          lineItems: old.quote.lineItems.map((item) => {
-            if (item.id !== ctx.tempItem.id) return item;
+          lineItems: old.quote.lineItems.flatMap((item) => {
+            if (item.id !== ctx.tempItem.id) return [item];
             const resolved = resolveCreatedLineItem(result.quote.lineItems, old.quote.lineItems, {
               category: item.category,
               name: item.name,
@@ -210,20 +227,31 @@ export function useQuoteBuilderMutations(eventId: string | null) {
               unitType: item.unitType,
               menuItemId: item.menuItemId ?? undefined
             });
-            if (!resolved) return item;
-            return {
-              ...resolved,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              unitType: item.unitType
-            };
+            if (!resolved) return [item];
+            return [
+              {
+                ...resolved,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                unitType: item.unitType
+              }
+            ];
           })
         }
       }));
     },
     onError: (err, _vars, ctx) => {
-      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
-      if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
+      if (!ctx?.tempItem) return;
+      patchBuilder((old) => {
+        if (!old.quote.lineItems.some((item) => item.id === ctx.tempItem.id)) return old;
+        return {
+          ...old,
+          quote: {
+            ...old.quote,
+            lineItems: old.quote.lineItems.filter((item) => item.id !== ctx.tempItem.id)
+          }
+        };
+      });
       handleMutationError(err, ctx, "Failed to add item");
     }
   });
@@ -233,7 +261,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       api.quotes.removeItem(quoteId, itemId),
     onMutate: async ({ itemId }) => {
       if (!canWrite) return denyMutation();
-      const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const removed = prev?.quote.lineItems.find((item) => item.id === itemId);
       if (removed) {
@@ -251,10 +278,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           lineItems: old.quote.lineItems.filter((item) => item.id !== itemId)
         }
       }));
-      return { prev, opId };
+      return { removed };
     },
     onSuccess: (_result, vars, ctx) => {
-      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
+      if (!ctx) return;
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -263,9 +290,18 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         }
       }));
     },
-    onError: (err, _vars, ctx) => {
-      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
-      if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
+    onError: (err, vars, ctx) => {
+      if (!ctx?.removed) return;
+      patchBuilder((old) => {
+        if (old.quote.lineItems.some((item) => item.id === vars.itemId)) return old;
+        return {
+          ...old,
+          quote: {
+            ...old.quote,
+            lineItems: [...old.quote.lineItems, ctx.removed!]
+          }
+        };
+      });
       handleMutationError(err, ctx, "Failed to remove item");
     }
   });
@@ -287,7 +323,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onMutate: async ({ itemId, data }) => {
       if (!canWrite) return denyMutation();
-      const opId = bumpLineItemOp();
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const current = prev?.quote.lineItems.find((item) => item.id === itemId);
       const patch = normalizeItemPatch(current, data);
@@ -309,15 +344,23 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           )
         }
       }));
-      return { prev, opId };
+      return { previousItem: current };
     },
     onSuccess: (result, vars, ctx) => {
-      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
+      if (!ctx) return;
       patchBuilder((old) => mergeQuoteLineItem(old, vars.quoteId, vars.itemId, result.quote));
     },
-    onError: (err, _vars, ctx) => {
-      if (!ctx || !isLatestLineItemOp(ctx.opId)) return;
-      if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
+    onError: (err, vars, ctx) => {
+      if (!ctx?.previousItem) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          lineItems: old.quote.lineItems.map((item) =>
+            item.id === vars.itemId ? ctx.previousItem! : item
+          )
+        }
+      }));
       handleMutationError(err, ctx, "Failed to update item");
     }
   });
@@ -329,6 +372,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       if (!canWrite) return denyMutation();
       const opId = ++quoteUpdateSeqRef.current;
       const prev = qc.getQueryData<BuilderData>(builderKey);
+      if (!prev?.quote) return denyMutation();
+      const revert = quoteMetaRevertFrom(prev.quote, data);
       const ctx = builderContext();
 
       if (typeof data.status === "string" && prev?.quote && prev.quote.status !== data.status) {
@@ -371,7 +416,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
             : {})
         }
       }));
-      return { prev, opId };
+      return { revert, opId };
     },
     onSuccess: (result, vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
@@ -413,8 +458,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
     },
     onError: (err, _vars, ctx) => {
-      if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
-      if (ctx.prev) qc.setQueryData(builderKey, ctx.prev);
+      if (!ctx || ctx.opId !== quoteUpdateSeqRef.current || !ctx.revert) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          ...ctx.revert
+        }
+      }));
       handleMutationError(err, ctx, "Failed to save quote");
     }
   });
