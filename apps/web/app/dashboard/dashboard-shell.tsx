@@ -24,6 +24,7 @@ import { api } from "@/lib/api";
 import { getApiFeatures } from "@/lib/api-features";
 import { signOut, useSession } from "@/lib/auth-client";
 import { posthog } from "@/lib/posthog";
+import { roleLabel } from "@/lib/role-labels";
 import { queryKeys } from "@/lib/query-keys";
 import type { ServerAuthUser } from "@/lib/server-auth-session";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -263,7 +264,7 @@ export function DashboardShell({
   const pathname = usePathname();
   const router = useRouter();
   const { data: session, refetch } = useSession();
-  const { role, catererName, isTeamMember } = usePermissions();
+  const { role, catererName, isOwner } = usePermissions();
 
   const pageTitle = TITLE_MAP[pathname] ?? "Dashboard";
   const user = session?.user ?? initialUser;
@@ -299,13 +300,25 @@ export function DashboardShell({
         <div className="border-b border-white/10 px-5 py-6">
           <Link href="/dashboard" className="block">
             <p className="font-heading text-2xl font-semibold tracking-tight text-white">Tripeseats</p>
-            <p className="text-xs text-white/60">
-              {isTeamMember && catererName ? catererName : "Caterer workspace"}
-            </p>
-            {isTeamMember ? (
-              <Badge className="mt-2 border-white/20 bg-white/10 text-white capitalize">{role}</Badge>
+            {isOwner ? (
+              <p className="text-xs text-white/60">Caterer workspace</p>
             ) : null}
           </Link>
+
+          {!isOwner && catererName ? (
+            <div className="mx-0 mt-4 rounded-lg border border-white/10 bg-[#152238] p-3">
+              <div className="mb-1 flex items-center gap-2">
+                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-xs text-white">
+                  {catererName[0]?.toUpperCase() ?? "?"}
+                </div>
+                <span className="truncate text-sm font-medium text-white">{catererName}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="h-1.5 w-1.5 rounded-full bg-green-400" />
+                <span className="text-xs text-white/60">{roleLabel(role)} Access</span>
+              </div>
+            </div>
+          ) : null}
         </div>
         <NavLinks />
         <div className="mt-auto border-t border-white/10 p-4">
@@ -325,8 +338,24 @@ export function DashboardShell({
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col pb-[4.5rem] md:pb-0">
         <header className="sticky top-0 z-40 flex h-16 items-center justify-between gap-4 border-b border-slate-200 bg-white/90 px-4 backdrop-blur md:px-8">
-          <h1 className="font-heading text-xl font-semibold text-[#1B2A4A] md:text-2xl">{pageTitle}</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-4">
+            <h1 className="font-heading truncate text-xl font-semibold text-[#1B2A4A] md:text-2xl">
+              {pageTitle}
+            </h1>
+            {!isOwner && catererName ? (
+              <div className="hidden items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm sm:flex">
+                <span className="font-medium text-amber-700">Managing:</span>
+                <span className="truncate font-semibold text-amber-900">{catererName}</span>
+                <Badge
+                  variant="outline"
+                  className="shrink-0 border-amber-300 text-xs text-amber-700"
+                >
+                  {roleLabel(role)}
+                </Badge>
+              </div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             <Button type="button" variant="ghost" size="icon" className="text-slate-600" aria-label="Notifications">
               <Bell className="h-5 w-5" />
             </Button>

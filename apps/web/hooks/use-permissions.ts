@@ -12,13 +12,14 @@ export function usePermissions() {
   });
 
   const role = (data?.role ?? "owner") as TeamRole;
+  const isOwner = data?.isOwner ?? role === "owner";
 
   return {
     role,
     catererName: data?.catererName ?? null,
-    isTeamMember: data?.isTeamMember ?? false,
+    isTeamMember: data?.isTeamMember ?? !isOwner,
+    isOwner,
     can: (permission: Permission) => hasPermission(role, permission),
-    isOwner: role === "owner",
-    isAdmin: role === "admin" || role === "owner"
+    isAdmin: role === "admin" || isOwner
   };
 }

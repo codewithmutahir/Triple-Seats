@@ -89,7 +89,7 @@ function SettingsPageInner() {
           </TabsTrigger>
           <TabsTrigger value="team" className="gap-2">
             <Users className="h-4 w-4" />
-            <span className="hidden sm:inline">Team</span>
+            <span className="hidden sm:inline">Staff</span>
           </TabsTrigger>
         </TabsList>
 
@@ -141,8 +141,10 @@ function SettingsPageInner() {
         <TabsContent value="team" forceMount className="data-[state=inactive]:hidden">
           <Card>
             <CardHeader>
-              <CardTitle>Team</CardTitle>
-              <CardDescription>Invite colleagues and manage roles</CardDescription>
+              <CardTitle>Staff &amp; Access</CardTitle>
+              <CardDescription>
+                Manage administrators and employees who access your workspace
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <TeamSection />

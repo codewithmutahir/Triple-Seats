@@ -347,8 +347,9 @@ export async function getSession(req: Request) {
 
   const isCatererOwner = caterer.userId === data.user.id;
   const role: TeamRole = isCatererOwner ? "owner" : (teamMembership?.role ?? "owner");
+  const isOwner = isCatererOwner;
 
   perf.end();
 
-  return { session: data.session, user: data.user, caterer, role };
+  return { session: data.session, user: data.user, caterer, role, isOwner };
 }
