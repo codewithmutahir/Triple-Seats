@@ -24,7 +24,7 @@ import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-ty
 const router = Router();
 
 async function loadQuotePdf() {
-  return import("../lib/quote-pdf");
+  return import("../lib/quote-pdf.js");
 }
 
 function paramId(req: Request, key = "id"): string {
