@@ -3,9 +3,12 @@ import crypto from "node:crypto";
 import { prisma, type TeamRole } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
+import { AUDIT_ACTIONS, serializeAuditLog, writeAuditLog } from "../lib/audit-log";
+import { getAuthorizedSession } from "../lib/authorized-session";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
-import { canAssignRole, requirePermission } from "../lib/permissions";
-import { clearCatererCacheForUser, getSession, SessionError } from "../lib/session";
+import { canAssignRole } from "../lib/permissions";
+import { handleRouteError } from "../lib/route-errors";
+import { clearCatererCacheForUser, getSession } from "../lib/session";
 
 const router = Router();
 const inviteRouter = Router();
@@ -13,21 +16,29 @@ const inviteRouter = Router();
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ASSIGNABLE_ROLES: TeamRole[] = ["admin", "manager", "sales", "ops", "viewer"];
 
+const profileSchema = {
+  parse(body: unknown) {
+    if (!body || typeof body !== "object") return { success: false as const };
+    const b = body as Record<string, unknown>;
+    const str = (v: unknown, max: number) => {
+      if (v === undefined || v === null) return null;
+      if (typeof v !== "string") return undefined;
+      const t = v.trim();
+      return t.length > max ? t.slice(0, max) : t;
+    };
+    const name = str(b.name, 120);
+    const phone = str(b.phone, 40);
+    const jobTitle = str(b.jobTitle, 120);
+    if (name === undefined || phone === undefined || jobTitle === undefined) {
+      return { success: false as const };
+    }
+    return { success: true as const, data: { name, phone, jobTitle } };
+  }
+};
+
 function paramId(req: Request, key = "memberId"): string {
   const raw = req.params[key];
   return Array.isArray(raw) ? raw[0]! : String(raw);
-}
-
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  const status = e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 500;
-  if (status === 403) {
-    return res.status(403).json({ error: (e as Error).message });
-  }
-  console.error("Team route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
 }
 
 function serializeMember(member: {
@@ -38,6 +49,9 @@ function serializeMember(member: {
   joinedAt: Date | null;
   createdAt: Date;
   userId: string | null;
+  name?: string | null;
+  phone?: string | null;
+  jobTitle?: string | null;
 }) {
   return {
     id: member.id,
@@ -46,7 +60,10 @@ function serializeMember(member: {
     inviteStatus: member.inviteStatus,
     joinedAt: member.joinedAt?.toISOString() ?? null,
     createdAt: member.createdAt.toISOString(),
-    userId: member.userId
+    userId: member.userId,
+    name: member.name ?? null,
+    phone: member.phone ?? null,
+    jobTitle: member.jobTitle ?? null
   };
 }
 
@@ -56,7 +73,7 @@ function webOrigin(): string {
 
 router.get("/me", async (req: Request, res: Response) => {
   try {
-    const { role, caterer, user, isOwner } = await getSession(req);
+    const { role, caterer, isOwner } = await getSession(req);
     return res.json({
       role,
       catererName: caterer.name,
@@ -64,23 +81,51 @@ router.get("/me", async (req: Request, res: Response) => {
       isOwner
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Team me");
+  }
+});
+
+router.get("/activity", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "team:read");
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
+
+    const logs = await prisma.auditLog.findMany({
+      where: { catererId: caterer.id },
+      orderBy: { createdAt: "desc" },
+      take: limit
+    });
+
+    return res.json({ logs: logs.map(serializeAuditLog) });
+  } catch (e) {
+    return handleRouteError(res, e, "Team activity");
   }
 });
 
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const { caterer, role, user } = await getSession(req);
-    requirePermission(role, "team:read");
+    const { caterer } = await getAuthorizedSession(req, "team:read");
 
     const members = await prisma.teamMember.findMany({
       where: { catererId: caterer.id },
       orderBy: [{ inviteStatus: "asc" }, { createdAt: "asc" }]
     });
 
+    let ownerName: string | null = null;
+    if (caterer.userId) {
+      const ownerUser = await prisma.user.findUnique({
+        where: { id: caterer.userId },
+        select: { name: true }
+      });
+      ownerName = ownerUser?.name ?? null;
+    }
+
     const ownerEntry = {
       id: "owner",
       email: caterer.email,
+      name: ownerName,
+      phone: caterer.phone ?? null,
+      jobTitle: "Account Owner",
       role: "owner" as TeamRole,
       inviteStatus: "accepted",
       joinedAt: caterer.createdAt.toISOString(),
@@ -93,14 +138,13 @@ router.get("/", async (req: Request, res: Response) => {
       members: [ownerEntry, ...members.map((m) => ({ ...serializeMember(m), isOwner: false }))]
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Team list");
   }
 });
 
 router.post("/invite", async (req: Request, res: Response) => {
   try {
-    const { caterer, role, user } = await getSession(req);
-    requirePermission(role, "team:write");
+    const { caterer, role, user } = await getAuthorizedSession(req, "team:write");
 
     const body = req.body as { email?: string; role?: TeamRole };
     const email = body.email?.trim().toLowerCase();
@@ -161,16 +205,69 @@ router.post("/invite", async (req: Request, res: Response) => {
       });
     }
 
+    await writeAuditLog({
+      catererId: caterer.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      action: AUDIT_ACTIONS.TEAM_INVITE,
+      entityType: "team_member",
+      entityId: member.id,
+      summary: `Invited ${email} as ${targetRole}`,
+      metadata: { email, role: targetRole }
+    });
+
     return res.status(201).json({ member: serializeMember(member) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Team invite");
+  }
+});
+
+router.patch("/:memberId/profile", async (req: Request, res: Response) => {
+  try {
+    const { caterer, user } = await getAuthorizedSession(req, "team:write");
+
+    const memberId = paramId(req);
+    const parsed = profileSchema.parse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid profile data." });
+    }
+
+    const member = await prisma.teamMember.findFirst({
+      where: { id: memberId, catererId: caterer.id }
+    });
+    if (!member) {
+      return res.status(404).json({ error: "Member not found." });
+    }
+
+    const updated = await prisma.teamMember.update({
+      where: { id: memberId },
+      data: {
+        name: parsed.data.name ?? null,
+        phone: parsed.data.phone ?? null,
+        jobTitle: parsed.data.jobTitle ?? null
+      }
+    });
+
+    await writeAuditLog({
+      catererId: caterer.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      action: AUDIT_ACTIONS.TEAM_PROFILE_UPDATE,
+      entityType: "team_member",
+      entityId: member.id,
+      summary: `Updated profile for ${member.email}`,
+      metadata: parsed.data
+    });
+
+    return res.json({ member: serializeMember(updated) });
+  } catch (e) {
+    return handleRouteError(res, e, "Team profile");
   }
 });
 
 router.patch("/:memberId/role", async (req: Request, res: Response) => {
   try {
-    const { caterer, role } = await getSession(req);
-    requirePermission(role, "team:write");
+    const { caterer, role, user } = await getAuthorizedSession(req, "team:write");
 
     const memberId = paramId(req);
     const targetRole = (req.body as { role?: TeamRole }).role;
@@ -198,16 +295,26 @@ router.patch("/:memberId/role", async (req: Request, res: Response) => {
       data: { role: targetRole }
     });
 
+    await writeAuditLog({
+      catererId: caterer.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      action: AUDIT_ACTIONS.TEAM_ROLE_CHANGE,
+      entityType: "team_member",
+      entityId: member.id,
+      summary: `Changed role for ${member.email} from ${member.role} to ${targetRole}`,
+      metadata: { email: member.email, from: member.role, to: targetRole }
+    });
+
     return res.json({ member: serializeMember(updated) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Team role");
   }
 });
 
 router.delete("/:memberId", async (req: Request, res: Response) => {
   try {
-    const { caterer, role, user } = await getSession(req);
-    requirePermission(role, "team:write");
+    const { caterer, user } = await getAuthorizedSession(req, "team:write");
 
     const memberId = paramId(req);
     const member = await prisma.teamMember.findFirst({
@@ -225,9 +332,21 @@ router.delete("/:memberId", async (req: Request, res: Response) => {
     }
 
     await prisma.teamMember.delete({ where: { id: memberId } });
+
+    await writeAuditLog({
+      catererId: caterer.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      action: AUDIT_ACTIONS.TEAM_REMOVE,
+      entityType: "team_member",
+      entityId: member.id,
+      summary: `Removed ${member.email} (${member.role})`,
+      metadata: { email: member.email, role: member.role }
+    });
+
     return res.json({ ok: true });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Team remove");
   }
 });
 
@@ -259,7 +378,7 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
       token
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Invite preview");
   }
 });
 
@@ -269,7 +388,8 @@ inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
     const { user } = await getSession(req);
 
     const invite = await prisma.teamMember.findUnique({
-      where: { inviteToken: token }
+      where: { inviteToken: token },
+      include: { caterer: { select: { id: true, name: true } } }
     });
 
     if (!invite || invite.inviteStatus !== "pending") {
@@ -295,15 +415,27 @@ inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
         userId: user.id,
         inviteStatus: "accepted",
         inviteToken: null,
-        joinedAt: new Date()
+        joinedAt: new Date(),
+        name: user.name ?? invite.name
       }
     });
 
     clearCatererCacheForUser(user.id);
 
+    await writeAuditLog({
+      catererId: invite.caterer.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      action: AUDIT_ACTIONS.TEAM_INVITE_ACCEPT,
+      entityType: "team_member",
+      entityId: invite.id,
+      summary: `${user.email} accepted invitation as ${invite.role}`,
+      metadata: { email: invite.email, role: invite.role }
+    });
+
     return res.json({ member: serializeMember(updated), redirect: "/dashboard" });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Invite accept");
   }
 });
 

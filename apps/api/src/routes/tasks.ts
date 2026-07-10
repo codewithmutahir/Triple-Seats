@@ -3,7 +3,8 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { buildPaginatedResponse, parsePagination } from "../lib/pagination";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 
 const PENDING_STATUSES = ["todo", "in_progress", "blocked"] as const;
 
@@ -14,13 +15,6 @@ function paramId(req: Request): string {
   return Array.isArray(raw) ? raw[0]! : String(raw);
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Tasks route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function mapTaskStatus(input: string): "todo" | "done" | null {
   if (input === "completed") return "done";
@@ -83,7 +77,7 @@ function serializeTaskWithEvent(t: {
 /** Authenticated: task counts */
 router.get("/stats", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "tasks:read");
     const catererId = caterer.id;
 
     const now = new Date();
@@ -110,14 +104,14 @@ router.get("/stats", async (req: Request, res: Response) => {
 
     return res.json({ total, pending, completed, dueSoon });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Tasks");
   }
 });
 
 /** Authenticated: list tasks with optional filters */
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "tasks:read");
     const catererId = caterer.id;
 
     const statusParam = String(req.query.status ?? "all").toLowerCase();
@@ -220,13 +214,13 @@ router.get("/", async (req: Request, res: Response) => {
 
     return res.json(buildPaginatedResponse(items, total, page, pageSize));
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Tasks");
   }
 });
 
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "tasks:write");
     const { eventId, title } = req.body as { eventId?: string; title?: string };
     if (typeof title !== "string" || !title.trim()) {
       return res.status(400).json({ error: "A non-empty title is required." });
@@ -257,13 +251,13 @@ router.post("/", async (req: Request, res: Response) => {
 
     return res.status(201).json({ task: serializeTask(task) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Tasks");
   }
 });
 
 router.patch("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "tasks:write");
     const id = paramId(req);
     const statusIn = (req.body as { status?: string })?.status;
     if (!statusIn) {
@@ -287,13 +281,13 @@ router.patch("/:id", async (req: Request, res: Response) => {
     if (!task) return res.status(404).json({ error: "Task not found." });
     return res.json({ task: serializeTask(task) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Tasks");
   }
 });
 
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "tasks:write");
     const id = paramId(req);
 
     const result = await prisma.task.deleteMany({
@@ -304,7 +298,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
     }
     return res.status(204).send();
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Tasks");
   }
 });
 

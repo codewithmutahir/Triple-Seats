@@ -8,7 +8,8 @@ import {
   type CustomerTypeValue,
   type EventTypeValue
 } from "../lib/event-customer-types";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
@@ -85,17 +86,9 @@ function isAllowedEventStatus(s: string): s is AllowedEventStatus {
   return (EVENT_STATUSES as readonly string[]).includes(s);
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Events route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
-
 router.get("/stats", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:read");
     const catererId = caterer.id;
 
     const [total, lead, discussion, booked, completed, lost] = await Promise.all([
@@ -109,7 +102,7 @@ router.get("/stats", async (req: Request, res: Response) => {
 
     return res.json({ total, lead, discussion, booked, completed, lost });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 
@@ -187,7 +180,7 @@ function serializeEvent(ev: LoadedEvent) {
 
 router.patch("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:write");
     const id = paramId(req);
     const body = req.body as { eventType?: string; customerType?: string };
 
@@ -239,13 +232,13 @@ router.patch("/:id", async (req: Request, res: Response) => {
 
     return res.json({ event: serializeEvent(updated as LoadedEvent) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 
 router.patch("/:id/status", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:write");
     const id = paramId(req);
     const status = (req.body as { status?: string })?.status;
     if (!status || !isAllowedEventStatus(status)) {
@@ -286,13 +279,13 @@ router.patch("/:id/status", async (req: Request, res: Response) => {
 
     return res.json({ event: serializeEvent(updated as LoadedEvent) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 
 router.patch("/:id/notes", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:write");
     const id = paramId(req);
     const notes = (req.body as { notes?: string })?.notes;
     if (typeof notes !== "string") {
@@ -319,13 +312,13 @@ router.patch("/:id/notes", async (req: Request, res: Response) => {
 
     return res.json({ event: serializeEvent(updated as LoadedEvent) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 
 router.patch("/:id/guest", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:write");
     const id = paramId(req);
     const body = req.body as {
       firstName?: string;
@@ -380,13 +373,13 @@ router.patch("/:id/guest", async (req: Request, res: Response) => {
 
     return res.json({ event: serializeEvent(updated) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 
 router.patch("/:id/customer-type", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:write");
     const id = paramId(req);
     const customerType = (req.body as { customerType?: string })?.customerType;
 
@@ -422,7 +415,7 @@ router.patch("/:id/customer-type", async (req: Request, res: Response) => {
 
     return res.json({ customerType: updated.customerType, event: serializeEvent(updated as LoadedEvent) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 
@@ -431,7 +424,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     const id = paramId(req);
     const perf = timer(`event:${id}`);
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:read");
     perf.step("session + caterer");
 
     const ev = await loadEventForCaterer(id, caterer.id);
@@ -448,7 +441,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     perf.end();
     return res.json({ event: serializeEvent(ev) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Events");
   }
 });
 

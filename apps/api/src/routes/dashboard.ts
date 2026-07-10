@@ -4,7 +4,9 @@ import { getCatererPublicProfile } from "./caterers";
 import { monthRangeFromDate, previousMonthRange } from "../lib/date-ranges";
 import { eventTypeTitle } from "../lib/event-customer-types";
 import { pickBestQuote } from "../lib/quote-pick";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession, getSessionWithAnyPermission } from "../lib/authorized-session";
+import { hasPermission } from "../lib/permissions";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 import { prisma } from "@tripeseats/database";
 
@@ -25,14 +27,6 @@ function pctTrend(current: number, previous: number): string {
   const pct = Math.round(((current - previous) / previous) * 100);
   if (pct === 0) return "Flat vs last month";
   return `${pct > 0 ? "+" : ""}${pct}% vs last month`;
-}
-
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Dashboard route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
 }
 
 async function computeDashboardStats(catererId: string): Promise<StatsPayload> {
@@ -228,11 +222,11 @@ async function fetchUpcomingEvents(catererId: string) {
 
 router.get("/profile", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:read");
     const profile = await getCatererPublicProfile(caterer);
     return res.json(profile);
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Dashboard profile");
   }
 });
 
@@ -240,7 +234,7 @@ router.get("/stats", async (req: Request, res: Response) => {
   try {
     const perf = timer("dashboard:stats");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "reports:read");
     perf.step("session");
 
     const result = await computeDashboardStats(caterer.id);
@@ -248,7 +242,7 @@ router.get("/stats", async (req: Request, res: Response) => {
     perf.end();
     return res.json(result);
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Dashboard stats");
   }
 });
 
@@ -256,13 +250,26 @@ router.get("/all", async (req: Request, res: Response) => {
   try {
     const perf = timer("dashboard:all");
 
-    const { caterer } = await getSession(req);
+    const { caterer, role } = await getSessionWithAnyPermission(req, [
+      "leads:read",
+      "events:read",
+      "bookings:read",
+      "tasks:read",
+      "reports:read"
+    ]);
     perf.step("session");
 
+    const emptyStats: StatsPayload = {
+      leads: { count: 0, trend: "—" },
+      bookings: { count: 0, trend: "—" },
+      upcomingEvents: { count: 0, trend: "—" },
+      revenue: { amount: 0, trend: "—" }
+    };
+
     const [stats, recent, upcoming] = await Promise.all([
-      computeDashboardStats(caterer.id),
-      fetchRecentLeads(caterer.id),
-      fetchUpcomingEvents(caterer.id)
+      hasPermission(role, "reports:read") ? computeDashboardStats(caterer.id) : emptyStats,
+      hasPermission(role, "leads:read") ? fetchRecentLeads(caterer.id) : [],
+      hasPermission(role, "events:read") ? fetchUpcomingEvents(caterer.id) : []
     ]);
 
     perf.step("db:parallel-all");
@@ -274,7 +281,7 @@ router.get("/all", async (req: Request, res: Response) => {
       upcoming: { items: upcoming }
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Dashboard all");
   }
 });
 
@@ -282,7 +289,7 @@ router.get("/recent-leads", async (req: Request, res: Response) => {
   try {
     const perf = timer("dashboard:recent");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "leads:read");
     perf.step("session");
 
     const items = await fetchRecentLeads(caterer.id);
@@ -291,17 +298,17 @@ router.get("/recent-leads", async (req: Request, res: Response) => {
     perf.end();
     return res.json({ items });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Dashboard recent leads");
   }
 });
 
 router.get("/upcoming-events", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:read");
     const items = await fetchUpcomingEvents(caterer.id);
     return res.json({ items });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Dashboard upcoming events");
   }
 });
 

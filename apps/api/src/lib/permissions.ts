@@ -116,3 +116,9 @@ export function canAssignRole(assignerRole: TeamRole, targetRole: TeamRole): boo
   if (assignerRole === "viewer") return false;
   return roleRank(targetRole) <= roleRank(assignerRole);
 }
+
+/** Pass if the role has at least one of the listed permissions. */
+export function requireAnyPermission(role: TeamRole, permissions: Permission[]): void {
+  if (permissions.some((p) => hasPermission(role, p))) return;
+  throw Object.assign(new Error("Insufficient permissions"), { status: 403 });
+}

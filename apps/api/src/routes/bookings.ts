@@ -6,7 +6,8 @@ import { monthRange, monthRangeFromDate } from "../lib/date-ranges";
 import { eventTypeTitle } from "../lib/event-customer-types";
 import { parsePagination } from "../lib/pagination";
 import { pickBestQuote } from "../lib/quote-pick";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
@@ -18,13 +19,6 @@ function currentMonthRange() {
   return monthRangeFromDate(new Date());
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Bookings route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 const bookingInclude = {
   primaryGuest: true,
@@ -40,7 +34,7 @@ const bookingInclude = {
 /** Authenticated: booking pipeline stats */
 router.get("/stats", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "bookings:read");
     const catererId = caterer.id;
     const { start: thisMonthStart, end: thisMonthEnd } = currentMonthRange();
 
@@ -76,7 +70,7 @@ router.get("/stats", async (req: Request, res: Response) => {
 
     return res.json({ confirmedThisMonth, completedAllTime, revenueThisMonth });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Bookings");
   }
 });
 
@@ -85,7 +79,7 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     const perf = timer("bookings:list");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "bookings:read");
     perf.step("session");
 
     const catererId = caterer.id;
@@ -191,7 +185,7 @@ router.get("/", async (req: Request, res: Response) => {
       totalPages
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Bookings");
   }
 });
 

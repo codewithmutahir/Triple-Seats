@@ -1,7 +1,8 @@
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
@@ -133,20 +134,13 @@ async function fetchEventsInRange(catererId: string, start: Date, end: Date) {
   });
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Calendar route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 /** Combined init — prev, current, and next month in one request */
 router.get("/init", async (req: Request, res: Response) => {
   try {
     const perf = timer("calendar:init");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:read");
     perf.step("session");
 
     const now = new Date();
@@ -175,7 +169,7 @@ router.get("/init", async (req: Request, res: Response) => {
     perf.end();
     return res.json({ events: items });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Calendar");
   }
 });
 
@@ -183,7 +177,7 @@ router.get("/events", async (req: Request, res: Response) => {
   try {
     const perf = timer("calendar:events");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "events:read");
     perf.step("session");
 
     const startRaw = req.query.start;
@@ -221,7 +215,7 @@ router.get("/events", async (req: Request, res: Response) => {
     perf.end();
     return res.json(items);
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Calendar");
   }
 });
 

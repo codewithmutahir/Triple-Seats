@@ -88,6 +88,7 @@ export const queryKeys = {
   team: {
     all: ["team"] as const,
     me: () => [...queryKeys.team.all, "me"] as const,
-    list: () => [...queryKeys.team.all, "list"] as const
+    list: () => [...queryKeys.team.all, "list"] as const,
+    activity: () => [...queryKeys.team.all, "activity"] as const
   }
 };

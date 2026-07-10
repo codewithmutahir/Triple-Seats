@@ -5,7 +5,8 @@ import { Router, type Request, type Response } from "express";
 import { monthRange, previousMonthRange } from "../lib/date-ranges";
 import { breakdownQuoteLineItems } from "../lib/quote-breakdown";
 import { pickBestQuote } from "../lib/quote-pick";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 
 const router = Router();
 
@@ -25,13 +26,6 @@ function pctGrowth(current: number, previous: number): number {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Reports route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function parseYearMonth(req: Request) {
   const now = new Date();
@@ -69,7 +63,7 @@ async function revenueForEvents(
 /** Authenticated: business performance summary */
 router.get("/summary", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "reports:read");
     const catererId = caterer.id;
     const { year, month } = parseYearMonth(req);
 
@@ -260,14 +254,14 @@ router.get("/summary", async (req: Request, res: Response) => {
       leadReports
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Reports");
   }
 });
 
 /** Authenticated: last 6 months event counts by status for pipeline chart */
 router.get("/events-timeline", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "reports:read");
     const catererId = caterer.id;
     const { year, month } = parseYearMonth(req);
     const anchor = new Date(year, month - 1, 1);
@@ -307,7 +301,7 @@ router.get("/events-timeline", async (req: Request, res: Response) => {
 
     return res.json(timeline);
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Reports");
   }
 });
 

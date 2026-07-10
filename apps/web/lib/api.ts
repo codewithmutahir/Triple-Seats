@@ -422,8 +422,32 @@ export const api = {
           createdAt: string;
           userId: string | null;
           isOwner?: boolean;
+          name?: string | null;
+          phone?: string | null;
+          jobTitle?: string | null;
         }>;
       }>("/api/team"),
+    activity: () =>
+      apiFetch<{
+        logs: Array<{
+          id: string;
+          actorId: string;
+          actorEmail: string | null;
+          action: string;
+          entityType: string | null;
+          entityId: string | null;
+          summary: string;
+          createdAt: string;
+        }>;
+      }>("/api/team/activity"),
+    updateProfile: (
+      memberId: string,
+      data: { name?: string | null; phone?: string | null; jobTitle?: string | null }
+    ) =>
+      apiFetch<{ member: { id: string; name: string | null; phone: string | null; jobTitle: string | null } }>(
+        `/api/team/${encodeURIComponent(memberId)}/profile`,
+        { method: "PATCH", body: JSON.stringify(data) }
+      ),
     invite: (email: string, role: string) =>
       apiFetch<{ member: { id: string; email: string; role: string; inviteStatus: string } }>(
         "/api/team/invite",
