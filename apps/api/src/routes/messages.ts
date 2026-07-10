@@ -4,20 +4,14 @@ import { Router, type Request, type Response } from "express";
 
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { buildPaginatedResponse, parsePagination } from "../lib/pagination";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
 
 const TRUNCATE_LEN = 80;
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Messages route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function serializeMessage(m: {
   id: string;
@@ -94,7 +88,7 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
     const eventId = String(req.params.eventId ?? "").trim();
     const perf = timer(`messages:${eventId}`);
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "discussions:read");
     perf.step("session");
 
     if (!eventId) {
@@ -129,14 +123,14 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
       messages: messages.map(serializeMessage)
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Messages");
   }
 });
 
 /** Authenticated: create a message (outbound email or internal note) */
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "discussions:write");
     const body = req.body as { eventId?: string; body?: string; direction?: string };
 
     const eventId = typeof body.eventId === "string" ? body.eventId.trim() : "";
@@ -203,7 +197,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     return res.status(201).json({ message: serializeMessage(message) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Messages");
   }
 });
 
@@ -212,7 +206,7 @@ router.get("/conversations", async (req: Request, res: Response) => {
   try {
     const perf = timer("messages:conversations");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "discussions:read");
     perf.step("session");
 
     const { page, pageSize, offset } = parsePagination(req.query as Record<string, unknown>);
@@ -301,7 +295,7 @@ router.get("/conversations", async (req: Request, res: Response) => {
       totalPages: paginated.totalPages
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Messages");
   }
 });
 

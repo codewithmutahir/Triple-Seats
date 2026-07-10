@@ -15,7 +15,8 @@ import { combineDateAndTime, formatTimeRange, parseTimeString } from "../lib/eve
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { leadFormLimiter } from "../lib/rate-limit";
 import { parsePagination } from "../lib/pagination";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
@@ -126,13 +127,6 @@ function parsePayload(body: unknown): LeadPayload | null {
   return payload;
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Leads route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function isMissingLeadContactEmailColumn(e: unknown): boolean {
   if (!e || typeof e !== "object" || !("code" in e)) return false;
@@ -278,7 +272,7 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     const perf = timer("leads:list");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "leads:read");
     perf.step("session");
 
     const catererId = caterer.id;
@@ -421,7 +415,7 @@ router.get("/", async (req: Request, res: Response) => {
       ...(intakeMismatchWarning ? { intakeMismatchWarning } : {})
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Leads");
   }
 });
 

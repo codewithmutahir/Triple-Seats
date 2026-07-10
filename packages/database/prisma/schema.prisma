@@ -126,8 +126,27 @@ model Caterer {
   messages          Message[]
   paymentReminders  PaymentReminder[]
   teamMembers       TeamMember[]
+  auditLogs         AuditLog[]
 
   @@map("caterers")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  catererId  String
+  actorId    String
+  actorEmail String?
+  action     String
+  entityType String?
+  entityId   String?
+  summary    String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  caterer    Caterer  @relation(fields: [catererId], references: [id], onDelete: Cascade)
+
+  @@index([catererId])
+  @@index([catererId, createdAt])
+  @@map("audit_logs")
 }
 
 model TeamMember {
@@ -135,6 +154,9 @@ model TeamMember {
   catererId    String
   userId       String?
   email        String
+  name         String?
+  phone        String?
+  jobTitle     String?
   role         TeamRole     @default(viewer)
   inviteToken  String?      @unique
   inviteStatus InviteStatus @default(pending)

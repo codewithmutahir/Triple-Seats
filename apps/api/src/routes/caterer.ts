@@ -1,18 +1,11 @@
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
-
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Caterer route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function serializeCaterer(caterer: {
   id: string;
@@ -39,7 +32,7 @@ function serializeCaterer(caterer: {
 router.get("/", async (req: Request, res: Response) => {
   try {
     const perf = timer("caterer:get");
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:read");
     perf.step("session");
 
     const full = await prisma.caterer.findUnique({
@@ -65,14 +58,14 @@ router.get("/", async (req: Request, res: Response) => {
 
     return res.json({ caterer: serializeCaterer(full) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Caterer");
   }
 });
 
 router.patch("/", async (req: Request, res: Response) => {
   try {
     const perf = timer("caterer:patch");
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     perf.step("session");
 
     const body = req.body as {
@@ -158,7 +151,7 @@ router.patch("/", async (req: Request, res: Response) => {
 
     return res.json({ caterer: serializeCaterer(updated) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Caterer");
   }
 });
 

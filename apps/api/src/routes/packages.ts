@@ -1,7 +1,8 @@
 import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
 import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
@@ -13,13 +14,6 @@ function paramId(req: Request, key = "id"): string {
   return Array.isArray(raw) ? raw[0]! : String(raw);
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Packages route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function serializePackage(
   pkg: Awaited<ReturnType<typeof loadPackages>>[number],
@@ -76,7 +70,7 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     const perf = timer("packages");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:read");
     perf.step("session");
 
     const raw = typeof req.query.customerType === "string" ? req.query.customerType : "b2c";
@@ -92,7 +86,7 @@ router.get("/", async (req: Request, res: Response) => {
     perf.end();
     return res.json({ items: packages.map((p) => serializePackage(p, customerType)) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Packages");
   }
 });
 
@@ -121,7 +115,7 @@ type PackageBody = {
 router.post("/", async (req: Request, res: Response) => {
   try {
     const perf = timer("packages:create");
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     perf.step("session");
 
     const body = req.body as PackageBody;
@@ -172,14 +166,14 @@ router.post("/", async (req: Request, res: Response) => {
 
     return res.status(201).json({ package: serializePackage(pkg) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Packages");
   }
 });
 
 router.put("/:id", async (req: Request, res: Response) => {
   try {
     const perf = timer("packages:update");
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     perf.step("session");
 
     const packageId = paramId(req);
@@ -243,13 +237,13 @@ router.put("/:id", async (req: Request, res: Response) => {
 
     return res.json({ package: serializePackage(updated!) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Packages");
   }
 });
 
 router.patch("/tiers/:tierId", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     const tierId = paramId(req, "tierId");
     const body = req.body as { pricePerHead?: unknown };
 
@@ -283,14 +277,14 @@ router.patch("/tiers/:tierId", async (req: Request, res: Response) => {
       }
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Packages");
   }
 });
 
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
     const perf = timer("packages:delete");
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     perf.step("session");
 
     const packageId = paramId(req);
@@ -312,7 +306,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
 
     return res.json({ success: true });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Packages");
   }
 });
 

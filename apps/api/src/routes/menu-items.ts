@@ -3,7 +3,8 @@ import { Router, type Request, type Response } from "express";
 
 import { parseItemCategory, parseQuoteUnit } from "../lib/quote-serialize";
 import { ensureDefaultItemsForCategory } from "../lib/seed-menu-items";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
 const router = Router();
@@ -13,13 +14,6 @@ function paramId(req: Request, key = "id"): string {
   return Array.isArray(raw) ? raw[0]! : String(raw);
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Menu items route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 function serializeMenuItem(item: {
   id: string;
@@ -47,7 +41,7 @@ router.get("/all", async (req: Request, res: Response) => {
   try {
     const perf = timer("menu-items:all");
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:read");
     perf.step("session");
 
     const items = await prisma.menuItem.findMany({
@@ -79,7 +73,7 @@ router.get("/all", async (req: Request, res: Response) => {
     perf.end();
     return res.json(grouped);
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Menu items");
   }
 });
 
@@ -92,7 +86,7 @@ router.get("/", async (req: Request, res: Response) => {
 
     const perf = timer(`menu-items:${category}`);
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:read");
     perf.step("session");
 
     await ensureDefaultItemsForCategory(caterer.id, category);
@@ -115,13 +109,13 @@ router.get("/", async (req: Request, res: Response) => {
     perf.end();
     return res.json({ items: items.map(serializeMenuItem) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Menu items");
   }
 });
 
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     const body = req.body as {
       category?: string;
       name?: string;
@@ -160,13 +154,13 @@ router.post("/", async (req: Request, res: Response) => {
 
     return res.status(201).json({ item: serializeMenuItem(item) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Menu items");
   }
 });
 
 router.patch("/:id/increment", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const id = paramId(req);
 
     const existing = await prisma.menuItem.findFirst({
@@ -183,13 +177,13 @@ router.patch("/:id/increment", async (req: Request, res: Response) => {
 
     return res.json({ item: serializeMenuItem(item) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Menu items");
   }
 });
 
 router.put("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     const id = paramId(req);
 
     const body = req.body as {
@@ -257,13 +251,13 @@ router.put("/:id", async (req: Request, res: Response) => {
 
     return res.json({ item: serializeMenuItem(item) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Menu items");
   }
 });
 
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
     const id = paramId(req);
 
     const existing = await prisma.menuItem.findFirst({
@@ -279,7 +273,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
 
     return res.json({ success: true });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Menu items");
   }
 });
 

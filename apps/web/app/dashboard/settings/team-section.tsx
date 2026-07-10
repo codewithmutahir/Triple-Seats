@@ -1,7 +1,7 @@
 "use client";
 
 import { differenceInCalendarDays, format } from "date-fns";
-import { Crown, Loader2, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { Crown, History, Loader2, Pencil, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -47,6 +47,9 @@ type TeamMemberRow = {
   joinedAt: string | null;
   createdAt: string;
   isOwner?: boolean;
+  name?: string | null;
+  phone?: string | null;
+  jobTitle?: string | null;
 };
 
 const ROLE_BADGE: Record<TeamRole, string> = {
@@ -60,8 +63,12 @@ const ROLE_BADGE: Record<TeamRole, string> = {
 
 type InviteMode = "admin" | "employee";
 
-function initials(email: string) {
-  return email.slice(0, 2).toUpperCase();
+function displayInitials(member: TeamMemberRow) {
+  if (member.name?.trim()) {
+    const parts = member.name.trim().split(/\s+/);
+    return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
+  }
+  return member.email.slice(0, 2).toUpperCase();
 }
 
 function StaffRow({
@@ -69,28 +76,46 @@ function StaffRow({
   canManage,
   onRoleChange,
   onRemove,
+  onEdit,
   roleOptions
 }: {
   member: TeamMemberRow;
   canManage: boolean;
   onRoleChange?: (role: TeamRole) => void;
   onRemove?: () => void;
+  onEdit?: () => void;
   roleOptions?: TeamRole[];
 }) {
+  const primary = member.name?.trim() || member.email;
+  const secondary = member.jobTitle?.trim()
+    ? member.jobTitle
+    : member.name?.trim()
+      ? member.email
+      : member.joinedAt
+        ? `Joined ${format(new Date(member.joinedAt), "MMM d, yyyy")}`
+        : "—";
+
   return (
     <div className="flex items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3">
       <div className="flex min-w-0 items-center gap-3">
-        <Avatar>{initials(member.email)}</Avatar>
+        <Avatar>{displayInitials(member)}</Avatar>
         <div className="min-w-0">
-          <p className="truncate font-medium">{member.email}</p>
-          <p className="text-xs text-muted-foreground">
-            {member.joinedAt
-              ? `Joined ${format(new Date(member.joinedAt), "MMM d, yyyy")}`
-              : "—"}
-          </p>
+          <p className="truncate font-medium">{primary}</p>
+          <p className="truncate text-xs text-muted-foreground">{secondary}</p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {canManage && onEdit ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Edit profile for ${member.email}`}
+            onClick={onEdit}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+        ) : null}
         {canManage && onRoleChange && roleOptions ? (
           <Select value={member.role} onValueChange={(v) => onRoleChange(v as TeamRole)}>
             <SelectTrigger className="w-[130px]">
@@ -121,6 +146,55 @@ function StaffRow({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function ActivityLogSection() {
+  const { can } = usePermissions();
+  const canView = can("team:read");
+
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.team.activity(),
+    queryFn: api.team.activity,
+    staleTime: 60_000,
+    enabled: canView
+  });
+
+  if (!canView) return null;
+
+  const logs = data?.logs ?? [];
+
+  return (
+    <section className="space-y-4">
+      <SectionHeader
+        icon={History}
+        title="Activity Log"
+        description="Recent staff and access changes in your workspace"
+        count={logs.length}
+      />
+      {isLoading && !data ? (
+        <div className="flex justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : logs.length === 0 ? (
+        <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+          No activity recorded yet.
+        </p>
+      ) : (
+        <div className="divide-y rounded-lg border">
+          {logs.map((log) => (
+            <div key={log.id} className="flex items-start justify-between gap-4 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{log.summary}</p>
+                <p className="text-xs text-muted-foreground">
+                  {log.actorEmail ?? "System"} · {format(new Date(log.createdAt), "MMM d, yyyy h:mm a")}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -173,6 +247,63 @@ export function TeamSection() {
   const [inviteMode, setInviteMode] = useState<InviteMode>("employee");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<TeamRole>("manager");
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileMember, setProfileMember] = useState<TeamMemberRow | null>(null);
+  const [profileName, setProfileName] = useState("");
+  const [profilePhone, setProfilePhone] = useState("");
+  const [profileJobTitle, setProfileJobTitle] = useState("");
+
+  function openProfile(member: TeamMemberRow) {
+    setProfileMember(member);
+    setProfileName(member.name ?? "");
+    setProfilePhone(member.phone ?? "");
+    setProfileJobTitle(member.jobTitle ?? "");
+    setProfileOpen(true);
+  }
+
+  const profileMutation = useMutation({
+    mutationFn: () => {
+      if (!profileMember) throw new Error("No member selected");
+      return api.team.updateProfile(profileMember.id, {
+        name: profileName.trim() || null,
+        phone: profilePhone.trim() || null,
+        jobTitle: profileJobTitle.trim() || null
+      });
+    },
+    onMutate: async () => {
+      if (!profileMember) return;
+      await qc.cancelQueries({ queryKey: queryKeys.team.list() });
+      const prev = qc.getQueryData<{ members: TeamMemberRow[] }>(queryKeys.team.list());
+      if (prev) {
+        qc.setQueryData(queryKeys.team.list(), {
+          members: prev.members.map((m) =>
+            m.id === profileMember.id
+              ? {
+                  ...m,
+                  name: profileName.trim() || null,
+                  phone: profilePhone.trim() || null,
+                  jobTitle: profileJobTitle.trim() || null
+                }
+              : m
+          )
+        });
+      }
+      return { prev };
+    },
+    onSuccess: () => {
+      toast.success("Employee profile updated");
+      setProfileOpen(false);
+      setProfileMember(null);
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.team.list(), ctx.prev);
+      toast.error("Failed to update profile");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
+      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
+    }
+  });
 
   function openInvite(mode: InviteMode) {
     setInviteMode(mode);
@@ -219,6 +350,7 @@ export function TeamSection() {
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
+      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
     }
   });
 
@@ -227,6 +359,7 @@ export function TeamSection() {
       api.team.updateRole(memberId, role),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
+      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
       toast.success("Role updated");
     },
     onError: () => toast.error("Failed to update role")
@@ -248,7 +381,10 @@ export function TeamSection() {
       if (ctx?.prev) qc.setQueryData(queryKeys.team.list(), ctx.prev);
       toast.error("Failed to remove member");
     },
-    onSettled: () => void qc.invalidateQueries({ queryKey: queryKeys.team.list() })
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.team.list() });
+      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
+    }
   });
 
   const members: TeamMemberRow[] = (data?.members ?? []).map((m) => ({
@@ -287,13 +423,13 @@ export function TeamSection() {
         {owner ? (
           <div className="flex items-center justify-between gap-4 rounded-lg border-2 border-[#1B2A4A]/20 bg-[#1B2A4A]/5 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
-              <Avatar className="bg-[#1B2A4A] text-white">{initials(owner.email)}</Avatar>
+              <Avatar className="bg-[#1B2A4A] text-white">{displayInitials(owner)}</Avatar>
               <div className="min-w-0">
-                <p className="truncate font-medium">{owner.email}</p>
+                <p className="truncate font-medium">{owner.name?.trim() || owner.email}</p>
                 <p className="text-xs text-muted-foreground">
-                  {owner.joinedAt
+                  {owner.jobTitle ?? (owner.joinedAt
                     ? `Owner since ${format(new Date(owner.joinedAt), "MMM d, yyyy")}`
-                    : "Account owner"}
+                    : "Account owner")}
                 </p>
               </div>
             </div>
@@ -329,6 +465,7 @@ export function TeamSection() {
                 key={member.id}
                 member={member}
                 canManage={canManage}
+                onEdit={() => openProfile(member)}
                 onRemove={() => {
                   if (window.confirm(`Remove administrator ${member.email}?`)) {
                     removeMutation.mutate(member.id);
@@ -369,6 +506,7 @@ export function TeamSection() {
                 canManage={canManage}
                 roleOptions={EMPLOYEE_ROLES}
                 onRoleChange={(role) => roleMutation.mutate({ memberId: member.id, role })}
+                onEdit={() => openProfile(member)}
                 onRemove={() => {
                   if (window.confirm(`Remove employee ${member.email}?`)) {
                     removeMutation.mutate(member.id);
@@ -425,6 +563,8 @@ export function TeamSection() {
           </div>
         </section>
       ) : null}
+
+      <ActivityLogSection />
 
       {/* Invite Dialog */}
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
@@ -492,6 +632,59 @@ export function TeamSection() {
               onClick={() => inviteMutation.mutate()}
             >
               Send Invitation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Employee profile</DialogTitle>
+            <DialogDescription>
+              {profileMember?.email} · {profileMember ? roleLabel(profileMember.role) : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label htmlFor="profile-name">Full name</Label>
+              <Input
+                id="profile-name"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                placeholder="Jane Smith"
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-job">Job title</Label>
+              <Input
+                id="profile-job"
+                value={profileJobTitle}
+                onChange={(e) => setProfileJobTitle(e.target.value)}
+                placeholder="Event Coordinator"
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-phone">Phone</Label>
+              <Input
+                id="profile-phone"
+                type="tel"
+                value={profilePhone}
+                onChange={(e) => setProfilePhone(e.target.value)}
+                placeholder="+1 (555) 000-0000"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setProfileOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!profileMember || profileMutation.isPending}
+              onClick={() => profileMutation.mutate()}
+            >
+              Save profile
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -14,7 +14,8 @@ import {
   type QuoteWithRelations
 } from "../lib/quote-serialize";
 import { getResend, resendFromEmail } from "../lib/mail";
-import { getSession, SessionError } from "../lib/session";
+import { getAuthorizedSession } from "../lib/authorized-session";
+import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 import { ensureDefaultItemsForCategory, seedMenuItemsForCaterer } from "../lib/seed-menu-items";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
@@ -32,13 +33,6 @@ function paramId(req: Request, key = "id"): string {
   return Array.isArray(raw) ? raw[0]! : String(raw);
 }
 
-function handleSessionError(res: Response, e: unknown) {
-  if (e instanceof SessionError) {
-    return res.status(e.status).json({ error: e.message });
-  }
-  console.error("Quotes route error:", e);
-  return res.status(500).json({ error: "Internal server error" });
-}
 
 async function loadQuoteForCaterer(quoteId: string, catererId: string) {
   return prisma.quote.findFirst({
@@ -440,7 +434,7 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
     const eventId = paramId(req, "eventId");
     const perf = timer(`builder:${eventId}`);
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:read");
     perf.step("session");
 
     const [event, quoteRow, packagesRaw, menuItemsRaw] = await Promise.all([
@@ -663,7 +657,7 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
       }
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
@@ -673,7 +667,7 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
     const eventId = paramId(req, "eventId");
     const perf = timer(`quotes:event:${eventId}`);
 
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:read");
     perf.step("session");
 
     const event = await prisma.event.findFirst({
@@ -694,13 +688,13 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
     perf.end();
     return res.json({ items: quotes.map((q) => serializeQuote(q as QuoteWithRelations)) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const { eventId } = req.body as { eventId?: string };
     if (!eventId || typeof eventId !== "string") {
       return res.status(400).json({ error: "eventId is required." });
@@ -727,26 +721,26 @@ router.post("/", async (req: Request, res: Response) => {
 
     return res.status(201).json({ quote: serializeQuote(quote as QuoteWithRelations) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.get("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:read");
     const quote = await loadQuoteForCaterer(paramId(req), caterer.id);
     if (!quote) {
       return res.status(404).json({ error: "Quote not found." });
     }
     return res.json({ quote: serializeQuote(quote as QuoteWithRelations) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.patch("/:id/guest-count", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const raw = (req.body as { guestCount?: unknown })?.guestCount;
     const parsed = typeof raw === "number" ? raw : parseInt(String(raw ?? ""), 10);
@@ -762,13 +756,13 @@ router.patch("/:id/guest-count", async (req: Request, res: Response) => {
 
     return res.json({ quote: serializeQuote(updated as QuoteWithRelations) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.patch("/:id", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const id = paramId(req);
     const perf = timer(`quote:patch:${id}`);
     const body = req.body as {
@@ -878,13 +872,13 @@ router.patch("/:id", async (req: Request, res: Response) => {
         error: e instanceof Error ? e.message : "Invalid request."
       });
     }
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.post("/:id/items", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const body = req.body as {
       category?: string;
@@ -945,13 +939,13 @@ router.post("/:id/items", async (req: Request, res: Response) => {
     }
     return res.status(201).json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.patch("/:id/items/:itemId", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const itemId = paramId(req, "itemId");
     const perf = timer(`quote:patch-item:${itemId}`);
@@ -1045,13 +1039,13 @@ router.patch("/:id/items/:itemId", async (req: Request, res: Response) => {
         error: e instanceof Error ? e.message : "Invalid request."
       });
     }
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.delete("/:id/items/:itemId", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const itemId = paramId(req, "itemId");
 
@@ -1074,13 +1068,13 @@ router.delete("/:id/items/:itemId", async (req: Request, res: Response) => {
     }
     return res.json({ quote: serializeQuoteTotalsPatch(updated) });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.post("/:id/package", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const body = req.body as { packageId?: string };
     const perf = timer(`quote:add-package:${quoteId}`);
@@ -1107,13 +1101,13 @@ router.post("/:id/package", async (req: Request, res: Response) => {
     if (status === 400) {
       return res.status(400).json({ error: e instanceof Error ? e.message : "Invalid request." });
     }
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.delete("/:id/package", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const perf = timer(`quote:remove-package:${quoteId}`);
 
@@ -1132,13 +1126,13 @@ router.delete("/:id/package", async (req: Request, res: Response) => {
     if (status === 404) {
       return res.status(404).json({ error: e instanceof Error ? e.message : "Not found." });
     }
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.post("/:id/duplicate", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
 
     const source = await loadQuoteForCaterer(quoteId, caterer.id);
@@ -1181,13 +1175,13 @@ router.post("/:id/duplicate", async (req: Request, res: Response) => {
       quote: serializeQuote((full ?? duplicate) as QuoteWithRelations)
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
 router.post("/:id/pdf", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:read");
     const quoteId = paramId(req);
     const quote = await loadQuoteForCaterer(quoteId, caterer.id);
     if (!quote) {
@@ -1204,7 +1198,7 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
     res.setHeader("Content-Disposition", `attachment; filename="quote-${quoteId}.pdf"`);
     return res.end(buffer);
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
@@ -1325,7 +1319,7 @@ async function processSendJob(quoteId: string, caterer: SessionCaterer) {
 
 router.post("/:id/send", async (req: Request, res: Response) => {
   try {
-    const { caterer } = await getSession(req);
+    const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
     const quote = await loadQuoteForCaterer(quoteId, caterer.id);
     if (!quote) {
@@ -1360,7 +1354,7 @@ router.post("/:id/send", async (req: Request, res: Response) => {
       void processSendJob(quoteId, caterer);
     });
   } catch (e) {
-    return handleSessionError(res, e);
+    return handleRouteError(res, e, "Quotes");
   }
 });
 
