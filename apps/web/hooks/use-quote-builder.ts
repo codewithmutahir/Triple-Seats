@@ -105,7 +105,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const patchBuilder = (updater: (old: BuilderData) => BuilderData) => {
-    qc.setQueryData<BuilderData>(builderKey, (old) => (old ? updater(old) : old));
+    qc.setQueryData<BuilderData>(builderKey, (old: BuilderData | undefined) => (old ? updater(old) : old));
   };
 
   const selectPackageOptimistic = (pkg: CateringPackage, packages: CateringPackage[]) => {
