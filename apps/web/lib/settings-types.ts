@@ -35,9 +35,16 @@ export type SettingsPackage = {
 
 export type SettingsItemCategory =
   | "appetizer"
-  | "main_course"
+  | "veg_gravy"
+  | "chicken_gravy"
+  | "mutton_gravy"
+  | "rice_chicken"
+  | "rice_mutton"
+  | "breads"
+  | "side_items"
   | "bbq"
   | "dessert"
+  | "beverages"
   | "equipment"
   | "delivery"
   | "other";
@@ -57,9 +64,16 @@ export type SettingsMenuItemsByCategory = Record<SettingsItemCategory, SettingsM
 
 export const EMPTY_MENU_ITEMS_BY_CATEGORY: SettingsMenuItemsByCategory = {
   appetizer: [],
-  main_course: [],
+  veg_gravy: [],
+  chicken_gravy: [],
+  mutton_gravy: [],
+  rice_chicken: [],
+  rice_mutton: [],
+  breads: [],
+  side_items: [],
   bbq: [],
   dessert: [],
+  beverages: [],
   equipment: [],
   delivery: [],
   other: []

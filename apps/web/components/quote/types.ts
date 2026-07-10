@@ -1,8 +1,15 @@
 export type ItemCategory =
   | "appetizer"
-  | "main_course"
+  | "veg_gravy"
+  | "chicken_gravy"
+  | "mutton_gravy"
+  | "rice_chicken"
+  | "rice_mutton"
+  | "breads"
+  | "side_items"
   | "bbq"
   | "dessert"
+  | "beverages"
   | "equipment"
   | "delivery"
   | "other";
@@ -108,6 +115,23 @@ export type Quote = {
 
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
 
+export const CATEGORY_LABELS: Record<ItemCategory, string> = {
+  appetizer: "APPETIZER",
+  veg_gravy: "VEG GRAVY",
+  chicken_gravy: "CHICKEN GRAVY",
+  mutton_gravy: "MUTTON GRAVY",
+  rice_chicken: "RICE & CHICKEN",
+  rice_mutton: "RICE & MUTTON",
+  breads: "BREADS",
+  side_items: "SIDE ITEMS",
+  bbq: "BBQ",
+  dessert: "DESSERT",
+  beverages: "BEVERAGES",
+  equipment: "EQUIPMENT",
+  delivery: "DELIVERY",
+  other: "OTHER"
+};
+
 export const MENU_SECTIONS: {
   category: ItemCategory;
   label: string;
@@ -121,10 +145,40 @@ export const MENU_SECTIONS: {
     emptyMessage: "No appetizers yet — add from suggestions above"
   },
   {
-    category: "main_course",
-    label: "Main Course",
-    borderClass: "border-l-blue-500",
-    emptyMessage: "No main courses yet — add from suggestions above"
+    category: "veg_gravy",
+    label: "Veg Gravy",
+    borderClass: "border-l-emerald-500",
+    emptyMessage: "No veg gravy items yet — add from suggestions above"
+  },
+  {
+    category: "chicken_gravy",
+    label: "Chicken Gravy",
+    borderClass: "border-l-orange-500",
+    emptyMessage: "No chicken gravy items yet — add from suggestions above"
+  },
+  {
+    category: "mutton_gravy",
+    label: "Mutton Gravy",
+    borderClass: "border-l-red-600",
+    emptyMessage: "No mutton gravy items yet — add from suggestions above"
+  },
+  {
+    category: "rice_chicken",
+    label: "Rice & Chicken",
+    borderClass: "border-l-yellow-500",
+    emptyMessage: "No rice & chicken items yet — add from suggestions above"
+  },
+  {
+    category: "rice_mutton",
+    label: "Rice & Mutton",
+    borderClass: "border-l-amber-600",
+    emptyMessage: "No rice & mutton items yet — add from suggestions above"
+  },
+  {
+    category: "breads",
+    label: "Breads",
+    borderClass: "border-l-stone-500",
+    emptyMessage: "No breads yet — add from suggestions above"
   },
   {
     category: "bbq",
@@ -133,28 +187,51 @@ export const MENU_SECTIONS: {
     emptyMessage: "No BBQ items yet — add from suggestions above"
   },
   {
+    category: "side_items",
+    label: "Side Items",
+    borderClass: "border-l-lime-500",
+    emptyMessage: "No side items yet — add from suggestions above"
+  },
+  {
     category: "dessert",
     label: "Dessert",
     borderClass: "border-l-pink-500",
     emptyMessage: "No desserts yet — add from suggestions above"
   },
   {
+    category: "beverages",
+    label: "Beverages",
+    borderClass: "border-l-cyan-500",
+    emptyMessage: "No beverages yet — add from suggestions above"
+  },
+  {
     category: "equipment",
     label: "Equipment",
     borderClass: "border-l-gray-400",
     emptyMessage: "No equipment yet — add from suggestions above"
+  },
+  {
+    category: "delivery",
+    label: "Delivery",
+    borderClass: "border-l-indigo-400",
+    emptyMessage: "No delivery charges yet"
   }
 ];
 
-export const CATEGORY_LABELS: Record<ItemCategory, string> = {
-  appetizer: "APPETIZER",
-  main_course: "MAIN COURSE",
-  bbq: "BBQ",
-  dessert: "DESSERT",
-  equipment: "EQUIPMENT",
-  delivery: "DELIVERY",
-  other: "OTHER"
-};
+export const MENU_SECTION_GROUPS: {
+  groupLabel: string;
+  categories: ItemCategory[];
+}[] = [
+  { groupLabel: "Starters", categories: ["appetizer"] },
+  {
+    groupLabel: "Main Course",
+    categories: ["veg_gravy", "chicken_gravy", "mutton_gravy", "rice_chicken", "rice_mutton", "breads"]
+  },
+  { groupLabel: "BBQ", categories: ["bbq"] },
+  { groupLabel: "Sides", categories: ["side_items"] },
+  { groupLabel: "Dessert & Drinks", categories: ["dessert", "beverages"] },
+  { groupLabel: "Logistics", categories: ["equipment", "delivery"] }
+];
 
 export const UNIT_LABELS: Record<QuoteUnit, string> = {
   per_head: "Per Head",

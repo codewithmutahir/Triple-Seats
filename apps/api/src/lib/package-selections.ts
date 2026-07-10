@@ -1,16 +1,30 @@
 /** Maps package included item labels to quote menu sections. */
-const PACKAGE_ITEM_SECTIONS: Record<string, "appetizer" | "main_course" | "bbq" | "dessert"> = {
+const PACKAGE_ITEM_SECTIONS: Record<
+  string,
+  | "appetizer"
+  | "veg_gravy"
+  | "chicken_gravy"
+  | "mutton_gravy"
+  | "rice_chicken"
+  | "rice_mutton"
+  | "breads"
+  | "side_items"
+  | "bbq"
+  | "dessert"
+  | "beverages"
+> = {
   Appetizer: "appetizer",
-  "Veg Gravy": "main_course",
-  "Chicken Gravy": "main_course",
-  "Mutton Gravy": "main_course",
-  "Rice Chicken": "main_course",
+  "Veg Gravy": "veg_gravy",
+  "Chicken Gravy": "chicken_gravy",
+  "Mutton Gravy": "mutton_gravy",
+  "Rice Chicken": "rice_chicken",
+  "Rice Mutton": "rice_mutton",
   Grill: "bbq",
   Dessert: "dessert",
-  Naan: "main_course",
-  Salad: "main_course",
-  Raita: "main_course",
-  "Mirchi Ka Salan": "main_course"
+  Naan: "breads",
+  Salad: "side_items",
+  Raita: "side_items",
+  "Mirchi Ka Salan": "side_items"
 };
 
 export type PackageSelectionEntry = { id: string; name: string };
@@ -57,13 +71,32 @@ export function normalizePackageSelections(value: unknown): PackageSelections {
   return parsePackageSelections(value) ?? {};
 }
 
-const SELECTION_CATEGORY_ORDER = ["appetizer", "main_course", "bbq", "dessert"] as const;
+const SELECTION_CATEGORY_ORDER = [
+  "appetizer",
+  "veg_gravy",
+  "chicken_gravy",
+  "mutton_gravy",
+  "rice_chicken",
+  "rice_mutton",
+  "breads",
+  "bbq",
+  "side_items",
+  "dessert",
+  "beverages"
+] as const;
 
 const SELECTION_CATEGORY_LABELS: Record<(typeof SELECTION_CATEGORY_ORDER)[number], string> = {
   appetizer: "Appetizer",
-  main_course: "Main Course",
+  veg_gravy: "Veg Gravy",
+  chicken_gravy: "Chicken Gravy",
+  mutton_gravy: "Mutton Gravy",
+  rice_chicken: "Rice & Chicken",
+  rice_mutton: "Rice & Mutton",
+  breads: "Breads",
   bbq: "BBQ",
-  dessert: "Dessert"
+  side_items: "Side Items",
+  dessert: "Dessert",
+  beverages: "Beverages"
 };
 
 export type PackageSelectionGroup = {

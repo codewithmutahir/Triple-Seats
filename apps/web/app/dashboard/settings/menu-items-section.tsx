@@ -51,12 +51,19 @@ type QuoteUnit = MenuItem["defaultUnit"];
 
 const CATEGORIES: { value: ItemCategory; label: string }[] = [
   { value: "appetizer", label: "Appetizers" },
-  { value: "main_course", label: "Main Course" },
+  { value: "veg_gravy", label: "Veg Gravy" },
+  { value: "chicken_gravy", label: "Chicken Gravy" },
+  { value: "mutton_gravy", label: "Mutton Gravy" },
+  { value: "rice_chicken", label: "Rice & Chicken" },
+  { value: "rice_mutton", label: "Rice & Mutton" },
+  { value: "breads", label: "Breads" },
+  { value: "side_items", label: "Side Items" },
   { value: "bbq", label: "BBQ" },
   { value: "dessert", label: "Desserts" },
+  { value: "beverages", label: "Beverages" },
   { value: "equipment", label: "Equipment" },
   { value: "delivery", label: "Delivery" },
-  { value: "other", label: "Other" },
+  { value: "other", label: "Other" }
 ];
 
 const UNITS: { value: QuoteUnit; label: string }[] = [

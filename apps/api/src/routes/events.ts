@@ -18,7 +18,7 @@ function paramId(req: Request): string {
   return Array.isArray(raw) ? raw[0]! : String(raw);
 }
 
-const EVENT_STATUSES = ["lead", "discussion", "booked", "completed"] as const;
+const EVENT_STATUSES = ["lead", "discussion", "booked", "completed", "lost"] as const;
 type AllowedEventStatus = (typeof EVENT_STATUSES)[number];
 
 const ACTIVITY_MARKER = "\n\n__TRIPE_ACTIVITY_JSON__\n";
@@ -98,15 +98,16 @@ router.get("/stats", async (req: Request, res: Response) => {
     const { caterer } = await getSession(req);
     const catererId = caterer.id;
 
-    const [total, lead, discussion, booked, completed] = await Promise.all([
+    const [total, lead, discussion, booked, completed, lost] = await Promise.all([
       prisma.event.count({ where: { catererId } }),
       prisma.event.count({ where: { catererId, status: "lead" } }),
       prisma.event.count({ where: { catererId, status: "discussion" } }),
       prisma.event.count({ where: { catererId, status: "booked" } }),
-      prisma.event.count({ where: { catererId, status: "completed" } })
+      prisma.event.count({ where: { catererId, status: "completed" } }),
+      prisma.event.count({ where: { catererId, status: "lost" } })
     ]);
 
-    return res.json({ total, lead, discussion, booked, completed });
+    return res.json({ total, lead, discussion, booked, completed, lost });
   } catch (e) {
     return handleSessionError(res, e);
   }
@@ -378,6 +379,48 @@ router.patch("/:id/guest", async (req: Request, res: Response) => {
     }
 
     return res.json({ event: serializeEvent(updated) });
+  } catch (e) {
+    return handleSessionError(res, e);
+  }
+});
+
+router.patch("/:id/customer-type", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getSession(req);
+    const id = paramId(req);
+    const customerType = (req.body as { customerType?: string })?.customerType;
+
+    if (!customerType || !isCustomerType(customerType)) {
+      return res.status(400).json({ error: "Invalid type" });
+    }
+
+    const event = await prisma.event.findFirst({
+      where: { id, catererId: caterer.id },
+      select: { id: true, catererId: true, leadId: true }
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const updated = await prisma.event.update({
+      where: { id },
+      data: { customerType },
+      include: {
+        primaryGuest: true,
+        lead: true,
+        tasks: { orderBy: { createdAt: "asc" } }
+      }
+    });
+
+    if (event.leadId) {
+      await prisma.lead.update({
+        where: { id: event.leadId },
+        data: { customerType }
+      });
+    }
+
+    return res.json({ customerType: updated.customerType, event: serializeEvent(updated as LoadedEvent) });
   } catch (e) {
     return handleSessionError(res, e);
   }

@@ -48,9 +48,16 @@ const NAVY = "#1B2A4A";
 
 const CATEGORY_ORDER = [
   "appetizer",
-  "main_course",
+  "veg_gravy",
+  "chicken_gravy",
+  "mutton_gravy",
+  "rice_chicken",
+  "rice_mutton",
+  "breads",
+  "side_items",
   "bbq",
   "dessert",
+  "beverages",
   "equipment",
   "delivery",
   "other"
@@ -58,9 +65,16 @@ const CATEGORY_ORDER = [
 
 const CATEGORY_LABELS: Record<(typeof CATEGORY_ORDER)[number], string> = {
   appetizer: "APPETIZER",
-  main_course: "MAIN COURSE",
+  veg_gravy: "VEG GRAVY",
+  chicken_gravy: "CHICKEN GRAVY",
+  mutton_gravy: "MUTTON GRAVY",
+  rice_chicken: "RICE & CHICKEN",
+  rice_mutton: "RICE & MUTTON",
+  breads: "BREADS",
+  side_items: "SIDE ITEMS",
   bbq: "BBQ",
   dessert: "DESSERT",
+  beverages: "BEVERAGES",
   equipment: "EQUIPMENT",
   delivery: "DELIVERY",
   other: "OTHER"

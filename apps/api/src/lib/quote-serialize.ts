@@ -167,9 +167,16 @@ export function parseQuoteStatus(value: unknown): QuoteStatus | null {
 export function parseItemCategory(value: unknown): ItemCategory | null {
   const allowed = [
     "appetizer",
-    "main_course",
+    "veg_gravy",
+    "chicken_gravy",
+    "mutton_gravy",
+    "rice_chicken",
+    "rice_mutton",
+    "breads",
+    "side_items",
     "bbq",
     "dessert",
+    "beverages",
     "equipment",
     "delivery",
     "other"

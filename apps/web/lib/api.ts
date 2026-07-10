@@ -135,7 +135,15 @@ export const api = {
       apiFetch<{ event: EventDetailPayload }>(`/api/events/${encodeURIComponent(id)}/guest`, {
         method: "PATCH",
         body: JSON.stringify(data)
-      }).then((r) => r.event)
+      }).then((r) => r.event),
+    updateCustomerType: (id: string, customerType: string) =>
+      apiFetch<{ customerType: string; event: EventDetailPayload }>(
+        `/api/events/${encodeURIComponent(id)}/customer-type`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ customerType })
+        }
+      )
   },
 
   leads: {
@@ -396,5 +404,46 @@ export const api = {
       }
       return grouped;
     }
+  },
+
+  team: {
+    me: () => apiFetch<{ role: string }>("/api/team/me"),
+    list: () =>
+      apiFetch<{
+        members: Array<{
+          id: string;
+          email: string;
+          role: string;
+          inviteStatus: string;
+          joinedAt: string | null;
+          createdAt: string;
+          userId: string | null;
+          isOwner?: boolean;
+        }>;
+      }>("/api/team"),
+    invite: (email: string, role: string) =>
+      apiFetch<{ member: { id: string; email: string; role: string; inviteStatus: string } }>(
+        "/api/team/invite",
+        { method: "POST", body: JSON.stringify({ email, role }) }
+      ),
+    updateRole: (memberId: string, role: string) =>
+      apiFetch<{ member: { id: string; role: string } }>(`/api/team/${encodeURIComponent(memberId)}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role })
+      }),
+    remove: (memberId: string) =>
+      apiFetch<{ ok: boolean }>(`/api/team/${encodeURIComponent(memberId)}`, { method: "DELETE" })
+  },
+
+  invite: {
+    get: (token: string) =>
+      apiFetch<{ email: string; role: string; catererName: string; token: string }>(
+        `/api/invite/${encodeURIComponent(token)}`
+      ),
+    accept: (token: string) =>
+      apiFetch<{ member: { id: string }; redirect: string }>(
+        `/api/invite/${encodeURIComponent(token)}/accept`,
+        { method: "POST", body: JSON.stringify({}) }
+      )
   }
 };

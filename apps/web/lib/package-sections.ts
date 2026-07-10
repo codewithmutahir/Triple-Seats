@@ -2,7 +2,19 @@ import type { PackageIncludedItem } from "@/components/quote/types";
 import { PACKAGE_ITEM_SECTIONS } from "@/lib/event-customer-types";
 import type { ItemCategory } from "@/components/quote/types";
 
-const INCLUDED_SECTIONS: ItemCategory[] = ["appetizer", "main_course", "bbq", "dessert"];
+const INCLUDED_SECTIONS: ItemCategory[] = [
+  "appetizer",
+  "veg_gravy",
+  "chicken_gravy",
+  "mutton_gravy",
+  "rice_chicken",
+  "rice_mutton",
+  "breads",
+  "bbq",
+  "side_items",
+  "dessert",
+  "beverages"
+];
 
 export function isPackageIncludedSection(category: ItemCategory): boolean {
   return INCLUDED_SECTIONS.includes(category);

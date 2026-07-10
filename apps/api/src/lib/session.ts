@@ -2,7 +2,7 @@ import type { Request } from "express";
 import * as Sentry from "@sentry/node";
 
 import { auth } from "./auth";
-import { prisma, type Prisma } from "@tripeseats/database";
+import { prisma, type Prisma, type TeamRole } from "@tripeseats/database";
 import { timer } from "./perf";
 import { seedMenuItemsForCaterer } from "./seed-menu-items";
 import { seedPackagesForCaterer } from "./seed-packages";
@@ -277,6 +277,19 @@ export async function getSession(req: Request) {
     Sentry.setTag("catererId", caterer.id);
   }
 
+  perf.step("team:role");
+
   perf.end();
-  return { session: data.session, user: data.user, caterer };
+  const member = await prisma.teamMember.findFirst({
+    where: {
+      catererId: caterer.id,
+      userId: data.user.id,
+      inviteStatus: "accepted"
+    },
+    select: { role: true }
+  });
+
+  const role: TeamRole = member?.role ?? "owner";
+
+  return { session: data.session, user: data.user, caterer, role };
 }

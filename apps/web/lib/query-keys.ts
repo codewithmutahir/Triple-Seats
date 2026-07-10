@@ -83,5 +83,11 @@ export const queryKeys = {
     profile: () => [...queryKeys.settings.all, "profile"] as const,
     packages: () => [...queryKeys.settings.all, "packages"] as const,
     menuItems: () => [...queryKeys.settings.all, "menuItems"] as const
+  },
+
+  team: {
+    all: ["team"] as const,
+    me: () => [...queryKeys.team.all, "me"] as const,
+    list: () => [...queryKeys.team.all, "list"] as const
   }
 };

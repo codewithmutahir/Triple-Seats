@@ -25,18 +25,24 @@ import { signOut, useSession } from "@/lib/auth-client";
 import { posthog } from "@/lib/posthog";
 import { queryKeys } from "@/lib/query-keys";
 import type { ServerAuthUser } from "@/lib/server-auth-session";
+import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/dashboard/leads", label: "Leads", icon: UserPlus },
-  { href: "/dashboard/bookings", label: "Bookings", icon: BookCheck },
-  { href: "/dashboard/events", label: "Events", icon: CalendarDays },
-  { href: "/dashboard/discussions", label: "Discussions", icon: MessageSquare },
-  { href: "/dashboard/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/dashboard/calendar", label: "Calendar", icon: Calendar },
-  { href: "/dashboard/reports", label: "Reports", icon: BarChart3 },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings }
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, permission: null },
+  { href: "/dashboard/leads", label: "Leads", icon: UserPlus, permission: "leads:read" as const },
+  { href: "/dashboard/bookings", label: "Bookings", icon: BookCheck, permission: "bookings:read" as const },
+  { href: "/dashboard/events", label: "Events", icon: CalendarDays, permission: "events:read" as const },
+  {
+    href: "/dashboard/discussions",
+    label: "Discussions",
+    icon: MessageSquare,
+    permission: "discussions:read" as const
+  },
+  { href: "/dashboard/tasks", label: "Tasks", icon: CheckSquare, permission: "tasks:read" as const },
+  { href: "/dashboard/calendar", label: "Calendar", icon: Calendar, permission: "events:read" as const },
+  { href: "/dashboard/reports", label: "Reports", icon: BarChart3, permission: "reports:read" as const },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings, permission: "settings:read" as const }
 ] as const;
 
 const TITLE_MAP: Record<string, string> = {
@@ -183,9 +189,12 @@ function NavLink({
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const { can } = usePermissions();
+  const visibleNav = NAV.filter((item) => !item.permission || can(item.permission));
+
   return (
     <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-      {NAV.map(({ href, label, icon }) => {
+      {visibleNav.map(({ href, label, icon }) => {
         const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
         return (
           <NavLink
@@ -205,6 +214,8 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 function MobileBottomNav() {
   const pathname = usePathname();
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const visibleNav = NAV.filter((item) => !item.permission || can(item.permission));
 
   return (
     <nav
@@ -212,7 +223,7 @@ function MobileBottomNav() {
       aria-label="Primary"
     >
       <div className="flex w-full justify-around gap-0.5 overflow-x-auto">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {visibleNav.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
           return (
             <Link

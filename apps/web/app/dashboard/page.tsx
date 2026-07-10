@@ -27,11 +27,12 @@ import { browserTimer } from "@/lib/perf";
 type RecentRow = DashboardRecentRow;
 type UpcomingRow = DashboardUpcomingRow;
 
-function statusVariant(status: string): "lead" | "booked" | "completed" | "discussion" | "outline" {
+function statusVariant(status: string): "lead" | "booked" | "completed" | "discussion" | "lost" | "outline" {
   if (status === "lead") return "lead";
   if (status === "booked") return "booked";
   if (status === "completed") return "completed";
   if (status === "discussion") return "discussion";
+  if (status === "lost") return "lost";
   return "outline";
 }
 
