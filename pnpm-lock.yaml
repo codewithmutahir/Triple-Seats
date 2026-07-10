@@ -35,6 +35,9 @@ importers:
       '@sentry/profiling-node':
         specifier: ^10.63.0
         version: 10.63.0(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.1))
+      '@tripeseats/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@tripeseats/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -150,6 +153,9 @@ importers:
       '@tanstack/react-query-devtools':
         specifier: ^5.101.2
         version: 5.101.2(@tanstack/react-query@5.101.2(react@18.3.1))(react@18.3.1)
+      '@tripeseats/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@types/node':
         specifier: ^22.10.1
         version: 22.19.17
@@ -228,6 +234,19 @@ importers:
       zustand:
         specifier: ^5.0.14
         version: 5.0.14(@types/react@18.3.28)(immer@11.1.8)(react@18.3.1)(use-sync-external-store@1.6.0(react@18.3.1))
+
+  packages/auth:
+    dependencies:
+      better-auth:
+        specifier: ^1.6.10
+        version: 1.6.10(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0(prisma@5.22.0))(next@14.2.21(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(prisma@5.22.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
 
   packages/database:
     dependencies:

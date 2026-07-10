@@ -31,6 +31,7 @@
     "@sentry/nextjs": "^10.63.0",
     "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-query-devtools": "^5.101.2",
+    "@tripeseats/auth": "workspace:*",
     "autoprefixer": "^10.4.20",
     "better-auth": "^1.6.10",
     "class-variance-authority": "^0.7.1",

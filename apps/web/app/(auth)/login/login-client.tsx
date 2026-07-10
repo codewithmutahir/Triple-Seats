@@ -26,6 +26,9 @@ export function LoginClient() {
     if (params.get("registered") === "1") {
       setToast("Account created! Please sign in.");
     }
+    if (params.get("reason") === "session_expired") {
+      setToast("Your session expired. Please sign in again.");
+    }
   }, []);
 
   async function onSubmit(e: React.FormEvent) {
@@ -38,8 +41,8 @@ export function LoginClient() {
         setError(parseAuthError(result.error.message, "signIn"));
         return;
       }
-      router.push("/dashboard");
       router.refresh();
+      router.push("/dashboard");
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {

@@ -262,7 +262,7 @@ export function DashboardShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, refetch } = useSession();
   const { role, catererName, isTeamMember } = usePermissions();
 
   const pageTitle = TITLE_MAP[pathname] ?? "Dashboard";
@@ -288,6 +288,7 @@ export function DashboardShell({
 
   async function handleSignOut() {
     await signOut();
+    void refetch();
     router.push("/login");
     router.refresh();
   }

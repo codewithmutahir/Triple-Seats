@@ -2,6 +2,7 @@ import { dash } from "@better-auth/infra";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 
+import { AUTH_COOKIE_CACHE_MAX_AGE_SECONDS } from "@tripeseats/auth";
 import { prisma } from "@tripeseats/database";
 
 import { isLocalHostname } from "./is-local-hostname";
@@ -67,6 +68,14 @@ export const auth = betterAuth({
   ...(authEmail.emailVerification ? { emailVerification: authEmail.emailVerification } : {}),
   trustedOrigins: allowedWebOrigins(),
   secret: process.env.BETTER_AUTH_SECRET,
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: AUTH_COOKIE_CACHE_MAX_AGE_SECONDS,
+      strategy: "compact",
+      refreshCache: true
+    }
+  },
   advanced: rootDomain
     ? {
         crossSubDomainCookies: {

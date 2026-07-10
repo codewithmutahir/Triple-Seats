@@ -4,17 +4,18 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch --import ./src/preload.ts src/index.ts",
-    "build": "pnpm --filter @tripeseats/database build && tsc -p tsconfig.json",
+    "build": "pnpm --filter @tripeseats/database build && pnpm --filter @tripeseats/auth build && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:patch-slug": "tsx src/scripts/apply-caterer-slug-migration.ts",
     "lint": "echo \"No lint configured for api\"",
-    "typecheck": "pnpm --filter @tripeseats/database build && tsc --noEmit"
+    "typecheck": "pnpm --filter @tripeseats/database build && pnpm --filter @tripeseats/auth build && tsc --noEmit"
   },
   "dependencies": {
     "@better-auth/infra": "^0.2.7",
     "@react-pdf/renderer": "^4.5.1",
     "@sentry/node": "^10.63.0",
     "@sentry/profiling-node": "^10.63.0",
+    "@tripeseats/auth": "workspace:*",
     "@tripeseats/database": "workspace:*",
     "better-auth": "^1.6.10",
     "cors": "^2.8.5",
