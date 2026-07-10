@@ -1,12 +1,6 @@
-import { loadEnv } from "./lib/load-env";
-
-loadEnv();
-
 import * as Sentry from "@sentry/node";
 
 import { initSentry } from "./lib/sentry";
-
-initSentry();
 
 import { connectDB, disconnectDB, prisma } from "@tripeseats/database";
 import { toNodeHandler } from "better-auth/node";
@@ -36,6 +30,7 @@ import { packagesRouter } from "./routes/packages";
 import { quotesRouter } from "./routes/quotes";
 import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
+import { inviteRouter, teamRouter } from "./routes/team";
 
 const REQUIRED_ENV = [
   "DATABASE_URL",
@@ -184,6 +179,8 @@ function createApp() {
   app.use("/api/quotes", quotesRouter);
   app.use("/api/reports", reportsRouter);
   app.use("/api/tasks", tasksRouter);
+  app.use("/api/team", teamRouter);
+  app.use("/api/invite", inviteRouter);
 
   Sentry.setupExpressErrorHandler(app);
 
@@ -214,14 +211,6 @@ async function start() {
 
   const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
   const host = process.env.HOST ?? "0.0.0.0";
-  const resend = getResend();
-  if (resend) {
-    console.log("Resend: API key loaded (transactional + Better Auth emails).");
-  } else if (process.env.NODE_ENV === "production") {
-    console.warn("Resend: RESEND_API_KEY missing — emails disabled.");
-  } else {
-    console.warn("Resend: RESEND_API_KEY missing — lead emails and auth emails disabled.");
-  }
 
   const app = createApp();
   const server = app.listen(port, host, () => {
@@ -232,6 +221,17 @@ async function start() {
   server.setTimeout(120_000);
   server.requestTimeout = 120_000;
   server.headersTimeout = 125_000;
+
+  void initSentry();
+
+  const resend = getResend();
+  if (resend) {
+    console.log("Resend: API key loaded (transactional + Better Auth emails).");
+  } else if (process.env.NODE_ENV === "production") {
+    console.warn("Resend: RESEND_API_KEY missing — emails disabled.");
+  } else {
+    console.warn("Resend: RESEND_API_KEY missing — lead emails and auth emails disabled.");
+  }
 
   try {
     await connectDB();

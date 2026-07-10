@@ -39,11 +39,12 @@ type LeadRow = LeadsListResponse["items"][number];
 
 function statusVariant(
   status: string
-): "lead" | "booked" | "completed" | "discussion" | "outline" {
+): "lead" | "booked" | "completed" | "discussion" | "lost" | "outline" {
   if (status === "lead") return "lead";
   if (status === "booked") return "booked";
   if (status === "completed") return "completed";
   if (status === "discussion") return "discussion";
+  if (status === "lost") return "lost";
   return "outline";
 }
 
@@ -234,6 +235,7 @@ export default function LeadsPage() {
                     <SelectItem value="discussion">Discussion</SelectItem>
                     <SelectItem value="booked">Booked</SelectItem>
                     <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="lost">Lost</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

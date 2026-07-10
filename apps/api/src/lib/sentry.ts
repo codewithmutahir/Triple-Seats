@@ -1,9 +1,10 @@
 import * as Sentry from "@sentry/node";
-import { nodeProfilingIntegration } from "@sentry/profiling-node";
 
-export function initSentry() {
+export async function initSentry() {
   if (!process.env.SENTRY_DSN) return;
   if (process.env.NODE_ENV !== "production") return;
+
+  const { nodeProfilingIntegration } = await import("@sentry/profiling-node");
 
   Sentry.init({
     dsn: process.env.SENTRY_DSN,

@@ -12,10 +12,18 @@ import { cn } from "@/lib/utils";
 
 const PACKAGE_CATEGORY_LABELS: Record<string, string> = {
   Appetizer: "appetizer",
-  "Main Course": "main_course",
+  "Veg Gravy": "veg_gravy",
+  "Chicken Gravy": "chicken_gravy",
+  "Mutton Gravy": "mutton_gravy",
+  "Rice Chicken": "rice_chicken",
+  "Rice Mutton": "rice_mutton",
   BBQ: "bbq",
   Grill: "bbq",
-  Dessert: "dessert"
+  Dessert: "dessert",
+  Naan: "breads",
+  Salad: "side_items",
+  Raita: "side_items",
+  "Mirchi Ka Salan": "side_items"
 };
 
 function isCategoryLabel(label: string): boolean {

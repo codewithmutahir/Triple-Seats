@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Building2, Loader2, Package, UtensilsCrossed } from "lucide-react";
+import { Building2, Loader2, Package, Users, UtensilsCrossed } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,10 +10,11 @@ import { useSettingsProfileQuery } from "@/hooks/use-settings-queries";
 import { BusinessProfileSection } from "./business-profile-section";
 import { PackagesSection } from "./packages-section";
 import { MenuItemsSection } from "./menu-items-section";
+import { TeamSection } from "./team-section";
 
 export type CatererProfile = import("@/lib/settings-types").SettingsProfile;
 
-const VALID_TABS = ["profile", "packages", "menu"] as const;
+const VALID_TABS = ["profile", "packages", "menu", "team"] as const;
 type SettingsTab = (typeof VALID_TABS)[number];
 
 function parseTab(raw: string | null): SettingsTab {
@@ -73,7 +74,7 @@ function SettingsPageInner() {
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabSwitch} className="space-y-6">
-        <TabsList className="grid w-full max-w-md grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
           <TabsTrigger value="profile" className="gap-2">
             <Building2 className="h-4 w-4" />
             <span className="hidden sm:inline">Profile</span>
@@ -85,6 +86,10 @@ function SettingsPageInner() {
           <TabsTrigger value="menu" className="gap-2">
             <UtensilsCrossed className="h-4 w-4" />
             <span className="hidden sm:inline">Menu</span>
+          </TabsTrigger>
+          <TabsTrigger value="team" className="gap-2">
+            <Users className="h-4 w-4" />
+            <span className="hidden sm:inline">Team</span>
           </TabsTrigger>
         </TabsList>
 
@@ -129,6 +134,18 @@ function SettingsPageInner() {
             </CardHeader>
             <CardContent>
               <MenuItemsSection />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="team" forceMount className="data-[state=inactive]:hidden">
+          <Card>
+            <CardHeader>
+              <CardTitle>Team</CardTitle>
+              <CardDescription>Invite colleagues and manage roles</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TeamSection />
             </CardContent>
           </Card>
         </TabsContent>

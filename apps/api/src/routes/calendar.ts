@@ -29,7 +29,8 @@ const STATUS_COLORS: Record<string, string> = {
   lead: "#F59E0B",
   discussion: "#3B82F6",
   booked: "#10B981",
-  completed: "#6B7280"
+  completed: "#6B7280",
+  lost: "#EF4444"
 };
 
 function startOfMonth(d: Date) {
@@ -225,4 +226,4 @@ router.get("/events", async (req: Request, res: Response) => {
 });
 
 export const calendarRouter = router;
-
+

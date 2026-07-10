@@ -13,6 +13,7 @@ enum EventStatus {
   discussion
   booked
   completed
+  lost
 }
 
 enum UnitType {
@@ -51,12 +52,35 @@ enum QuoteStatus {
 
 enum ItemCategory {
   appetizer
-  main_course
+  veg_gravy
+  chicken_gravy
+  mutton_gravy
+  rice_chicken
+  rice_mutton
+  breads
+  side_items
   bbq
   dessert
+  beverages
   equipment
   delivery
   other
+}
+
+enum TeamRole {
+  owner
+  admin
+  manager
+  sales
+  ops
+  viewer
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  declined
+  expired
 }
 
 enum QuoteUnit {
@@ -101,8 +125,29 @@ model Caterer {
   tasks             Task[]
   messages          Message[]
   paymentReminders  PaymentReminder[]
+  teamMembers       TeamMember[]
 
   @@map("caterers")
+}
+
+model TeamMember {
+  id           String       @id @default(cuid())
+  catererId    String
+  userId       String?
+  email        String
+  role         TeamRole     @default(viewer)
+  inviteToken  String?      @unique
+  inviteStatus InviteStatus @default(pending)
+  invitedBy    String
+  joinedAt     DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  caterer      Caterer      @relation(fields: [catererId], references: [id], onDelete: Cascade)
+
+  @@unique([catererId, email])
+  @@index([catererId])
+  @@index([inviteToken])
+  @@map("team_members")
 }
 
 model User {

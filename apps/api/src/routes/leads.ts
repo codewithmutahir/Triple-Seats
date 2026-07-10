@@ -20,7 +20,7 @@ import { timer } from "../lib/perf";
 
 const router = Router();
 
-const EVENT_STATUSES = ["lead", "discussion", "booked", "completed"] as const;
+const EVENT_STATUSES = ["lead", "discussion", "booked", "completed", "lost"] as const;
 type EventStatusFilter = (typeof EVENT_STATUSES)[number];
 
 type LeadPayload = {

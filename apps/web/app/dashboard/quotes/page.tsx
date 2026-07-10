@@ -23,6 +23,7 @@ import { QuoteSection } from "@/components/quote/quote-section";
 import {
   CATEGORY_LABELS,
   MENU_SECTIONS,
+  MENU_SECTION_GROUPS,
   type ItemCategory,
   type CateringPackage,
   type MenuItem,
@@ -576,8 +577,8 @@ function QuoteBuilderPage() {
   }, [lineItems]);
 
   const activeSummaryCategories = useMemo(() => {
-    return (["appetizer", "main_course", "bbq", "dessert", "equipment", "delivery"] as ItemCategory[]).filter(
-      (cat) => lineItems.some((i) => i.category === cat)
+    return MENU_SECTIONS.map((s) => s.category).filter((cat) =>
+      lineItems.some((i) => i.category === cat)
     );
   }, [lineItems]);
 
@@ -838,118 +839,134 @@ function QuoteBuilderPage() {
             onRemove={removePackageFromQuote}
           />
 
-          {MENU_SECTIONS.map((section) => {
-            const includedItems =
-              selectedPackage && isPackageIncludedSection(section.category)
-                ? packageItemsForSection(selectedPackage.items, section.category)
-                : undefined;
+          {MENU_SECTION_GROUPS.map((group) => (
+            <div key={group.groupLabel}>
+              <h3 className="border-b px-2 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {group.groupLabel}
+              </h3>
+              <div className="space-y-4 pt-4">
+                {group.categories.map((category) => {
+                  if (category === "delivery") {
+                    return (
+                      <Card key="delivery">
+                        <CardHeader className="pb-2">
+                          <CardTitle className="flex items-center gap-2 text-lg">
+                            <Truck className="h-5 w-5" />
+                            Delivery
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div>
+                              <Label>Distance (miles)</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                step="any"
+                                value={deliveryDistance}
+                                onChange={(e) => setDeliveryDistance(e.target.value)}
+                                placeholder="e.g. 12"
+                              />
+                            </div>
+                            <div>
+                              <Label>Rate per mile (USD)</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={deliveryRate}
+                                onChange={(e) => setDeliveryRate(e.target.value)}
+                                placeholder="e.g. 2.50"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            Delivery total:{" "}
+                            <span className="font-medium text-foreground">{formatUsd(deliveryTotal)}</span>
+                          </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={deliveryTotal <= 0}
+                            onClick={addDeliveryLine}
+                          >
+                            Add delivery to quote
+                          </Button>
+                          {(itemsByCategory.get("delivery") ?? []).length > 0 ? (
+                            <ul className="space-y-2 border-t pt-3">
+                              {(itemsByCategory.get("delivery") ?? []).map((item) => (
+                                <li
+                                  key={item.id}
+                                  className="flex items-center justify-between gap-2 text-sm"
+                                >
+                                  <span>{item.name}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{formatUsd(item.unitPrice)}</span>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8"
+                                      onClick={() => removeLineItemOptimistic(item.id)}
+                                    >
+                                      <Trash2 className="h-4 w-4 text-destructive" />
+                                    </Button>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </CardContent>
+                      </Card>
+                    );
+                  }
 
-            return (
-              <QuoteSection
-                key={section.category}
-                category={section.category}
-                label={section.label}
-                borderClass={section.borderClass}
-                emptyMessage={section.emptyMessage}
-                items={itemsByCategory.get(section.category) ?? []}
-                guestCount={liveGuestCount}
-                isOpen={openSections[section.category] ?? true}
-                onOpenChange={(open) => {
-                  setOpenSections((prev) => ({ ...prev, [section.category]: open }));
-                  quoteAnalytics.sectionToggled({
-                    eventId,
-                    quoteId: quote.id,
-                    category: section.category,
-                    isOpen: open
-                  });
-                }}
-                onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
-                onUpdate={updateLineItemOptimistic}
-                onDelete={removeLineItemOptimistic}
-                includedPackageName={
-                  includedItems !== undefined ? selectedPackage?.name : undefined
-                }
-                includedItems={includedItems}
-                catalogItems={menuItemsByCategory[section.category]}
-                customerType={customerType}
-                selectedPackageItems={packageItemSelections[section.category]}
-                onPackageItemsChange={(selections) =>
-                  handlePackageItemsChange(section.category, selections)
-                }
-              />
-            );
-          })}
+                  const section = MENU_SECTIONS.find((s) => s.category === category);
+                  if (!section) return null;
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Truck className="h-5 w-5" />
-                Delivery
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label>Distance (miles)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="any"
-                    value={deliveryDistance}
-                    onChange={(e) => setDeliveryDistance(e.target.value)}
-                    placeholder="e.g. 12"
-                  />
-                </div>
-                <div>
-                  <Label>Rate per mile (USD)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={deliveryRate}
-                    onChange={(e) => setDeliveryRate(e.target.value)}
-                    placeholder="e.g. 2.50"
-                  />
-                </div>
+                  const includedItems =
+                    selectedPackage && isPackageIncludedSection(section.category)
+                      ? packageItemsForSection(selectedPackage.items, section.category)
+                      : undefined;
+
+                  return (
+                    <QuoteSection
+                      key={section.category}
+                      category={section.category}
+                      label={section.label}
+                      borderClass={section.borderClass}
+                      emptyMessage={section.emptyMessage}
+                      items={itemsByCategory.get(section.category) ?? []}
+                      guestCount={liveGuestCount}
+                      isOpen={openSections[section.category] ?? true}
+                      onOpenChange={(open) => {
+                        setOpenSections((prev) => ({ ...prev, [section.category]: open }));
+                        quoteAnalytics.sectionToggled({
+                          eventId,
+                          quoteId: quote.id,
+                          category: section.category,
+                          isOpen: open
+                        });
+                      }}
+                      onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
+                      onUpdate={updateLineItemOptimistic}
+                      onDelete={removeLineItemOptimistic}
+                      includedPackageName={
+                        includedItems !== undefined ? selectedPackage?.name : undefined
+                      }
+                      includedItems={includedItems}
+                      catalogItems={menuItemsByCategory[section.category]}
+                      customerType={customerType}
+                      selectedPackageItems={packageItemSelections[section.category]}
+                      onPackageItemsChange={(selections) =>
+                        handlePackageItemsChange(section.category, selections)
+                      }
+                    />
+                  );
+                })}
               </div>
-              <p className="text-sm text-muted-foreground">
-                Delivery total:{" "}
-                <span className="font-medium text-foreground">{formatUsd(deliveryTotal)}</span>
-              </p>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={deliveryTotal <= 0}
-                onClick={addDeliveryLine}
-              >
-                Add delivery to quote
-              </Button>
-              {(itemsByCategory.get("delivery") ?? []).length > 0 ? (
-                <ul className="space-y-2 border-t pt-3">
-                  {(itemsByCategory.get("delivery") ?? []).map((item) => (
-                    <li
-                      key={item.id}
-                      className="flex items-center justify-between gap-2 text-sm"
-                    >
-                      <span>{item.name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{formatUsd(item.unitPrice)}</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => removeLineItemOptimistic(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </CardContent>
-          </Card>
+            </div>
+          ))}
         </div>
 
         <div className="space-y-4 lg:col-span-2">

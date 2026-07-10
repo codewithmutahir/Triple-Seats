@@ -3,7 +3,6 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { calculateQuoteTotals, formatTierLabel, getActiveTier } from "../lib/quote-totals";
-import { buildQuoteEmailHtml, generateQuotePdfBuffer } from "../lib/quote-pdf";
 import {
   parseItemCategory,
   parseQuoteStatus,
@@ -23,6 +22,10 @@ import { parsePackageSelections } from "../lib/package-selections";
 import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
 
 const router = Router();
+
+async function loadQuotePdf() {
+  return import("../lib/quote-pdf.js");
+}
 
 function paramId(req: Request, key = "id"): string {
   const raw = req.params[key];
@@ -1172,6 +1175,7 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Quote not found." });
     }
 
+    const { generateQuotePdfBuffer } = await loadQuotePdf();
     const buffer = await generateQuotePdfBuffer(quote as QuoteWithRelations);
     if (!buffer.length) {
       return res.status(500).json({ error: "Generated PDF was empty." });
@@ -1255,6 +1259,7 @@ async function processSendJob(quoteId: string, caterer: SessionCaterer) {
     }
 
     const quoteData = quoteForSend as QuoteWithRelations;
+    const { generateQuotePdfBuffer, buildQuoteEmailHtml } = await loadQuotePdf();
     const pdfBuffer = await generateQuotePdfBuffer(quoteData);
     if (!pdfBuffer.length) {
       throw new Error("Generated PDF was empty.");

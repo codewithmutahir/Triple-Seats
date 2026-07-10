@@ -73,7 +73,8 @@ const STATUS_TABS = [
   { value: "lead", label: "Lead" },
   { value: "discussion", label: "Discussion" },
   { value: "booked", label: "Booked" },
-  { value: "completed", label: "Completed" }
+  { value: "completed", label: "Completed" },
+  { value: "lost", label: "Lost" }
 ] as const;
 
 const EVENTS_PAGE_SIZE = LIST_PAGE_SIZE;
@@ -104,11 +105,12 @@ function CustomerTypeBadge({ type }: { type: string }) {
 
 function statusVariant(
   status: string
-): "lead" | "booked" | "completed" | "discussion" | "outline" {
+): "lead" | "booked" | "completed" | "discussion" | "lost" | "outline" {
   if (status === "lead") return "lead";
   if (status === "booked") return "booked";
   if (status === "completed") return "completed";
   if (status === "discussion") return "discussion";
+  if (status === "lost") return "lost";
   return "outline";
 }
 
@@ -399,7 +401,8 @@ function EventDetailInner() {
     statusMutation,
     notesMutation,
     guestMutation,
-    updateMutation
+    updateMutation,
+    changeCustomerType
   } = useEventDetailMutations(eventId);
 
   const error = queryError?.message ?? null;
@@ -460,6 +463,11 @@ function EventDetailInner() {
   function patchEvent(patch: { eventType?: EventTypeValue; customerType?: CustomerTypeValue }) {
     if (!eventId || !event) return;
     updateMutation.mutate(patch);
+  }
+
+  function patchCustomerType(next: CustomerTypeValue) {
+    if (!eventId || !event || next === event.customerType) return;
+    void changeCustomerType(next);
   }
 
   function patchStatus(next: string) {
@@ -632,8 +640,7 @@ function EventDetailInner() {
                   <CustomerTypeBadge type={event.customerType} />
                   <Select
                     value={event.customerType}
-                    disabled={fieldSaving}
-                    onValueChange={(v) => void patchEvent({ customerType: v as CustomerTypeValue })}
+                    onValueChange={(v) => patchCustomerType(v as CustomerTypeValue)}
                   >
                     <SelectTrigger className="w-[120px] bg-white">
                       <SelectValue placeholder="Customer type" />
@@ -653,6 +660,7 @@ function EventDetailInner() {
                         <SelectItem value="discussion">Discussion</SelectItem>
                         <SelectItem value="booked">Booked</SelectItem>
                         <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="lost">Lost</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

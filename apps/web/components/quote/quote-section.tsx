@@ -15,10 +15,18 @@ import { cn } from "@/lib/utils";
 
 const SECTION_ICONS: Record<string, LucideIcon> = {
   appetizer: Salad,
-  main_course: UtensilsCrossed,
+  veg_gravy: UtensilsCrossed,
+  chicken_gravy: Beef,
+  mutton_gravy: Beef,
+  rice_chicken: UtensilsCrossed,
+  rice_mutton: UtensilsCrossed,
+  breads: UtensilsCrossed,
+  side_items: Salad,
   bbq: Beef,
   dessert: Cake,
-  equipment: Package
+  beverages: Cake,
+  equipment: Package,
+  delivery: Package
 };
 
 type QuoteSectionProps = {

@@ -14,7 +14,8 @@ const STATUS_LEGEND = [
   { status: "lead", label: "Lead", color: "#F59E0B" },
   { status: "discussion", label: "Discussion", color: "#3B82F6" },
   { status: "booked", label: "Booked", color: "#10B981" },
-  { status: "completed", label: "Completed", color: "#6B7280" }
+  { status: "completed", label: "Completed", color: "#6B7280" },
+  { status: "lost", label: "Lost", color: "#EF4444" }
 ] as const;
 
 function internalApiOrigin(): string {

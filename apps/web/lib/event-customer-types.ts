@@ -1,3 +1,5 @@
+import type { ItemCategory } from "@/components/quote/types";
+
 export const EVENT_TYPE_VALUES = [
   "delivery",
   "pickup",
@@ -32,16 +34,17 @@ export function formatCustomerType(value: string): string {
 }
 
 /** Maps package included item labels to quote menu sections. */
-export const PACKAGE_ITEM_SECTIONS: Record<string, "appetizer" | "main_course" | "bbq" | "dessert"> = {
+export const PACKAGE_ITEM_SECTIONS: Record<string, ItemCategory> = {
   Appetizer: "appetizer",
-  "Veg Gravy": "main_course",
-  "Chicken Gravy": "main_course",
-  "Mutton Gravy": "main_course",
-  "Rice Chicken": "main_course",
+  "Veg Gravy": "veg_gravy",
+  "Chicken Gravy": "chicken_gravy",
+  "Mutton Gravy": "mutton_gravy",
+  "Rice Chicken": "rice_chicken",
+  "Rice Mutton": "rice_mutton",
   Grill: "bbq",
   Dessert: "dessert",
-  Naan: "main_course",
-  Salad: "main_course",
-  Raita: "main_course",
-  "Mirchi Ka Salan": "main_course"
+  Naan: "breads",
+  Salad: "side_items",
+  Raita: "side_items",
+  "Mirchi Ka Salan": "side_items"
 };

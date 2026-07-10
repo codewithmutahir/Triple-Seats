@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -20,6 +20,7 @@ export function useEventDetailMutations(eventId: string | null) {
   const qc = useQueryClient();
   const detailKey = queryKeys.events.detail(eventId ?? "");
   const statusSeqRef = useRef(0);
+  const customerTypeMutationInFlight = useRef(false);
 
   const invalidateListsLater = () => {
     window.setTimeout(() => {
@@ -141,11 +142,37 @@ export function useEventDetailMutations(eventId: string | null) {
     }
   });
 
+  const changeCustomerType = useCallback(
+    async (newType: "b2b" | "b2c") => {
+      if (!eventId || customerTypeMutationInFlight.current) return;
+      customerTypeMutationInFlight.current = true;
+
+      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+        old ? { ...old, customerType: newType } : old
+      );
+
+      try {
+        await api.events.updateCustomerType(eventId, newType);
+        window.setTimeout(() => {
+          void qc.invalidateQueries({ queryKey: queryKeys.events.all });
+          void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
+        }, 0);
+      } catch {
+        void qc.invalidateQueries({ queryKey: detailKey });
+        toast.error("Failed to update customer type");
+      } finally {
+        customerTypeMutationInFlight.current = false;
+      }
+    },
+    [eventId, qc, detailKey]
+  );
+
   return {
     statusMutation,
     notesMutation,
     guestMutation,
     updateMutation,
+    changeCustomerType,
     isSaving:
       statusMutation.isPending ||
       notesMutation.isPending ||

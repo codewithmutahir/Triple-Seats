@@ -1,6 +1,18 @@
 import { lineItemTotal } from "./quote-totals";
 
-const FOOD_CATEGORIES = new Set(["appetizer", "main_course", "bbq", "dessert"]);
+const FOOD_CATEGORIES = new Set([
+  "appetizer",
+  "veg_gravy",
+  "chicken_gravy",
+  "mutton_gravy",
+  "rice_chicken",
+  "rice_mutton",
+  "breads",
+  "side_items",
+  "bbq",
+  "dessert",
+  "beverages"
+]);
 
 export type QuoteLineItemLike = {
   category: string;

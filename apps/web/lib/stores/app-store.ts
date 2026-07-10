@@ -105,6 +105,7 @@ export type EventsStats = {
   discussion: number;
   booked: number;
   completed: number;
+  lost: number;
 };
 
 export type Conversation = {
