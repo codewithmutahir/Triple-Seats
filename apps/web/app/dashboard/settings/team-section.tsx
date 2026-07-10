@@ -76,6 +76,39 @@ function patchMemberInCache(
   });
 }
 
+type ActivityLogCache = {
+  logs: Array<{
+    id: string;
+    actorId: string;
+    actorEmail: string | null;
+    action: string;
+    entityType: string | null;
+    entityId: string | null;
+    summary: string;
+    createdAt: string;
+  }>;
+};
+
+function prependActivityLog(
+  qc: ReturnType<typeof useQueryClient>,
+  entry: { summary: string; actorEmail?: string | null }
+) {
+  qc.setQueryData<ActivityLogCache>(queryKeys.team.activity(), (old) => {
+    const optimistic = {
+      id: `temp_activity_${Date.now()}`,
+      actorId: "",
+      actorEmail: entry.actorEmail ?? null,
+      action: "team.role_change",
+      entityType: "team_member",
+      entityId: null,
+      summary: entry.summary,
+      createdAt: new Date().toISOString()
+    };
+    const logs = old?.logs ?? [];
+    return { logs: [optimistic, ...logs.filter((log) => !log.id.startsWith("temp_activity_"))] };
+  });
+}
+
 function profileUnchanged(member: TeamMemberRow, name: string, phone: string, jobTitle: string) {
   return (
     (member.name ?? "").trim() === name.trim() &&
@@ -265,8 +298,8 @@ export function TeamSection() {
   function scheduleActivityRefresh() {
     if (activityRefreshTimer.current) clearTimeout(activityRefreshTimer.current);
     activityRefreshTimer.current = setTimeout(() => {
-      void qc.invalidateQueries({ queryKey: queryKeys.team.activity() });
-    }, 600);
+      void qc.refetchQueries({ queryKey: queryKeys.team.activity() });
+    }, 300);
   }
 
   const { data, isLoading } = useQuery({
@@ -381,20 +414,34 @@ export function TeamSection() {
   });
 
   const roleMutation = useMutation({
-    mutationFn: ({ memberId, role }: { memberId: string; role: TeamRole }) =>
-      api.team.updateRole(memberId, role),
-    onMutate: async ({ memberId, role }) => {
+    mutationFn: ({
+      memberId,
+      role
+    }: {
+      memberId: string;
+      role: TeamRole;
+      previousRole: TeamRole;
+    }) => api.team.updateRole(memberId, role),
+    onMutate: async ({ memberId, role, previousRole }) => {
       await qc.cancelQueries({ queryKey: queryKeys.team.list() });
       const prev = qc.getQueryData<TeamListCache>(queryKeys.team.list());
-      const current = prev?.members.find((m) => m.id === memberId);
-      if (!current || current.role === role) {
+      if (previousRole === role) {
         return { prev, skipped: true as const };
       }
-      patchMemberInCache(qc, memberId, { role });
-      return { prev, skipped: false as const };
+      // Role dropdown already updated cache in handleRoleChange — keep that UX.
+      const inCache = prev?.members.find((m) => m.id === memberId);
+      if (inCache && inCache.role !== role) {
+        patchMemberInCache(qc, memberId, { role });
+      }
+      return { prev, skipped: false as const, previousRole };
     },
-    onSuccess: (_data, _vars, ctx) => {
+    onSuccess: (_data, { memberId, role, previousRole }, ctx) => {
       if (ctx?.skipped) return;
+      prependActivityLog(qc, {
+        summary: `Changed role for ${
+          ctx?.prev?.members.find((m) => m.id === memberId)?.email ?? "member"
+        } from ${previousRole} to ${role}`
+      });
       scheduleActivityRefresh();
     },
     onError: (_err, _vars, ctx) => {
@@ -413,7 +460,7 @@ export function TeamSection() {
 
     roleSaveTimers.current[member.id] = setTimeout(() => {
       delete roleSaveTimers.current[member.id];
-      roleMutation.mutate({ memberId: member.id, role });
+      roleMutation.mutate({ memberId: member.id, role, previousRole: member.role });
     }, 120);
   }
 
