@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
@@ -7,6 +7,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import type { QuoteBuilderPayload } from "@/lib/quote-builder-api";
+import type { PackageSelections } from "@/lib/package-selections";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { resolveCreatedLineItem } from "@/lib/quote-line-items";
 import { queryKeys } from "@/lib/query-keys";
@@ -96,35 +97,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const packageOpSeqRef = useRef(0);
   const quoteUpdateSeqRef = useRef(0);
   const addingItemsRef = useRef<Set<string>>(new Set());
-  const [saveUi, setSaveUi] = useState({ pending: false, success: false, error: false });
-  const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  const markSavePending = () => {
-    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
-    setSaveUi({ pending: true, success: false, error: false });
-  };
-
-  const markSaveSuccess = () => {
-    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
-    setSaveUi({ pending: false, success: true, error: false });
-    saveSuccessTimerRef.current = setTimeout(() => {
-      setSaveUi((prev) => ({ ...prev, success: false }));
-    }, 2000);
-  };
-
-  const markSaveError = () => {
-    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
-    setSaveUi({ pending: false, success: false, error: true });
-    saveSuccessTimerRef.current = setTimeout(() => {
-      setSaveUi((prev) => ({ ...prev, error: false }));
-    }, 4000);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
-    };
-  }, []);
 
   function lineItemDedupKey(category: string, name: string): string {
     return `${category}:${name}`;
@@ -433,7 +405,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       api.quotes.update(quoteId, data),
     onMutate: async ({ data }) => {
       if (!canWrite) return denyMutation();
-      markSavePending();
       const opId = ++quoteUpdateSeqRef.current;
       const prev = qc.getQueryData<BuilderData>(builderKey);
       if (!prev?.quote) return denyMutation();
@@ -446,87 +417,32 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           fromStatus: prev.quote.status,
           toStatus: data.status
         });
-      } else {
-        const fields: string[] = [];
-        if (typeof data.taxRate === "number") fields.push("taxRate");
-        if (typeof data.depositPct === "number") fields.push("depositPct");
-        if (data.notes !== undefined) fields.push("notes");
-        if (data.dueDate !== undefined) fields.push("dueDate");
-        if (fields.length > 0) {
-          quoteAnalytics.settingsUpdated({
-            ...ctx,
-            fields,
-            taxRate: typeof data.taxRate === "number" ? data.taxRate : undefined,
-            depositPct: typeof data.depositPct === "number" ? data.depositPct : undefined
-          });
-        }
       }
 
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
-          ...(typeof data.taxRate === "number" ? { taxRate: data.taxRate as number } : {}),
-          ...(typeof data.depositPct === "number" ? { depositPct: data.depositPct as number } : {}),
-          ...(data.notes !== undefined ? { notes: data.notes as string | null } : {}),
-          ...(data.dueDate !== undefined
-            ? { dueDate: (data.dueDate as string | null) ?? null }
-            : {}),
-          ...(typeof data.status === "string" ? { status: data.status as BuilderData["quote"]["status"] } : {}),
-          ...(data.packageSelections !== undefined
-            ? {
-                packageSelections: data.packageSelections as BuilderData["quote"]["packageSelections"]
-              }
-            : {})
+          ...(typeof data.status === "string" ? { status: data.status as BuilderData["quote"]["status"] } : {})
         }
       }));
       return { revert, opId };
     },
     onSuccess: (result, vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
-      markSaveSuccess();
-
-      if (vars.data.packageSelections !== undefined) {
-        const stored = vars.data.packageSelections as Record<string, Record<string, unknown[]>>;
-        const categories = Object.keys(stored);
-        const totalSelections = categories.reduce(
-          (sum, cat) =>
-            sum +
-            Object.values(stored[cat] ?? {}).reduce(
-              (inner, items) => inner + (Array.isArray(items) ? items.length : 0),
-              0
-            ),
-          0
-        );
-        quoteAnalytics.packageItemsUpdated({
-          ...builderContext(),
-          categories,
-          totalSelections
-        });
-      }
 
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
-          ...(typeof vars.data.taxRate === "number" ? { taxRate: result.quote.taxRate } : {}),
-          ...(typeof vars.data.depositPct === "number" ? { depositPct: result.quote.depositPct } : {}),
-          ...(vars.data.notes !== undefined ? { notes: result.quote.notes } : {}),
-          ...(vars.data.dueDate !== undefined
-            ? { dueDate: result.quote.dueDate ?? null }
-            : {}),
           ...(typeof vars.data.status === "string"
             ? { status: result.quote.status }
-            : {}),
-          ...(vars.data.packageSelections !== undefined
-            ? { packageSelections: result.quote.packageSelections }
             : {})
         }
       }));
     },
     onError: (err, _vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current || !ctx.revert) return;
-      markSaveError();
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -535,6 +451,140 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         }
       }));
       handleMutationError(err, ctx, "Failed to save quote");
+    }
+  });
+
+  type QuoteSettingsPayload = {
+    taxRate: number;
+    depositPct: number;
+    dueDate: string | null;
+    notes: string | null;
+  };
+
+  const saveQuoteSettingsMutation = useMutation({
+    mutationFn: ({ quoteId, settings }: { quoteId: string; settings: QuoteSettingsPayload }) =>
+      api.quotes.update(quoteId, settings),
+    onMutate: async ({ settings }) => {
+      if (!canWrite) return denyMutation();
+      const prev = qc.getQueryData<BuilderData>(builderKey);
+      if (!prev?.quote) return denyMutation();
+
+      const revert: QuoteMetaRevert = {
+        taxRate: prev.quote.taxRate,
+        depositPct: prev.quote.depositPct,
+        dueDate: prev.quote.dueDate ?? null,
+        notes: prev.quote.notes
+      };
+
+      quoteAnalytics.settingsUpdated({
+        ...builderContext(),
+        fields: ["taxRate", "depositPct", "notes", "dueDate"],
+        taxRate: settings.taxRate,
+        depositPct: settings.depositPct
+      });
+
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          taxRate: settings.taxRate,
+          depositPct: settings.depositPct,
+          notes: settings.notes,
+          dueDate: settings.dueDate
+        }
+      }));
+
+      return { revert };
+    },
+    onSuccess: (result, _vars, ctx) => {
+      if (!ctx) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          taxRate: result.quote.taxRate,
+          depositPct: result.quote.depositPct,
+          notes: result.quote.notes,
+          dueDate: result.quote.dueDate ?? null
+        }
+      }));
+    },
+    onError: (err, _vars, ctx) => {
+      if (!ctx?.revert) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          ...ctx.revert
+        }
+      }));
+      handleMutationError(err, ctx, "Failed to save settings");
+    }
+  });
+
+  const updatePackageSelectionsMutation = useMutation({
+    mutationFn: ({
+      quoteId,
+      packageSelections
+    }: {
+      quoteId: string;
+      packageSelections: PackageSelections;
+    }) => api.quotes.update(quoteId, { packageSelections }),
+    onMutate: async ({ packageSelections }) => {
+      if (!canWrite) return denyMutation();
+      const prev = qc.getQueryData<BuilderData>(builderKey);
+      if (!prev?.quote) return denyMutation();
+
+      const revert: QuoteMetaRevert = {
+        packageSelections: prev.quote.packageSelections
+      };
+
+      const categories = Object.keys(packageSelections);
+      const totalSelections = categories.reduce(
+        (sum, cat) =>
+          sum +
+          Object.values(packageSelections[cat] ?? {}).reduce(
+            (inner, items) => inner + items.length,
+            0
+          ),
+        0
+      );
+      quoteAnalytics.packageItemsUpdated({
+        ...builderContext(),
+        categories,
+        totalSelections
+      });
+
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          packageSelections
+        }
+      }));
+
+      return { revert };
+    },
+    onSuccess: (result, _vars, ctx) => {
+      if (!ctx) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          packageSelections: result.quote.packageSelections
+        }
+      }));
+    },
+    onError: (err, _vars, ctx) => {
+      if (!ctx?.revert) return;
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          ...ctx.revert
+        }
+      }));
+      handleMutationError(err, ctx, "Failed to save package selections");
     }
   });
 
@@ -753,6 +803,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     removeItemMutation,
     updateItemMutation,
     updateQuoteMutation,
+    saveQuoteSettingsMutation,
+    updatePackageSelectionsMutation,
     enqueueQuoteUpdate,
     addPackageMutation,
     removePackageMutation,
@@ -766,9 +818,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     isItemMutating,
     isPackageMutating,
     isGuestCountMutating,
-    isSaving: saveUi.pending,
-    isSaveSuccess: saveUi.success,
-    isSaveError: saveUi.error && !saveUi.pending,
     canWriteQuotes: canWrite
   };
 }

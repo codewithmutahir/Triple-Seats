@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, Info, Package } from "lucide-react";
+import { Check, ChevronDown, Info, Loader2, Package } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
@@ -472,3 +472,37 @@ function activeTierLabel(
 }
 
 export { packageLineTotal };
+
+type PackageSelectionsApplyBarProps = {
+  dirty: boolean;
+  applying: boolean;
+  onApply: () => void;
+  readOnly?: boolean;
+};
+
+export function PackageSelectionsApplyBar({
+  dirty,
+  applying,
+  onApply,
+  readOnly = false
+}: PackageSelectionsApplyBarProps) {
+  if (!dirty || readOnly) return null;
+
+  return (
+    <div className="sticky bottom-10 z-20 border-t bg-background/95 p-3 backdrop-blur-sm">
+      <Button type="button" onClick={onApply} disabled={applying} className="w-full" size="sm">
+        {applying ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Applying...
+          </>
+        ) : (
+          <>
+            <Check className="mr-2 h-4 w-4" />
+            Apply selections
+          </>
+        )}
+      </Button>
+    </div>
+  );
+}
