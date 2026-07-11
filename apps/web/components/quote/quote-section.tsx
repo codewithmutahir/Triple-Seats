@@ -7,6 +7,7 @@ import { AddItemForm, type AddItemPayload } from "@/components/quote/add-item-fo
 import { LineItemRow } from "@/components/quote/line-item-row";
 import { PackageItemsSection } from "@/components/quote/package-item-selector";
 import type { ItemCategory, MenuItem, PackageIncludedItem, QuoteLineItem } from "@/components/quote/types";
+import type { UiPackageSelectionEntry } from "@/lib/package-selections";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -45,8 +46,8 @@ type QuoteSectionProps = {
   includedItems?: PackageIncludedItem[];
   catalogItems?: MenuItem[];
   customerType?: "b2b" | "b2c";
-  selectedPackageItems?: Record<string, string[]>;
-  onPackageItemsChange?: (selections: Record<string, string[]>) => void;
+  selectedPackageItems?: Record<string, UiPackageSelectionEntry[]>;
+  onPackageItemsChange?: (selections: Record<string, UiPackageSelectionEntry[]>) => void;
   readOnly?: boolean;
 };
 

@@ -4,6 +4,7 @@ import { Check, ChevronDown, Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import type { MenuItem, PackageIncludedItem } from "@/components/quote/types";
+import type { UiPackageSelectionEntry } from "@/lib/package-selections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -35,7 +36,7 @@ type PackageItemSelectorProps = {
   includedItem: PackageIncludedItem;
   catalogItems: MenuItem[];
   selectedItemIds: string[];
-  onSelect: (itemId: string) => void;
+  onSelect: (item: MenuItem) => void;
   onDeselect: (itemId: string) => void;
   disabled?: boolean;
 };
@@ -69,7 +70,8 @@ export function PackageItemSelector({
       if (selectedItemIds.includes(itemId)) {
         onDeselect(itemId);
       } else if (canSelectMore) {
-        onSelect(itemId);
+        const menuItem = catalogItems.find((item) => item.id === itemId);
+        if (menuItem) onSelect(menuItem);
       }
     },
     [selectedItemIds, canSelectMore, onSelect, onDeselect]
@@ -197,8 +199,8 @@ type PackageItemsSectionProps = {
   includedItems: PackageIncludedItem[];
   catalogItems: MenuItem[];
   packageName: string;
-  selectedPackageItems: Record<string, string[]>;
-  onPackageItemsChange: (selections: Record<string, string[]>) => void;
+  selectedPackageItems: Record<string, UiPackageSelectionEntry[]>;
+  onPackageItemsChange: (selections: Record<string, UiPackageSelectionEntry[]>) => void;
   disabled?: boolean;
 };
 
@@ -211,9 +213,12 @@ export function PackageItemsSection({
   disabled
 }: PackageItemsSectionProps) {
   const handleSelect = useCallback(
-    (itemLabel: string, menuItemId: string) => {
+    (itemLabel: string, menuItem: MenuItem) => {
       const current = selectedPackageItems[itemLabel] ?? [];
-      const updated = { ...selectedPackageItems, [itemLabel]: [...current, menuItemId] };
+      const updated = {
+        ...selectedPackageItems,
+        [itemLabel]: [...current, { id: menuItem.id, name: menuItem.name }]
+      };
       onPackageItemsChange(updated);
     },
     [selectedPackageItems, onPackageItemsChange]
@@ -224,7 +229,7 @@ export function PackageItemsSection({
       const current = selectedPackageItems[itemLabel] ?? [];
       const updated = {
         ...selectedPackageItems,
-        [itemLabel]: current.filter((id) => id !== menuItemId)
+        [itemLabel]: current.filter((entry) => entry.id !== menuItemId)
       };
       onPackageItemsChange(updated);
     },
@@ -238,8 +243,8 @@ export function PackageItemsSection({
           key={item.id}
           includedItem={item}
           catalogItems={catalogItems}
-          selectedItemIds={selectedPackageItems[item.label] ?? []}
-          onSelect={(menuItemId) => handleSelect(item.label, menuItemId)}
+          selectedItemIds={(selectedPackageItems[item.label] ?? []).map((entry) => entry.id)}
+          onSelect={(menuItem) => handleSelect(item.label, menuItem)}
           onDeselect={(menuItemId) => handleDeselect(item.label, menuItemId)}
           disabled={disabled}
         />

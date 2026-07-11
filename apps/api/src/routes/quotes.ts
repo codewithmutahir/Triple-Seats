@@ -1208,8 +1208,17 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Quote not found." });
     }
 
+    const body = req.body as { packageSelections?: unknown };
+    let quoteForPdf = quote as QuoteWithRelations;
+    if (body.packageSelections !== undefined) {
+      const parsed = parsePackageSelections(body.packageSelections);
+      if (parsed !== null) {
+        quoteForPdf = { ...quoteForPdf, packageSelections: parsed };
+      }
+    }
+
     const { generateQuotePdfBuffer } = await loadQuotePdf();
-    const buffer = await generateQuotePdfBuffer(quote as QuoteWithRelations);
+    const buffer = await generateQuotePdfBuffer(quoteForPdf);
     if (!buffer.length) {
       return res.status(500).json({ error: "Generated PDF was empty." });
     }

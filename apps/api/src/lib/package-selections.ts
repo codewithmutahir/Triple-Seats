@@ -134,9 +134,20 @@ function slotHasSelections(
   selections: PackageSelections | null | undefined,
   label: string
 ): PackageSelectionEntry[] | null {
+  if (!selections) return null;
+
   const section = PACKAGE_ITEM_SECTIONS[label];
-  if (!section || !selections?.[section]?.[label]?.length) return null;
-  return selections[section][label];
+  if (section && selections[section]?.[label]?.length) {
+    return selections[section][label];
+  }
+
+  // Fallback: find slot by label in any category (handles legacy/mismatched keys).
+  for (const slots of Object.values(selections)) {
+    const entries = slots[label];
+    if (entries?.length) return entries;
+  }
+
+  return null;
 }
 
 export function formatPackageIncludesWithSelections(
@@ -172,9 +183,15 @@ export function listPackageIncludeLines(
         detail: picked.map((entry) => entry.name).join(", ")
       };
     }
+    if (item.quantity > 1) {
+      return {
+        label: item.label,
+        detail: `Up to ${item.quantity} items (not selected)`
+      };
+    }
     return {
       label: item.label,
-      detail: item.quantity > 1 ? `×${item.quantity}` : "Included"
+      detail: "Not selected"
     };
   });
 }

@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 
 import { ApiError, isForbiddenError } from "@/lib/api-error";
+import { parseApiError } from "@/lib/user-facing-error";
 
 /** Throw before optimistic updates — mutationFn will not run; onError stays silent for 403. */
 export function denyMutation(): never {
@@ -13,9 +14,36 @@ export function wasMutationAborted(ctx: unknown): boolean {
   );
 }
 
+let lastToastMessage = "";
+let lastToastAt = 0;
+
+function userFacingMutationMessage(err: unknown, fallbackMessage: string): string {
+  if (err instanceof ApiError) {
+    return parseApiError({ error: err.message }, err.status);
+  }
+  if (err instanceof Error && err.message) {
+    return parseApiError({ error: err.message });
+  }
+  return fallbackMessage;
+}
+
 /** Revert cache and toast only for unexpected failures — silent on 403 / permission abort. */
 export function handleMutationError(err: unknown, ctx: unknown, fallbackMessage: string) {
   if (wasMutationAborted(ctx) || isForbiddenError(err)) return;
-  const message = err instanceof Error && err.message ? err.message : fallbackMessage;
+  if (
+    err &&
+    typeof err === "object" &&
+    "silent" in err &&
+    (err as { silent?: boolean }).silent
+  ) {
+    return;
+  }
+
+  const message = userFacingMutationMessage(err, fallbackMessage);
+  const now = Date.now();
+  if (message === lastToastMessage && now - lastToastAt < 4000) return;
+
+  lastToastMessage = message;
+  lastToastAt = now;
   toast.error(message);
 }

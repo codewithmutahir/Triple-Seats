@@ -54,7 +54,8 @@ import {
   packageSelectionsEqual,
   storedSelectionsToUi,
   uiSelectionsToStored,
-  type UiPackageSelections
+  type UiPackageSelections,
+  type UiPackageSelectionEntry
 } from "@/lib/package-selections";
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { useDebouncedCallback } from "@/lib/use-debounce";
@@ -386,7 +387,7 @@ function QuoteBuilderPage() {
   useEffect(() => {
     if (!quote || !packageSelectionsInitialized.current) return;
     savePackageSelections();
-  }, [packageItemSelections, savePackageSelections, quote]);
+  }, [packageItemSelections, savePackageSelections]);
 
   const addLineItemOptimistic = useCallback(
     (category: ItemCategory, payload: AddItemPayload) => {
@@ -527,7 +528,7 @@ function QuoteBuilderPage() {
   );
 
   const handlePackageItemsChange = useCallback(
-    (category: string, selections: Record<string, string[]>) => {
+    (category: string, selections: Record<string, UiPackageSelectionEntry[]>) => {
       setPackageItemSelections((prev) => ({
         ...prev,
         [category]: selections
@@ -557,10 +558,19 @@ function QuoteBuilderPage() {
 
     setPdfLoading(true);
     try {
-      await flushPackageSelections();
+      const storedSelections = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
+
+      try {
+        await flushPackageSelections();
+      } catch {
+        // Still generate PDF with current UI selections even if background save failed.
+      }
+
       const res = await fetch(`/api/quotes/${encodeURIComponent(quote.id)}/pdf`, {
         method: "POST",
-        credentials: "include"
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packageSelections: storedSelections })
       });
       if (!res.ok) {
         if (res.status === 403) return;
@@ -593,7 +603,7 @@ function QuoteBuilderPage() {
     } finally {
       setPdfLoading(false);
     }
-  }, [quote, pdfLoading, flushPackageSelections, eventId, totals.grandTotal]);
+  }, [quote, pdfLoading, flushPackageSelections, packageItemSelections, menuItemsByCategory, eventId, totals.grandTotal]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
