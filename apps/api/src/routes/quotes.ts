@@ -920,18 +920,38 @@ router.post("/:id/items", async (req: Request, res: Response) => {
       if (menuItem) menuItemId = menuItem.id;
     }
 
-    await prisma.quoteLineItem.create({
-      data: {
+    const trimmedName = body.name.trim();
+    const existing = await prisma.quoteLineItem.findFirst({
+      where: {
         quoteId,
-        menuItemId,
         category,
-        name: body.name.trim(),
-        quantity: Math.max(0, quantity),
-        unitPrice: Math.max(0, body.unitPrice),
-        unitType,
-        notes: body.notes?.trim() || null
+        name: trimmedName,
+        unitType
       }
     });
+
+    if (existing) {
+      await prisma.quoteLineItem.update({
+        where: { id: existing.id },
+        data: {
+          quantity: existing.quantity + Math.max(0, quantity),
+          unitPrice: Math.max(0, body.unitPrice)
+        }
+      });
+    } else {
+      await prisma.quoteLineItem.create({
+        data: {
+          quoteId,
+          menuItemId,
+          category,
+          name: trimmedName,
+          quantity: Math.max(0, quantity),
+          unitPrice: Math.max(0, body.unitPrice),
+          unitType,
+          notes: body.notes?.trim() || null
+        }
+      });
+    }
 
     const updated = await persistQuoteTotals(quoteId);
     if (!updated) {
@@ -1180,9 +1200,9 @@ router.post("/:id/duplicate", async (req: Request, res: Response) => {
 });
 
 router.post("/:id/pdf", async (req: Request, res: Response) => {
+  const quoteId = paramId(req);
   try {
     const { caterer } = await getAuthorizedSession(req, "quotes:read");
-    const quoteId = paramId(req);
     const quote = await loadQuoteForCaterer(quoteId, caterer.id);
     if (!quote) {
       return res.status(404).json({ error: "Quote not found." });
@@ -1198,7 +1218,16 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
     res.setHeader("Content-Disposition", `attachment; filename="quote-${quoteId}.pdf"`);
     return res.end(buffer);
   } catch (e) {
-    return handleRouteError(res, e, "Quotes");
+    const status =
+      e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 500;
+    const message =
+      e instanceof Error && e.message ? e.message : "Failed to generate PDF";
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[pdf route] Error:", { quoteId, message, status });
+    }
+    return res.status(status === 404 ? 404 : 500).json({
+      error: status === 500 ? "Failed to generate PDF" : message
+    });
   }
 });
 
