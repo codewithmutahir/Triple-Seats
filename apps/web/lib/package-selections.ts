@@ -4,7 +4,20 @@ export type PackageSelectionEntry = { id: string; name: string };
 
 export type PackageSelections = Record<string, Record<string, PackageSelectionEntry[]>>;
 
-export type UiPackageSelections = Record<string, Record<string, string[]>>;
+export type UiPackageSelectionEntry = { id: string; name: string };
+
+export type UiPackageSelections = Record<string, Record<string, UiPackageSelectionEntry[]>>;
+
+function findMenuItemName(
+  id: string,
+  menuItemsByCategory: Partial<Record<ItemCategory, MenuItem[]>>
+): string | undefined {
+  for (const items of Object.values(menuItemsByCategory)) {
+    const match = items?.find((item) => item.id === id);
+    if (match) return match.name;
+  }
+  return undefined;
+}
 
 export function storedSelectionsToUi(
   stored: PackageSelections | null | undefined
@@ -13,9 +26,9 @@ export function storedSelectionsToUi(
   if (!stored) return result;
 
   for (const [category, byLabel] of Object.entries(stored)) {
-    const slots: Record<string, string[]> = {};
+    const slots: Record<string, UiPackageSelectionEntry[]> = {};
     for (const [label, entries] of Object.entries(byLabel ?? {})) {
-      slots[label] = entries.map((entry) => entry.id);
+      slots[label] = entries.map((entry) => ({ id: entry.id, name: entry.name }));
     }
     result[category] = slots;
   }
@@ -29,15 +42,17 @@ export function uiSelectionsToStored(
   const result: PackageSelections = {};
 
   for (const [category, byLabel] of Object.entries(ui)) {
-    for (const [label, ids] of Object.entries(byLabel)) {
-      if (!ids.length) continue;
-      const catalog = menuItemsByCategory[category as ItemCategory] ?? [];
-      const entries = ids.map((id) => {
-        const item = catalog.find((menuItem) => menuItem.id === id);
-        return { id, name: item?.name ?? "Item" };
-      });
+    for (const [label, entries] of Object.entries(byLabel)) {
+      if (!entries.length) continue;
+      const mapped = entries.map((entry) => ({
+        id: entry.id,
+        name:
+          entry.name ||
+          findMenuItemName(entry.id, menuItemsByCategory) ||
+          "Unknown item"
+      }));
       if (!result[category]) result[category] = {};
-      result[category][label] = entries;
+      result[category][label] = mapped;
     }
   }
 

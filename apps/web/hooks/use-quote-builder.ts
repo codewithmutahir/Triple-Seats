@@ -486,8 +486,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
             : {}),
           ...(typeof vars.data.status === "string"
             ? { status: result.quote.status }
+            : {}),
+          ...(vars.data.packageSelections !== undefined
+            ? { packageSelections: result.quote.packageSelections }
             : {})
-          // Keep optimistic packageSelections — never replace from server response.
         }
       }));
     },
