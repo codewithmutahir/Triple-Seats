@@ -95,6 +95,11 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const packageRemovedRef = useRef(false);
   const packageOpSeqRef = useRef(0);
   const quoteUpdateSeqRef = useRef(0);
+  const addingItemsRef = useRef<Set<string>>(new Set());
+
+  function lineItemDedupKey(category: string, name: string): string {
+    return `${category}:${name}`;
+  }
 
   type QuoteMetaRevert = Partial<
     Pick<
@@ -193,6 +198,11 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     }) => api.quotes.addItem(quoteId, item),
     onMutate: async ({ tempItem }) => {
       if (!canWrite) return denyMutation();
+      const itemKey = lineItemDedupKey(tempItem.category, tempItem.name);
+      if (addingItemsRef.current.has(itemKey)) {
+        throw Object.assign(new Error("Item already being added"), { silent: true });
+      }
+      addingItemsRef.current.add(itemKey);
       quoteAnalytics.itemAdded({
         ...builderContext(),
         category: tempItem.category,
@@ -209,38 +219,56 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           lineItems: [...(old.quote.lineItems ?? []), tempItem]
         }
       }));
-      return { tempItem };
+      return { tempItem, itemKey };
     },
     onSuccess: (result, _vars, ctx) => {
       if (!ctx?.tempItem) return;
-      patchBuilder((old) => ({
-        ...old,
-        quote: {
-          ...old.quote,
-          lineItems: old.quote.lineItems.flatMap((item) => {
-            if (item.id !== ctx.tempItem.id) return [item];
-            const resolved = resolveCreatedLineItem(result.quote.lineItems, old.quote.lineItems, {
-              category: item.category,
-              name: item.name,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              unitType: item.unitType,
-              menuItemId: item.menuItemId ?? undefined
-            });
-            if (!resolved) return [item];
-            return [
-              {
-                ...resolved,
-                quantity: item.quantity,
-                unitPrice: item.unitPrice,
-                unitType: item.unitType
-              }
-            ];
-          })
+      patchBuilder((old) => {
+        const resolved = resolveCreatedLineItem(result.quote.lineItems, old.quote.lineItems, {
+          category: ctx.tempItem.category,
+          name: ctx.tempItem.name,
+          quantity: ctx.tempItem.quantity,
+          unitPrice: ctx.tempItem.unitPrice,
+          unitType: ctx.tempItem.unitType,
+          menuItemId: ctx.tempItem.menuItemId ?? undefined
+        });
+
+        const serverMatch =
+          resolved ??
+          result.quote.lineItems.find(
+            (item) =>
+              item.category === ctx.tempItem.category &&
+              item.name === ctx.tempItem.name &&
+              item.unitType === ctx.tempItem.unitType
+          );
+
+        if (!serverMatch) {
+          return old;
         }
-      }));
+
+        const withoutTemp = old.quote.lineItems.filter((item) => item.id !== ctx.tempItem.id);
+        const hasExisting = withoutTemp.some((item) => item.id === serverMatch.id);
+
+        return {
+          ...old,
+          quote: {
+            ...old.quote,
+            lineItems: hasExisting
+              ? withoutTemp.map((item) => (item.id === serverMatch.id ? serverMatch : item))
+              : [...withoutTemp, serverMatch]
+          }
+        };
+      });
     },
     onError: (err, _vars, ctx) => {
+      if (
+        err &&
+        typeof err === "object" &&
+        "silent" in err &&
+        (err as { silent?: boolean }).silent
+      ) {
+        return;
+      }
       if (!ctx?.tempItem) return;
       patchBuilder((old) => {
         if (!old.quote.lineItems.some((item) => item.id === ctx.tempItem.id)) return old;
@@ -253,6 +281,12 @@ export function useQuoteBuilderMutations(eventId: string | null) {
         };
       });
       handleMutationError(err, ctx, "Failed to add item");
+    },
+    onSettled: (_data, _err, _vars, ctx) => {
+      if (!ctx?.itemKey) return;
+      setTimeout(() => {
+        addingItemsRef.current.delete(ctx.itemKey);
+      }, 2000);
     }
   });
 

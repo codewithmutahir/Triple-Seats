@@ -63,8 +63,9 @@ const CATEGORY_ORDER = [
   "other"
 ] as const;
 
-const CATEGORY_LABELS: Record<(typeof CATEGORY_ORDER)[number], string> = {
+const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
   appetizer: "APPETIZER",
+  main_course: "MAIN COURSE",
   veg_gravy: "VEG GRAVY",
   chicken_gravy: "CHICKEN GRAVY",
   mutton_gravy: "MUTTON GRAVY",
@@ -79,6 +80,43 @@ const CATEGORY_LABELS: Record<(typeof CATEGORY_ORDER)[number], string> = {
   delivery: "DELIVERY",
   other: "OTHER"
 };
+
+function getCategoryDisplayName(category: string): string {
+  return (
+    CATEGORY_DISPLAY_NAMES[category] ??
+    category.replace(/_/g, " ").toUpperCase()
+  );
+}
+
+type PdfLineItem = QuoteWithRelations["lineItems"][number];
+
+function deduplicateLineItems(lineItems: PdfLineItem[]): PdfLineItem[] {
+  const seen = new Map<string, PdfLineItem>();
+
+  for (const item of lineItems) {
+    const key = `${item.category}:${item.name}:${item.unitType}`;
+    const existing = seen.get(key);
+    if (existing) {
+      seen.set(key, { ...existing, quantity: existing.quantity + item.quantity });
+    } else {
+      seen.set(key, { ...item });
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+function categoriesWithItems(
+  itemsByCategory: Map<string, QuoteWithRelations["lineItems"]>
+): string[] {
+  const ordered = CATEGORY_ORDER.filter((cat) => (itemsByCategory.get(cat) ?? []).length > 0);
+  const extras = [...itemsByCategory.keys()].filter(
+    (cat) =>
+      !(CATEGORY_ORDER as readonly string[]).includes(cat) &&
+      (itemsByCategory.get(cat) ?? []).length > 0
+  );
+  return [...ordered, ...extras];
+}
 
 const UNIT_LABELS: Record<string, string> = {
   per_head: "Per Head",
@@ -376,12 +414,9 @@ function packageTierLabel(item: QuoteWithRelations["lineItems"][number]): string
   return formatUsd(item.unitPrice) + "/person";
 }
 
-function groupItemsByCategory(quote: QuoteWithRelations) {
+function groupItemsByCategory(lineItems: QuoteWithRelations["lineItems"]) {
   const map = new Map<string, QuoteWithRelations["lineItems"]>();
-  for (const cat of CATEGORY_ORDER) {
-    map.set(cat, []);
-  }
-  for (const item of quote.lineItems) {
+  for (const item of lineItems) {
     if (item.unitType === "tiered_per_head") continue;
     const list = map.get(item.category) ?? [];
     list.push(item);
@@ -398,14 +433,14 @@ function buildLineItemRows(
   itemsByCategory: Map<string, QuoteWithRelations["lineItems"]>,
   guestCount: number
 ) {
-  return CATEGORY_ORDER.flatMap((cat) => {
+  return categoriesWithItems(itemsByCategory).flatMap((cat) => {
     const items = itemsByCategory.get(cat) ?? [];
     if (items.length === 0) return [];
     return [
       React.createElement(
         View,
         { key: `cat-${cat}`, style: styles.categoryHeader },
-        React.createElement(Text, null, CATEGORY_LABELS[cat])
+        React.createElement(Text, null, getCategoryDisplayName(cat))
       ),
       ...items.map((item) =>
         React.createElement(
@@ -428,14 +463,19 @@ function buildLineItemRows(
 
 function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const packageLines = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+  const uniqueLineItems = deduplicateLineItems(
+    quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
+  );
+  const lineItemsForPdf = [...packageLines, ...uniqueLineItems];
   const totals = calculateQuoteTotals(
-    quote.lineItems,
+    lineItemsForPdf,
     quote.taxRate,
     quote.depositPct,
     guestCount
   );
   const g = quote.event?.primaryGuest;
-  const itemsByCategory = groupItemsByCategory(quote);
+  const itemsByCategory = groupItemsByCategory(uniqueLineItems);
   const packages = packageLineItems(quote);
   const customerType = quote.event?.customerType ?? "b2c";
   const lineItemRows = buildLineItemRows(itemsByCategory, guestCount);
@@ -640,14 +680,32 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
 }
 
 export async function generateQuotePdfBuffer(quote: QuoteWithRelations): Promise<Buffer> {
-  const buffer = await renderToBuffer(buildQuotePdfDocument(quote));
-  return Buffer.from(buffer);
+  try {
+    const buffer = await renderToBuffer(buildQuotePdfDocument(quote));
+    return Buffer.from(buffer);
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[pdf] Generation failed:", {
+        quoteId: quote.id,
+        error: err instanceof Error ? err.message : err,
+        stack: err instanceof Error ? err.stack : undefined
+      });
+    }
+    throw Object.assign(new Error("PDF generation failed"), {
+      status: 500,
+      originalError: err
+    });
+  }
 }
 
 export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer): string {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const packageLines = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+  const uniqueLineItems = deduplicateLineItems(
+    quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
+  );
   const totals = calculateQuoteTotals(
-    quote.lineItems,
+    [...packageLines, ...uniqueLineItems],
     quote.taxRate,
     quote.depositPct,
     guestCount
@@ -656,7 +714,7 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
   const eventTitle = quote.event?.title ?? "Event";
   const eventDate = formatDate(quote.event?.eventDate);
   const location = eventLocation(quote);
-  const itemsByCategory = groupItemsByCategory(quote);
+  const itemsByCategory = groupItemsByCategory(uniqueLineItems);
   const packages = packageLineItems(quote);
   const customerType = quote.event?.customerType ?? "b2c";
   const packageSelections = normalizePackageSelections(quote.packageSelections);
@@ -724,23 +782,25 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
           .join("")
       : "";
 
-  const lineItemsHtml = CATEGORY_ORDER.flatMap((cat) => {
-    const items = itemsByCategory.get(cat) ?? [];
-    if (items.length === 0) return [];
-    const rows = items
-      .map(
-        (item) =>
-          `<tr>
+  const lineItemsHtml = categoriesWithItems(itemsByCategory)
+    .flatMap((cat) => {
+      const items = itemsByCategory.get(cat) ?? [];
+      if (items.length === 0) return [];
+      const rows = items
+        .map(
+          (item) =>
+            `<tr>
             <td style="padding:4px 8px;border-bottom:1px solid #eee;">${escapeHtml(item.name)}</td>
             <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</td>
           </tr>`
-      )
-      .join("");
-    return [
-      `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">${escapeHtml(CATEGORY_LABELS[cat])}</td></tr>`,
-      rows
-    ].join("");
-  }).join("");
+        )
+        .join("");
+      return [
+        `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">${escapeHtml(getCategoryDisplayName(cat))}</td></tr>`,
+        rows
+      ].join("");
+    })
+    .join("");
 
   const contactParts = [
     escapeHtml(caterer.name),

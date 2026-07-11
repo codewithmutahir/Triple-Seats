@@ -552,6 +552,49 @@ function QuoteBuilderPage() {
 
   const duplicateLoading = duplicateMutation.isPending;
 
+  const handleGeneratePDF = useCallback(async () => {
+    if (!quote || pdfLoading) return;
+
+    setPdfLoading(true);
+    try {
+      await flushPackageSelections();
+      const res = await fetch(`/api/quotes/${encodeURIComponent(quote.id)}/pdf`, {
+        method: "POST",
+        credentials: "include"
+      });
+      if (!res.ok) {
+        if (res.status === 403) return;
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(parseApiError(body, res.status, res.statusText));
+        return;
+      }
+      const blob = await res.blob();
+      if (blob.size === 0) {
+        toast.error("PDF download was empty. Please try again.");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `quote-${quote.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("PDF downloaded!");
+      quoteAnalytics.pdfGenerated({
+        eventId,
+        quoteId: quote.id,
+        grandTotal: totals.grandTotal
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate PDF";
+      toast.error(message);
+    } finally {
+      setPdfLoading(false);
+    }
+  }, [quote, pdfLoading, flushPackageSelections, eventId, totals.grandTotal]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -1075,52 +1118,21 @@ function QuoteBuilderPage() {
             <Button
               type="button"
               variant="outline"
+              className="w-full"
               disabled={pdfLoading}
-              onClick={async () => {
-                setPdfLoading(true);
-                toast.message("Generating PDF — this can take up to a minute…");
-                try {
-                  await flushPackageSelections();
-                  const res = await fetch(
-                    `/api/quotes/${encodeURIComponent(quote.id)}/pdf`,
-                    { method: "POST", credentials: "include" }
-                  );
-                  if (!res.ok) {
-                    if (res.status === 403) return;
-                    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-                    toast.error(parseApiError(body, res.status, res.statusText));
-                    return;
-                  }
-                  const blob = await res.blob();
-                  if (blob.size === 0) {
-                    toast.error("PDF download was empty. Please try again.");
-                    return;
-                  }
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = "quote.pdf";
-                  a.click();
-                  setTimeout(() => URL.revokeObjectURL(url), 150);
-                  toast.success("PDF downloaded!");
-                  quoteAnalytics.pdfGenerated({
-                    eventId,
-                    quoteId: quote.id,
-                    grandTotal: totals.grandTotal
-                  });
-                } catch {
-                  toast.error("Failed to generate PDF.");
-                } finally {
-                  setPdfLoading(false);
-                }
-              }}
+              onClick={() => void handleGeneratePDF()}
             >
               {pdfLoading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating PDF...
+                </>
               ) : (
-                <FileText className="mr-2 h-4 w-4" />
+                <>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Generate PDF
+                </>
               )}
-              Generate PDF
             </Button>
             <Button
               type="button"
