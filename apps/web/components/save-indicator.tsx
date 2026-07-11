@@ -25,7 +25,7 @@ export function SaveIndicator({ isPending, isSuccess, isError }: SaveIndicatorPr
           <span className="text-green-600">Saved</span>
         </>
       ) : null}
-      {isError ? (
+      {isError && !isPending ? (
         <>
           <div className="h-1.5 w-1.5 rounded-full bg-red-500" />
           <span className="text-red-600">Save failed</span>

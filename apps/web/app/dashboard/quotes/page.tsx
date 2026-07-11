@@ -120,7 +120,7 @@ function QuoteBuilderPage() {
   const { data: builderData, isLoading: loading, error: queryError } = useQuoteBuilderQuery(eventId);
   const {
     addItemMutation,
-    updateQuoteMutation,
+    enqueueQuoteUpdate,
     addPackageMutation,
     removePackageMutation,
     updateGuestCountMutation,
@@ -166,10 +166,10 @@ function QuoteBuilderPage() {
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}]))
   );
 
-  const settingsInitialized = useRef(false);
-  const skipSettingsSaveRef = useRef(true);
-  const packageSelectionsInitialized = useRef(false);
-  const skipPackageSelectionsSaveRef = useRef(true);
+  const metadataInitialized = useRef(false);
+  const skipMetadataSaveRef = useRef(true);
+  const quoteRef = useRef(quote);
+  quoteRef.current = quote;
   const quoteLoadedRef = useRef<string | null>(null);
   const quoteCreatedTrackedRef = useRef<string | null>(null);
   const quoteOpenedTrackedRef = useRef<string | null>(null);
@@ -292,80 +292,78 @@ function QuoteBuilderPage() {
 
   useEffect(() => {
     if (!quote) return;
-    skipSettingsSaveRef.current = true;
-    settingsInitialized.current = true;
+    skipMetadataSaveRef.current = true;
+    metadataInitialized.current = true;
     setTaxPct(String((quote.taxRate * 100).toFixed(2).replace(/\.?0+$/, "")));
     setDepositPctInput(String(Math.round(quote.depositPct * 100)));
     setNotes(quote.notes ?? "");
     setDueDate(quote.dueDate ? new Date(quote.dueDate) : undefined);
-
-    skipPackageSelectionsSaveRef.current = true;
-    packageSelectionsInitialized.current = true;
     setPackageItemSelections(storedSelectionsToUi(quote.packageSelections));
   }, [quote?.id]);
 
-  const savePackageSelections = useDebouncedCallback(
-    useCallback(() => {
-      if (!packageSelectionsInitialized.current || !quote) return;
-      if (skipPackageSelectionsSaveRef.current) {
-        skipPackageSelectionsSaveRef.current = false;
-        return;
-      }
-
-      const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
-      if (packageSelectionsEqual(stored, quote.packageSelections)) return;
-
-      updateQuoteMutation.mutate({
-        quoteId: quote.id,
-        data: { packageSelections: stored }
-      });
-    }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]),
-    500
-  );
-
-  const flushPackageSelections = useCallback(async () => {
-    if (!packageSelectionsInitialized.current || !quote) return;
-    const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
-    if (packageSelectionsEqual(stored, quote.packageSelections)) return;
-    await updateQuoteMutation.mutateAsync({
-      quoteId: quote.id,
-      data: { packageSelections: stored }
-    });
-  }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]);
-
-  const saveSettings = useDebouncedCallback(() => {
-    if (!settingsInitialized.current || !quote) return;
-    if (skipSettingsSaveRef.current) {
-      skipSettingsSaveRef.current = false;
-      return;
-    }
+  const buildMetadataPatch = useCallback(() => {
+    const currentQuote = quoteRef.current;
+    if (!currentQuote) return null;
 
     const tax = parseFloat(taxPct) / 100;
     const deposit = parseFloat(depositPctInput) / 100;
-    if (!Number.isFinite(tax) || !Number.isFinite(deposit)) return;
+    if (!Number.isFinite(tax) || !Number.isFinite(deposit)) return null;
 
     const nextNotes = notes.trim() || null;
     const nextDueDate = dueDate ? dueDate.toISOString() : null;
-    const currentDueDate = quote.dueDate ? new Date(quote.dueDate).toISOString() : null;
-    if (
-      tax === quote.taxRate &&
-      deposit === quote.depositPct &&
-      nextNotes === (quote.notes ?? null) &&
-      nextDueDate === currentDueDate
-    ) {
-      return;
+    const currentDueDate = currentQuote.dueDate
+      ? new Date(currentQuote.dueDate).toISOString()
+      : null;
+    const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
+
+    const data: Record<string, unknown> = {};
+    if (tax !== currentQuote.taxRate) data.taxRate = tax;
+    if (deposit !== currentQuote.depositPct) data.depositPct = deposit;
+    if (nextNotes !== (currentQuote.notes ?? null)) data.notes = nextNotes;
+    if (nextDueDate !== currentDueDate) data.dueDate = nextDueDate;
+    if (!packageSelectionsEqual(stored, currentQuote.packageSelections)) {
+      data.packageSelections = stored;
     }
 
-    updateQuoteMutation.mutate({
-      quoteId: quote.id,
-      data: {
-        taxRate: tax,
-        depositPct: deposit,
-        notes: nextNotes,
-        dueDate: nextDueDate
+    return Object.keys(data).length > 0 ? data : null;
+  }, [taxPct, depositPctInput, notes, dueDate, packageItemSelections, menuItemsByCategory]);
+
+  const scheduleMetadataSave = useDebouncedCallback(
+    useCallback(() => {
+      if (!metadataInitialized.current || !quoteRef.current) return;
+      if (skipMetadataSaveRef.current) {
+        skipMetadataSaveRef.current = false;
+        return;
       }
+
+      const patch = buildMetadataPatch();
+      if (!patch) return;
+
+      void enqueueQuoteUpdate({
+        quoteId: quoteRef.current.id,
+        data: patch
+      });
+    }, [buildMetadataPatch, enqueueQuoteUpdate]),
+    800
+  );
+
+  const flushQuoteMetadata = useCallback(async () => {
+    if (!metadataInitialized.current || !quoteRef.current) return;
+    scheduleMetadataSave.cancel();
+
+    const patch = buildMetadataPatch();
+    if (!patch) return;
+
+    await enqueueQuoteUpdate({
+      quoteId: quoteRef.current.id,
+      data: patch
     });
-  }, 800);
+  }, [buildMetadataPatch, scheduleMetadataSave, enqueueQuoteUpdate]);
+
+  useEffect(() => {
+    if (!metadataInitialized.current || !quoteRef.current) return;
+    scheduleMetadataSave();
+  }, [taxPct, depositPctInput, notes, dueDate, packageItemSelections, scheduleMetadataSave]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading || packagesLoading) return;
@@ -378,16 +376,6 @@ function QuoteBuilderPage() {
       perfRef.current?.end();
     }
   }, [quote, loading, packagesLoading, error]);
-
-  useEffect(() => {
-    if (!quote || !settingsInitialized.current) return;
-    saveSettings();
-  }, [taxPct, depositPctInput, notes, dueDate, saveSettings]);
-
-  useEffect(() => {
-    if (!quote || !packageSelectionsInitialized.current) return;
-    savePackageSelections();
-  }, [packageItemSelections, savePackageSelections]);
 
   const addLineItemOptimistic = useCallback(
     (category: ItemCategory, payload: AddItemPayload) => {
@@ -447,11 +435,10 @@ function QuoteBuilderPage() {
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic, eventId]);
 
   const clearPackageSelections = useCallback(() => {
-    // Cancel any pending debounced save and skip the next auto-save after clearing.
-    savePackageSelections.cancel();
-    skipPackageSelectionsSaveRef.current = true;
+    scheduleMetadataSave.cancel();
+    skipMetadataSaveRef.current = true;
     setPackageItemSelections(Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
-  }, [savePackageSelections]);
+  }, [scheduleMetadataSave]);
 
   const addPackageToQuote = useCallback(
     (packageId: string) => {
@@ -540,11 +527,10 @@ function QuoteBuilderPage() {
   const saveDraft = useCallback(() => {
     if (!quote) return;
     quoteAnalytics.draftSaved({ eventId, quoteId: quote.id });
-    updateQuoteMutation.mutate(
-      { quoteId: quote.id, data: { status: "draft" } },
-      { onSuccess: () => toast.success("Draft saved.") }
+    void enqueueQuoteUpdate({ quoteId: quote.id, data: { status: "draft" } }).then(() =>
+      toast.success("Draft saved.")
     );
-  }, [quote, eventId, updateQuoteMutation]);
+  }, [quote, eventId, enqueueQuoteUpdate]);
 
   const duplicateQuote = useCallback(() => {
     if (!quote) return;
@@ -561,7 +547,7 @@ function QuoteBuilderPage() {
       const storedSelections = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
 
       try {
-        await flushPackageSelections();
+        await flushQuoteMetadata();
       } catch {
         // Still generate PDF with current UI selections even if background save failed.
       }
@@ -603,7 +589,7 @@ function QuoteBuilderPage() {
     } finally {
       setPdfLoading(false);
     }
-  }, [quote, pdfLoading, flushPackageSelections, packageItemSelections, menuItemsByCategory, eventId, totals.grandTotal]);
+  }, [quote, pdfLoading, flushQuoteMetadata, packageItemSelections, menuItemsByCategory, eventId, totals.grandTotal]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1151,7 +1137,7 @@ function QuoteBuilderPage() {
                 setSendLoading(true);
                 toast.message("Sending quote — generating PDF and email…");
                 try {
-                  await flushPackageSelections();
+                  await flushQuoteMetadata();
                   const res = await fetch(
                     `/api/quotes/${encodeURIComponent(quote.id)}/send`,
                     { method: "POST", credentials: "include" }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
@@ -96,6 +96,35 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const packageOpSeqRef = useRef(0);
   const quoteUpdateSeqRef = useRef(0);
   const addingItemsRef = useRef<Set<string>>(new Set());
+  const [saveUi, setSaveUi] = useState({ pending: false, success: false, error: false });
+  const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const markSavePending = () => {
+    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+    setSaveUi({ pending: true, success: false, error: false });
+  };
+
+  const markSaveSuccess = () => {
+    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+    setSaveUi({ pending: false, success: true, error: false });
+    saveSuccessTimerRef.current = setTimeout(() => {
+      setSaveUi((prev) => ({ ...prev, success: false }));
+    }, 2000);
+  };
+
+  const markSaveError = () => {
+    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+    setSaveUi({ pending: false, success: false, error: true });
+    saveSuccessTimerRef.current = setTimeout(() => {
+      setSaveUi((prev) => ({ ...prev, error: false }));
+    }, 4000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+    };
+  }, []);
 
   function lineItemDedupKey(category: string, name: string): string {
     return `${category}:${name}`;
@@ -404,6 +433,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       api.quotes.update(quoteId, data),
     onMutate: async ({ data }) => {
       if (!canWrite) return denyMutation();
+      markSavePending();
       const opId = ++quoteUpdateSeqRef.current;
       const prev = qc.getQueryData<BuilderData>(builderKey);
       if (!prev?.quote) return denyMutation();
@@ -454,6 +484,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onSuccess: (result, vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current) return;
+      markSaveSuccess();
 
       if (vars.data.packageSelections !== undefined) {
         const stored = vars.data.packageSelections as Record<string, Record<string, unknown[]>>;
@@ -495,6 +526,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onError: (err, _vars, ctx) => {
       if (!ctx || ctx.opId !== quoteUpdateSeqRef.current || !ctx.revert) return;
+      markSaveError();
       patchBuilder((old) => ({
         ...old,
         quote: {
@@ -704,11 +736,24 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   const isPackageMutating = addPackageMutation.isPending || removePackageMutation.isPending;
   const isGuestCountMutating = updateGuestCountMutation.isPending;
 
+  const quoteUpdateChainRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  const enqueueQuoteUpdate = useCallback(
+    ({ quoteId, data }: { quoteId: string; data: Record<string, unknown> }) => {
+      const run = () => updateQuoteMutation.mutateAsync({ quoteId, data });
+      const next = quoteUpdateChainRef.current.catch(() => undefined).then(run);
+      quoteUpdateChainRef.current = next;
+      return next;
+    },
+    [updateQuoteMutation]
+  );
+
   return {
     addItemMutation,
     removeItemMutation,
     updateItemMutation,
     updateQuoteMutation,
+    enqueueQuoteUpdate,
     addPackageMutation,
     removePackageMutation,
     updateGuestCountMutation,
@@ -721,9 +766,9 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     isItemMutating,
     isPackageMutating,
     isGuestCountMutating,
-    isSaving: updateQuoteMutation.isPending,
-    isSaveSuccess: updateQuoteMutation.isSuccess,
-    isSaveError: updateQuoteMutation.isError,
+    isSaving: saveUi.pending,
+    isSaveSuccess: saveUi.success,
+    isSaveError: saveUi.error && !saveUi.pending,
     canWriteQuotes: canWrite
   };
 }
