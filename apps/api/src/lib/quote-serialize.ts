@@ -157,7 +157,8 @@ export function parseQuoteStatus(value: unknown): QuoteStatus | null {
     value === "send_failed" ||
     value === "sent" ||
     value === "accepted" ||
-    value === "declined"
+    value === "declined" ||
+    value === "archived"
   ) {
     return value;
   }
@@ -179,6 +180,7 @@ export function parseItemCategory(value: unknown): ItemCategory | null {
     "beverages",
     "equipment",
     "delivery",
+    "labor",
     "other"
   ] as const;
   if (typeof value === "string" && (allowed as readonly string[]).includes(value)) {

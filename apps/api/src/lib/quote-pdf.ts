@@ -11,112 +11,33 @@ import {
 
 import { escapeHtml } from "./mail";
 import {
+  formatEventServiceLabel,
+  legacyEventToServiceFields,
+  type ServiceTypeValue
+} from "./event-customer-types";
+import {
+  categoriesWithItems,
+  formatPdfDate,
+  formatPdfEventTime,
+  getCategoryDisplayName,
+  groupLineItemsByCategory,
+  guestDisplayName,
+  eventLocationDisplay,
+  packageIncludeSummary,
+  PDF_NAVY
+} from "./pdf-shared";
+import { QUOTE_TERMS_PARAGRAPHS, QUOTE_TERMS_TITLE } from "./quote-terms";
+import {
   calculateQuoteTotals,
   formatTaxRatePercent,
-  formatTierLabel,
   formatUsd,
   getActiveTier,
   lineItemTotal
 } from "./quote-totals";
 import type { QuoteWithRelations } from "./quote-serialize";
-import { formatEventType } from "./event-customer-types";
-import {
-  listPackageIncludeLines,
-  listPackageSelectionGroups,
-  normalizePackageSelections,
-  type PackageSelectionGroup
-} from "./package-selections";
-
-function formatEventTime(iso: Date | string | null | undefined): string {
-  if (!iso) return "";
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-}
-
-function formatEventTimeRange(startTime: Date | null | undefined, endTime: Date | null | undefined): string {
-  const start = formatEventTime(startTime);
-  if (!start) return "—";
-  const end = formatEventTime(endTime);
-  if (!end) return start;
-  return `${start} – ${end}`;
-}
 
 type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
-
-const NAVY = "#1B2A4A";
-
-const CATEGORY_ORDER = [
-  "appetizer",
-  "veg_gravy",
-  "chicken_gravy",
-  "mutton_gravy",
-  "rice_chicken",
-  "rice_mutton",
-  "breads",
-  "side_items",
-  "bbq",
-  "dessert",
-  "beverages",
-  "equipment",
-  "delivery",
-  "other"
-] as const;
-
-const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
-  appetizer: "APPETIZER",
-  main_course: "MAIN COURSE",
-  veg_gravy: "VEG GRAVY",
-  chicken_gravy: "CHICKEN GRAVY",
-  mutton_gravy: "MUTTON GRAVY",
-  rice_chicken: "RICE & CHICKEN",
-  rice_mutton: "RICE & MUTTON",
-  breads: "BREADS",
-  side_items: "SIDE ITEMS",
-  bbq: "BBQ",
-  dessert: "DESSERT",
-  beverages: "BEVERAGES",
-  equipment: "EQUIPMENT",
-  delivery: "DELIVERY",
-  other: "OTHER"
-};
-
-function getCategoryDisplayName(category: string): string {
-  return (
-    CATEGORY_DISPLAY_NAMES[category] ??
-    category.replace(/_/g, " ").toUpperCase()
-  );
-}
-
 type PdfLineItem = QuoteWithRelations["lineItems"][number];
-
-function deduplicateLineItems(lineItems: PdfLineItem[]): PdfLineItem[] {
-  const seen = new Map<string, PdfLineItem>();
-
-  for (const item of lineItems) {
-    const key = `${item.category}:${item.name}:${item.unitType}`;
-    const existing = seen.get(key);
-    if (existing) {
-      seen.set(key, { ...existing, quantity: existing.quantity + item.quantity });
-    } else {
-      seen.set(key, { ...item });
-    }
-  }
-
-  return Array.from(seen.values());
-}
-
-function categoriesWithItems(
-  itemsByCategory: Map<string, QuoteWithRelations["lineItems"]>
-): string[] {
-  const ordered = CATEGORY_ORDER.filter((cat) => (itemsByCategory.get(cat) ?? []).length > 0);
-  const extras = [...itemsByCategory.keys()].filter(
-    (cat) =>
-      !(CATEGORY_ORDER as readonly string[]).includes(cat) &&
-      (itemsByCategory.get(cat) ?? []).length > 0
-  );
-  return [...ordered, ...extras];
-}
 
 const UNIT_LABELS: Record<string, string> = {
   per_head: "Per Head",
@@ -139,24 +60,24 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     marginBottom: 24,
     borderBottomWidth: 2,
-    borderBottomColor: NAVY,
+    borderBottomColor: PDF_NAVY,
     paddingBottom: 12
   },
   logo: {
     fontSize: 22,
     fontFamily: "Helvetica-Bold",
-    color: NAVY
+    color: PDF_NAVY
   },
   title: {
     fontSize: 14,
     fontFamily: "Helvetica-Bold",
-    color: NAVY,
+    color: PDF_NAVY,
     letterSpacing: 1
   },
   sectionTitle: {
     fontSize: 11,
     fontFamily: "Helvetica-Bold",
-    color: NAVY,
+    color: PDF_NAVY,
     marginBottom: 8,
     marginTop: 16
   },
@@ -174,7 +95,7 @@ const styles = StyleSheet.create({
   },
   tableHeader: {
     flexDirection: "row",
-    backgroundColor: NAVY,
+    backgroundColor: PDF_NAVY,
     color: "#ffffff",
     paddingVertical: 6,
     paddingHorizontal: 4,
@@ -187,7 +108,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     fontFamily: "Helvetica-Bold",
     fontSize: 9,
-    color: NAVY,
+    color: PDF_NAVY,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderColor: "#ccc"
@@ -207,6 +128,8 @@ const styles = StyleSheet.create({
   colUnit: { width: "18%" },
   colPrice: { width: "18%", textAlign: "right" },
   colTotal: { width: "18%", textAlign: "right" },
+  colNameWide: { width: "55%" },
+  colTotalWide: { width: "45%", textAlign: "right" },
   totalsBox: {
     marginTop: 20,
     marginLeft: "auto",
@@ -231,10 +154,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#eef1f6"
   },
   footer: {
-    position: "absolute",
-    bottom: 30,
-    left: 40,
-    right: 40,
+    marginTop: 24,
     textAlign: "center",
     fontSize: 9,
     color: "#666",
@@ -252,7 +172,7 @@ const styles = StyleSheet.create({
   packageTitle: {
     fontFamily: "Helvetica-Bold",
     fontSize: 10,
-    color: NAVY,
+    color: PDF_NAVY,
     marginBottom: 4
   },
   packageMeta: {
@@ -260,66 +180,44 @@ const styles = StyleSheet.create({
     color: "#444",
     marginBottom: 6
   },
-  packageIncludeLabel: {
-    fontSize: 9,
-    fontFamily: "Helvetica-Bold",
-    color: NAVY
-  },
-  packageIncludeDetail: {
-    fontSize: 9,
-    marginBottom: 3,
-    marginLeft: 8
-  },
-  selectionGroupTitle: {
-    fontSize: 10,
-    fontFamily: "Helvetica-Bold",
-    color: NAVY,
+  notesBox: {
     marginTop: 8,
-    marginBottom: 4
-  },
-  selectionItem: {
-    fontSize: 9,
-    marginLeft: 10,
-    marginBottom: 2
-  },
-  tierTableRow: {
-    flexDirection: "row",
-    borderBottomWidth: 1,
+    padding: 8,
+    borderWidth: 1,
     borderColor: "#ddd",
-    paddingVertical: 3,
-    paddingHorizontal: 4,
-    fontSize: 8
+    fontSize: 9
   },
-  tierTableActive: {
-    backgroundColor: NAVY,
-    color: "#ffffff"
+  termsBox: {
+    marginTop: 16,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#ccc"
+  },
+  termsText: {
+    fontSize: 8,
+    color: "#444",
+    marginBottom: 5,
+    lineHeight: 1.35
   }
 });
 
-function formatDate(iso: Date | string | null | undefined): string {
-  if (!iso) return "—";
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "short",
-    day: "numeric"
-  });
+function deduplicateLineItems(lineItems: PdfLineItem[]): PdfLineItem[] {
+  const seen = new Map<string, PdfLineItem>();
+
+  for (const item of lineItems) {
+    const key = `${item.category}:${item.name}:${item.unitType}`;
+    const existing = seen.get(key);
+    if (existing) {
+      seen.set(key, { ...existing, quantity: existing.quantity + item.quantity });
+    } else {
+      seen.set(key, { ...item });
+    }
+  }
+
+  return Array.from(seen.values());
 }
 
-function guestName(quote: QuoteWithRelations): string {
-  const g = quote.event?.primaryGuest;
-  if (!g) return "Guest";
-  return [g.firstName, g.lastName].filter(Boolean).join(" ") || "Guest";
-}
-
-function eventLocation(quote: QuoteWithRelations): string {
-  const parts = [quote.event?.venueName, quote.event?.venueAddress].filter(Boolean);
-  return parts.length > 0 ? parts.join(" · ") : "Location TBD";
-}
-
-function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: number): string {
+function qtyDisplay(item: PdfLineItem, guestCount: number): string {
   const unitType =
     item.category === "equipment" && item.unitType === "per_head" ? "per_piece" : item.unitType;
   if (unitType === "per_head" || unitType === "tiered_per_head") {
@@ -328,109 +226,44 @@ function qtyDisplay(item: QuoteWithRelations["lineItems"][number], guestCount: n
   return String(item.quantity);
 }
 
-function buildPackageIncludeRows(
-  items: NonNullable<QuoteWithRelations["lineItems"][number]["package"]>["items"],
-  packageSelections: ReturnType<typeof normalizePackageSelections>,
-  packageKey: string
-): React.ReactElement[] {
-  if (!items?.length) {
-    return [
-      React.createElement(Text, { key: `${packageKey}-includes-empty`, style: styles.packageMeta }, "Includes: —")
-    ];
-  }
-
-  const lines = listPackageIncludeLines(items, packageSelections);
-  return [
-    React.createElement(Text, { key: `${packageKey}-includes-title`, style: styles.packageIncludeLabel }, "Includes:"),
-    ...lines.flatMap((line, index) => [
-      React.createElement(
-        Text,
-        { key: `${packageKey}-includes-${index}`, style: styles.packageIncludeDetail },
-        `${line.label}: ${line.detail}`
-      )
-    ])
-  ];
-}
-
-function buildPackageSelectionSections(
-  packageSelections: ReturnType<typeof normalizePackageSelections>
-): React.ReactElement[] {
-  const groups = listPackageSelectionGroups(packageSelections);
-  if (groups.length === 0) return [];
-
-  const sections: React.ReactElement[] = [
-    React.createElement(
-      Text,
-      { key: "selections-title", style: styles.sectionTitle },
-      "Your Menu Selections"
-    )
-  ];
-
-  let lastCategory: PackageSelectionGroup["category"] | null = null;
-
-  for (const group of groups) {
-    if (group.category !== lastCategory) {
-      sections.push(
-        React.createElement(
-          Text,
-          { key: `selection-cat-${group.category}`, style: styles.selectionGroupTitle },
-          group.categoryLabel.toUpperCase()
-        )
-      );
-      lastCategory = group.category;
-    }
-
-    const slotsInCategory = groups.filter((entry) => entry.category === group.category);
-    if (slotsInCategory.length > 1) {
-      sections.push(
-        React.createElement(
-          Text,
-          {
-            key: `selection-slot-${group.category}-${group.slotLabel}`,
-            style: { ...styles.selectionItem, fontFamily: "Helvetica-Bold", marginTop: 4 }
-          },
-          group.slotLabel
-        )
-      );
-    }
-
-    for (const entry of group.items) {
-      sections.push(
-        React.createElement(
-          Text,
-          { key: `selection-${group.category}-${group.slotLabel}-${entry.id}`, style: styles.selectionItem },
-          `• ${entry.name}`
-        )
-      );
-    }
-  }
-
-  return sections;
-}
-
-function packageTierLabel(item: QuoteWithRelations["lineItems"][number]): string {
+function packageTierLabel(item: PdfLineItem): string {
   if (item.appliedTierLabel) return item.appliedTierLabel;
   if (item.notes) return item.notes;
-  return formatUsd(item.unitPrice) + "/person";
+  return `${formatUsd(item.unitPrice)}/person`;
 }
 
-function groupItemsByCategory(lineItems: QuoteWithRelations["lineItems"]) {
-  const map = new Map<string, QuoteWithRelations["lineItems"]>();
-  for (const item of lineItems) {
-    if (item.unitType === "tiered_per_head") continue;
-    const list = map.get(item.category) ?? [];
-    list.push(item);
-    map.set(item.category, list);
-  }
-  return map;
+function resolvePackageLineItems(quote: QuoteWithRelations) {
+  const tiered = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+  if (tiered.length === 0) return [];
+  if (tiered.length === 1) return tiered;
+
+  const linked = tiered.filter((item) => item.packageId);
+  const pool = linked.length > 0 ? linked : tiered;
+  return [pool[pool.length - 1]!];
 }
 
-function packageLineItems(quote: QuoteWithRelations) {
-  return quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
+function resolveServiceType(quote: QuoteWithRelations): ServiceTypeValue {
+  const event = quote.event;
+  if (!event) return "full_service";
+  return (
+    (event.serviceType as ServiceTypeValue | null) ??
+    legacyEventToServiceFields(event.eventType).serviceType
+  );
 }
 
-function buildLineItemRows(
-  itemsByCategory: Map<string, QuoteWithRelations["lineItems"]>,
+function formatEventTypeLabel(quote: QuoteWithRelations): string {
+  const event = quote.event;
+  if (!event) return "—";
+  const serviceType =
+    (event.serviceType as ServiceTypeValue | null) ??
+    legacyEventToServiceFields(event.eventType).serviceType;
+  const orderMode =
+    event.orderMode ?? legacyEventToServiceFields(event.eventType).orderMode;
+  return formatEventServiceLabel(serviceType, orderMode);
+}
+
+function buildTrayLineItemRows(
+  itemsByCategory: Map<string, PdfLineItem[]>,
   guestCount: number
 ) {
   return categoriesWithItems(itemsByCategory).flatMap((cat) => {
@@ -461,8 +294,51 @@ function buildLineItemRows(
   });
 }
 
-function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
+function buildFullServiceLineItemRows(
+  itemsByCategory: Map<string, PdfLineItem[]>,
+  guestCount: number
+) {
+  return categoriesWithItems(itemsByCategory).flatMap((cat) => {
+    const items = itemsByCategory.get(cat) ?? [];
+    if (items.length === 0) return [];
+    return [
+      React.createElement(
+        View,
+        { key: `cat-${cat}`, style: styles.categoryHeader },
+        React.createElement(Text, null, getCategoryDisplayName(cat))
+      ),
+      ...items.map((item) =>
+        React.createElement(
+          View,
+          { key: item.id, style: styles.tableRow },
+          React.createElement(Text, { style: styles.colNameWide }, item.name),
+          React.createElement(
+            Text,
+            { style: styles.colTotalWide },
+            formatUsd(lineItemTotal(item, guestCount))
+          )
+        )
+      )
+    ];
+  });
+}
+
+function buildTermsSection(): React.ReactElement {
+  return React.createElement(
+    View,
+    { style: styles.termsBox },
+    React.createElement(Text, { style: styles.sectionTitle }, QUOTE_TERMS_TITLE),
+    ...QUOTE_TERMS_PARAGRAPHS.map((paragraph, index) =>
+      React.createElement(Text, { key: `term-${index}`, style: styles.termsText }, paragraph)
+    )
+  );
+}
+
+/** Customer-facing quote PDF — used by both download and email attachment. */
+export function buildCustomerQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const serviceType = resolveServiceType(quote);
+  const isTrayFormat = serviceType === "order_by_tray";
   const packageLines = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
   const uniqueLineItems = deduplicateLineItems(
     quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
@@ -475,12 +351,14 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
     guestCount
   );
   const g = quote.event?.primaryGuest;
-  const itemsByCategory = groupItemsByCategory(uniqueLineItems);
-  const packages = packageLineItems(quote);
+  const itemsByCategory = groupLineItemsByCategory(uniqueLineItems);
+  const packages = resolvePackageLineItems(quote);
   const customerType = quote.event?.customerType ?? "b2c";
-  const lineItemRows = buildLineItemRows(itemsByCategory, guestCount);
+  const lineItemRows = isTrayFormat
+    ? buildTrayLineItemRows(itemsByCategory, guestCount)
+    : buildFullServiceLineItemRows(itemsByCategory, guestCount);
   const hasLineItems = lineItemRows.length > 0;
-  const packageSelections = normalizePackageSelections(quote.packageSelections);
+  const customerNotes = quote.notes?.trim();
 
   const packageSections = packages.flatMap((item) => {
     const tiers = item.package?.tiers ?? [];
@@ -489,6 +367,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
           getActiveTier(tiers, guestCount, customerType)
         : getActiveTier(tiers, guestCount, customerType);
+    const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
 
     return [
       React.createElement(
@@ -498,9 +377,13 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         React.createElement(
           Text,
           { style: styles.packageMeta },
-          `${packageTierLabel(item)} · $${activeTier?.pricePerHead ?? item.unitPrice}/person × ${guestCount} guests`
+          `${packageTierLabel(item)} · ${formatUsd(pricePerHead)}/person × ${guestCount} guests`
         ),
-        ...buildPackageIncludeRows(item.package?.items ?? [], packageSelections, item.id),
+        React.createElement(
+          Text,
+          { style: styles.packageMeta },
+          `Includes: ${packageIncludeSummary(item.package?.items ?? [])}`
+        ),
         React.createElement(
           Text,
           { style: { fontSize: 9, fontFamily: "Helvetica-Bold", textAlign: "right" } },
@@ -522,29 +405,6 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
         React.createElement(Text, { style: styles.logo }, "Tripeseats"),
         React.createElement(Text, { style: styles.title }, "CATERING QUOTE")
       ),
-      React.createElement(Text, { style: styles.sectionTitle }, "Quote Details"),
-      React.createElement(
-        View,
-        null,
-        React.createElement(
-          View,
-          { style: styles.detailRow },
-          React.createElement(Text, { style: styles.detailLabel }, "Quote ID:"),
-          React.createElement(Text, { style: styles.detailValue }, quote.id)
-        ),
-        React.createElement(
-          View,
-          { style: styles.detailRow },
-          React.createElement(Text, { style: styles.detailLabel }, "Date:"),
-          React.createElement(Text, { style: styles.detailValue }, formatDate(quote.createdAt))
-        ),
-        React.createElement(
-          View,
-          { style: styles.detailRow },
-          React.createElement(Text, { style: styles.detailLabel }, "Due Date:"),
-          React.createElement(Text, { style: styles.detailValue }, formatDate(quote.dueDate))
-        )
-      ),
       React.createElement(Text, { style: styles.sectionTitle }, "Guest Information"),
       React.createElement(
         View,
@@ -553,7 +413,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           View,
           { style: styles.detailRow },
           React.createElement(Text, { style: styles.detailLabel }, "Name:"),
-          React.createElement(Text, { style: styles.detailValue }, guestName(quote))
+          React.createElement(Text, { style: styles.detailValue }, guestDisplayName(quote))
         ),
         React.createElement(
           View,
@@ -574,7 +434,7 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           React.createElement(
             Text,
             { style: styles.detailValue },
-            formatDate(quote.event?.eventDate)
+            formatPdfDate(quote.event?.eventDate)
           )
         ),
         React.createElement(
@@ -584,18 +444,14 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           React.createElement(
             Text,
             { style: styles.detailValue },
-            formatEventTimeRange(quote.event?.startTime, quote.event?.endTime)
+            formatPdfEventTime(quote.event ?? undefined)
           )
         ),
         React.createElement(
           View,
           { style: styles.detailRow },
           React.createElement(Text, { style: styles.detailLabel }, "Event Type:"),
-          React.createElement(
-            Text,
-            { style: styles.detailValue },
-            quote.event?.eventType ? formatEventType(quote.event.eventType) : "—"
-          )
+          React.createElement(Text, { style: styles.detailValue }, formatEventTypeLabel(quote))
         ),
         React.createElement(
           View,
@@ -607,26 +463,36 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           View,
           { style: styles.detailRow },
           React.createElement(Text, { style: styles.detailLabel }, "Location:"),
-          React.createElement(Text, { style: styles.detailValue }, eventLocation(quote))
+          React.createElement(Text, { style: styles.detailValue }, eventLocationDisplay(quote))
         )
       ),
       packages.length > 0
         ? React.createElement(Text, { style: styles.sectionTitle }, "Packages")
         : null,
       ...packageSections,
-      ...buildPackageSelectionSections(packageSelections),
       hasLineItems
-        ? React.createElement(Text, { style: styles.sectionTitle }, "Line Items")
+        ? React.createElement(
+            Text,
+            { style: styles.sectionTitle },
+            isTrayFormat ? "Line Items" : "Additional Items"
+          )
         : null,
       hasLineItems
         ? React.createElement(
             View,
             { style: styles.tableHeader },
-            React.createElement(Text, { style: styles.colName }, "Item"),
-            React.createElement(Text, { style: styles.colQty }, "Qty"),
-            React.createElement(Text, { style: styles.colUnit }, "Unit Type"),
-            React.createElement(Text, { style: styles.colPrice }, "Unit Price"),
-            React.createElement(Text, { style: styles.colTotal }, "Total")
+            isTrayFormat
+              ? [
+                  React.createElement(Text, { key: "h-name", style: styles.colName }, "Item"),
+                  React.createElement(Text, { key: "h-qty", style: styles.colQty }, "Qty"),
+                  React.createElement(Text, { key: "h-unit", style: styles.colUnit }, "Unit Type"),
+                  React.createElement(Text, { key: "h-price", style: styles.colPrice }, "Unit Price"),
+                  React.createElement(Text, { key: "h-total", style: styles.colTotal }, "Total")
+                ]
+              : [
+                  React.createElement(Text, { key: "h-name", style: styles.colNameWide }, "Item"),
+                  React.createElement(Text, { key: "h-total", style: styles.colTotalWide }, "Total")
+                ]
           )
         : null,
       ...lineItemRows,
@@ -667,21 +533,26 @@ function buildQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
           View,
           { style: { ...styles.totalsRow, borderBottomWidth: 0 } },
           React.createElement(Text, null, "Payment Due Date"),
-          React.createElement(Text, null, formatDate(quote.dueDate))
+          React.createElement(Text, null, formatPdfDate(quote.dueDate))
         )
       ),
-      React.createElement(
-        Text,
-        { style: styles.footer },
-        "Thank you for choosing Tripeseats"
-      )
+      customerNotes
+        ? React.createElement(
+            View,
+            null,
+            React.createElement(Text, { style: styles.sectionTitle }, "Special Notes"),
+            React.createElement(View, { style: styles.notesBox }, React.createElement(Text, null, customerNotes))
+          )
+        : null,
+      buildTermsSection(),
+      React.createElement(Text, { style: styles.footer }, "Thank you for choosing Tripeseats")
     )
   );
 }
 
-export async function generateQuotePdfBuffer(quote: QuoteWithRelations): Promise<Buffer> {
+export async function generateCustomerQuotePdfBuffer(quote: QuoteWithRelations): Promise<Buffer> {
   try {
-    const buffer = await renderToBuffer(buildQuotePdfDocument(quote));
+    const buffer = await renderToBuffer(buildCustomerQuotePdfDocument(quote));
     return Buffer.from(buffer);
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
@@ -698,8 +569,15 @@ export async function generateQuotePdfBuffer(quote: QuoteWithRelations): Promise
   }
 }
 
+/** @deprecated Use generateCustomerQuotePdfBuffer — kept for existing imports. */
+export async function generateQuotePdfBuffer(quote: QuoteWithRelations): Promise<Buffer> {
+  return generateCustomerQuotePdfBuffer(quote);
+}
+
 export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer): string {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
+  const serviceType = resolveServiceType(quote);
+  const isTrayFormat = serviceType === "order_by_tray";
   const packageLines = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
   const uniqueLineItems = deduplicateLineItems(
     quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
@@ -710,48 +588,14 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
     quote.depositPct,
     guestCount
   );
-  const name = guestName(quote);
+  const name = guestDisplayName(quote);
   const eventTitle = quote.event?.title ?? "Event";
-  const eventDate = formatDate(quote.event?.eventDate);
-  const location = eventLocation(quote);
-  const itemsByCategory = groupItemsByCategory(uniqueLineItems);
-  const packages = packageLineItems(quote);
+  const eventDate = formatPdfDate(quote.event?.eventDate);
+  const eventTime = formatPdfEventTime(quote.event ?? undefined);
+  const location = eventLocationDisplay(quote);
+  const itemsByCategory = groupLineItemsByCategory(uniqueLineItems);
+  const packages = resolvePackageLineItems(quote);
   const customerType = quote.event?.customerType ?? "b2c";
-  const packageSelections = normalizePackageSelections(quote.packageSelections);
-
-  const selectionHtml = (() => {
-    const groups = listPackageSelectionGroups(packageSelections);
-    if (groups.length === 0) return "";
-
-    let lastCategory: PackageSelectionGroup["category"] | null = null;
-    const rows: string[] = [
-      `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">YOUR MENU SELECTIONS</td></tr>`
-    ];
-
-    for (const group of groups) {
-      if (group.category !== lastCategory) {
-        rows.push(
-          `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;">${escapeHtml(group.categoryLabel.toUpperCase())}</td></tr>`
-        );
-        lastCategory = group.category;
-      }
-
-      const slotsInCategory = groups.filter((entry) => entry.category === group.category);
-      if (slotsInCategory.length > 1) {
-        rows.push(
-          `<tr><td colspan="2" style="padding:4px 8px;font-weight:bold;">${escapeHtml(group.slotLabel)}</td></tr>`
-        );
-      }
-
-      for (const entry of group.items) {
-        rows.push(
-          `<tr><td colspan="2" style="padding:2px 8px 2px 16px;border-bottom:1px solid #eee;">• ${escapeHtml(entry.name)}</td></tr>`
-        );
-      }
-    }
-
-    return rows.join("");
-  })();
 
   const packageHtml =
     packages.length > 0
@@ -764,17 +608,13 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
                 ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
                   getActiveTier(tiers, guestCount, customerType)
                 : getActiveTier(tiers, guestCount, customerType);
-            const includeLines = item.package?.items?.length
-              ? listPackageIncludeLines(item.package.items, packageSelections)
-                  .map((line) => `${escapeHtml(line.label)}: ${escapeHtml(line.detail)}`)
-                  .join("<br/>")
-              : "—";
+            const includes = packageIncludeSummary(item.package?.items ?? []);
             const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
             return `<tr>
               <td colspan="2" style="padding:8px;border-bottom:1px solid #eee;">
                 <strong>${escapeHtml(item.name)}</strong><br/>
-                ${escapeHtml(packageTierLabel(item))} · $${pricePerHead}/person × ${guestCount} guests<br/>
-                Includes:<br/>${includeLines}<br/>
+                ${escapeHtml(packageTierLabel(item))} · ${escapeHtml(formatUsd(pricePerHead))}/person × ${guestCount} guests<br/>
+                Includes: ${escapeHtml(includes)}<br/>
                 <div style="text-align:right;font-weight:bold;margin-top:4px;">${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</div>
               </td>
             </tr>`;
@@ -787,13 +627,15 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
       const items = itemsByCategory.get(cat) ?? [];
       if (items.length === 0) return [];
       const rows = items
-        .map(
-          (item) =>
-            `<tr>
+        .map((item) => {
+          const qtyCell = isTrayFormat
+            ? `${escapeHtml(qtyDisplay(item, guestCount))} · `
+            : "";
+          return `<tr>
             <td style="padding:4px 8px;border-bottom:1px solid #eee;">${escapeHtml(item.name)}</td>
-            <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</td>
-          </tr>`
-        )
+            <td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">${qtyCell}${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</td>
+          </tr>`;
+        })
         .join("");
       return [
         `<tr><td colspan="2" style="padding:8px 8px 4px;font-weight:bold;color:#1B2A4A;background:#eef1f6;">${escapeHtml(getCategoryDisplayName(cat))}</td></tr>`,
@@ -801,6 +643,10 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
       ].join("");
     })
     .join("");
+
+  const termsHtml = QUOTE_TERMS_PARAGRAPHS.map(
+    (p) => `<p style="font-size:12px;color:#555;margin:0 0 8px;">${escapeHtml(p)}</p>`
+  ).join("");
 
   const contactParts = [
     escapeHtml(caterer.name),
@@ -814,14 +660,14 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
 <html>
 <body style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.5;max-width:600px;">
   <p>Dear ${escapeHtml(name)},</p>
-  <p>Please find your catering quote below:</p>
+  <p>Please find your catering quote attached and summarized below:</p>
   <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">
     <tr>
       <td style="padding:8px;background:#1B2A4A;color:#fff;font-weight:bold;" colspan="2">Quote Summary</td>
     </tr>
     <tr>
       <td style="padding:8px;border-bottom:1px solid #ddd;"><strong>Event</strong></td>
-      <td style="padding:8px;border-bottom:1px solid #ddd;">${escapeHtml(eventTitle)} on ${escapeHtml(eventDate)} at ${escapeHtml(location)}</td>
+      <td style="padding:8px;border-bottom:1px solid #ddd;">${escapeHtml(eventTitle)} on ${escapeHtml(eventDate)}${eventTime !== "—" ? ` at ${escapeHtml(eventTime)}` : ""} · ${escapeHtml(location)}</td>
     </tr>
     <tr>
       <td style="padding:8px;border-bottom:1px solid #ddd;"><strong>Guests</strong></td>
@@ -829,7 +675,6 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
     </tr>
     <tr><td colspan="2" style="padding:8px 0;border-top:2px solid #1B2A4A;"></td></tr>
     ${packageHtml}
-    ${selectionHtml}
     ${lineItemsHtml}
     <tr><td colspan="2" style="padding:8px 0;border-top:2px solid #1B2A4A;"></td></tr>
     <tr>
@@ -854,9 +699,11 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
     </tr>
     <tr>
       <td style="padding:4px 8px;">Payment Due</td>
-      <td style="padding:4px 8px;text-align:right;">${escapeHtml(formatDate(quote.dueDate))}</td>
+      <td style="padding:4px 8px;text-align:right;">${escapeHtml(formatPdfDate(quote.dueDate))}</td>
     </tr>
   </table>
+  <h3 style="font-size:14px;color:#1B2A4A;margin:24px 0 8px;">${escapeHtml(QUOTE_TERMS_TITLE)}</h3>
+  ${termsHtml}
   <p>Please reply to this email to confirm your booking.</p>
   <p style="color:#666;font-size:13px;margin-top:24px;border-top:1px solid #ddd;padding-top:12px;">
     Questions? Contact ${contactParts.join(" · ")}

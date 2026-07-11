@@ -1,13 +1,29 @@
 import { prisma } from "@tripeseats/database";
+import type { Prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import {
   eventTypeTitle,
+  formatEventServiceLabel,
+  formatOrderMode,
+  formatServiceType,
   isCustomerType,
   isEventType,
+  isOrderMode,
+  isServiceType,
+  legacyEventToServiceFields,
+  syncLegacyEventType,
   type CustomerTypeValue,
-  type EventTypeValue
+  type EventTypeValue,
+  type OrderModeValue,
+  type ServiceTypeValue
 } from "../lib/event-customer-types";
+import {
+  expandPackageSlotLabels,
+  loadMenuPreferencesForEvent,
+  parseMenuPreferencesPatch,
+  saveMenuPreferences
+} from "../lib/menu-preferences";
 import { getAuthorizedSession } from "../lib/authorized-session";
 import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
@@ -106,6 +122,92 @@ router.get("/stats", async (req: Request, res: Response) => {
   }
 });
 
+router.get("/client-history", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "events:read");
+    const emailRaw = typeof req.query.email === "string" ? req.query.email.trim() : "";
+    const phoneRaw = typeof req.query.phone === "string" ? req.query.phone.trim() : "";
+    const excludeEventId =
+      typeof req.query.excludeEventId === "string" ? req.query.excludeEventId.trim() : "";
+
+    if (!emailRaw && !phoneRaw) {
+      return res.status(400).json({ error: "email or phone is required." });
+    }
+
+    const guestFilters: Prisma.GuestWhereInput[] = [];
+    if (emailRaw) {
+      guestFilters.push({ email: { equals: emailRaw, mode: "insensitive" } });
+    }
+    if (phoneRaw) {
+      const digits = phoneRaw.replace(/\D/g, "");
+      if (digits.length >= 7) {
+        guestFilters.push({ phone: { contains: digits.slice(-10) } });
+      }
+    }
+    if (guestFilters.length === 0) {
+      return res.json({ items: [] });
+    }
+
+    const events = await prisma.event.findMany({
+      where: {
+        catererId: caterer.id,
+        ...(excludeEventId ? { id: { not: excludeEventId } } : {}),
+        primaryGuest: { OR: guestFilters }
+      },
+      orderBy: { eventDate: "desc" },
+      take: 25,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        eventDate: true,
+        guestCountEstimate: true,
+        venueName: true,
+        venueAddress: true,
+        primaryGuest: {
+          select: { firstName: true, lastName: true, email: true, phone: true }
+        },
+        quotes: {
+          where: { status: { not: "archived" } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, totalAmount: true, status: true, updatedAt: true }
+        }
+      }
+    });
+
+    return res.json({
+      items: events.map((ev) => ({
+        id: ev.id,
+        title: ev.title,
+        status: ev.status,
+        eventDate: ev.eventDate.toISOString(),
+        guestCountEstimate: ev.guestCountEstimate,
+        location: [ev.venueName, ev.venueAddress].filter(Boolean).join(" · ") || null,
+        guest: ev.primaryGuest
+          ? {
+              name: [ev.primaryGuest.firstName, ev.primaryGuest.lastName]
+                .filter(Boolean)
+                .join(" "),
+              email: ev.primaryGuest.email,
+              phone: ev.primaryGuest.phone
+            }
+          : null,
+        latestQuote: ev.quotes[0]
+          ? {
+              id: ev.quotes[0].id,
+              totalAmount: ev.quotes[0].totalAmount,
+              status: ev.quotes[0].status,
+              updatedAt: ev.quotes[0].updatedAt.toISOString()
+            }
+          : null
+      }))
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "Events");
+  }
+});
+
 async function loadEventForCaterer(eventId: string, catererId: string) {
   return prisma.event.findFirst({
     where: { id: eventId, catererId },
@@ -126,16 +228,24 @@ function serializeEvent(ev: LoadedEvent) {
     ? activity
     : [{ at: ev.createdAt.toISOString(), type: "created", label: "Event created" }, ...activity];
 
+  const serviceType = (ev.serviceType ?? legacyEventToServiceFields(ev.eventType).serviceType) as ServiceTypeValue;
+  const orderMode = (ev.orderMode ?? legacyEventToServiceFields(ev.eventType).orderMode) as OrderModeValue;
+
   return {
     id: ev.id,
     catererId: ev.catererId,
     leadId: ev.leadId,
     title: ev.title,
     eventType: ev.eventType,
-    eventTypeLabel: eventTypeTitle(ev.eventType),
+    eventTypeLabel: formatEventServiceLabel(serviceType, orderMode),
+    serviceType,
+    orderMode,
+    serviceTypeLabel: formatServiceType(serviceType),
+    orderModeLabel: formatOrderMode(orderMode),
     customerType: ev.customerType,
     status: ev.status,
     eventDate: ev.eventDate.toISOString(),
+    eventTime: ev.eventTime,
     startTime: ev.startTime?.toISOString() ?? null,
     endTime: ev.endTime?.toISOString() ?? null,
     venueName: ev.venueName,
@@ -182,23 +292,66 @@ router.patch("/:id", async (req: Request, res: Response) => {
   try {
     const { caterer } = await getAuthorizedSession(req, "events:write");
     const id = paramId(req);
-    const body = req.body as { eventType?: string; customerType?: string };
+    const body = req.body as {
+      eventType?: string;
+      serviceType?: string;
+      orderMode?: string;
+      customerType?: string;
+    };
 
     const existing = await loadEventForCaterer(id, caterer.id);
     if (!existing) {
       return res.status(404).json({ error: "Event not found." });
     }
 
-    const data: { eventType?: EventTypeValue; customerType?: CustomerTypeValue; title?: string } =
-      {};
+    const data: {
+      eventType?: EventTypeValue;
+      serviceType?: ServiceTypeValue;
+      orderMode?: OrderModeValue;
+      customerType?: CustomerTypeValue;
+      title?: string;
+    } = {};
 
-    if (body.eventType !== undefined) {
+    let nextServiceType =
+      (existing.serviceType as ServiceTypeValue | null) ??
+      legacyEventToServiceFields(existing.eventType).serviceType;
+    let nextOrderMode =
+      (existing.orderMode as OrderModeValue | null) ??
+      legacyEventToServiceFields(existing.eventType).orderMode;
+
+    if (body.serviceType !== undefined) {
+      const next = body.serviceType.trim().toLowerCase();
+      if (!isServiceType(next)) {
+        return res.status(400).json({ error: "Invalid service type." });
+      }
+      nextServiceType = next;
+      data.serviceType = next;
+    }
+
+    if (body.orderMode !== undefined) {
+      const next = body.orderMode.trim().toLowerCase();
+      if (!isOrderMode(next)) {
+        return res.status(400).json({ error: "Invalid order mode." });
+      }
+      nextOrderMode = next;
+      data.orderMode = next;
+    }
+
+    if (body.eventType !== undefined && body.serviceType === undefined && body.orderMode === undefined) {
       const next = body.eventType.trim().toLowerCase();
       if (!isEventType(next)) {
         return res.status(400).json({ error: "Invalid event type." });
       }
-      data.eventType = next;
-      data.title = eventTypeTitle(next);
+      const mapped = legacyEventToServiceFields(next);
+      nextServiceType = mapped.serviceType;
+      nextOrderMode = mapped.orderMode;
+      data.serviceType = mapped.serviceType;
+      data.orderMode = mapped.orderMode;
+    }
+
+    if (data.serviceType !== undefined || data.orderMode !== undefined) {
+      data.eventType = syncLegacyEventType(nextServiceType, nextOrderMode);
+      data.title = formatEventServiceLabel(nextServiceType, nextOrderMode);
     }
 
     if (body.customerType !== undefined) {
@@ -231,6 +384,40 @@ router.patch("/:id", async (req: Request, res: Response) => {
     }
 
     return res.json({ event: serializeEvent(updated as LoadedEvent) });
+  } catch (e) {
+    return handleRouteError(res, e, "Events");
+  }
+});
+
+router.patch("/:id/time", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "events:write");
+    const id = paramId(req);
+    const raw = (req.body as { eventTime?: unknown }).eventTime;
+
+    if (raw !== null && raw !== undefined && typeof raw !== "string") {
+      return res.status(400).json({ error: "eventTime must be a string or null." });
+    }
+
+    const eventTime =
+      typeof raw === "string" ? (raw.trim() ? raw.trim() : null) : null;
+
+    const existing = await loadEventForCaterer(id, caterer.id);
+    if (!existing) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    const updated = await prisma.event.update({
+      where: { id },
+      data: { eventTime },
+      include: {
+        primaryGuest: true,
+        lead: true,
+        tasks: { orderBy: { createdAt: "asc" } }
+      }
+    });
+
+    return res.json({ eventTime: updated.eventTime, event: serializeEvent(updated as LoadedEvent) });
   } catch (e) {
     return handleRouteError(res, e, "Events");
   }
@@ -440,6 +627,152 @@ router.get("/:id", async (req: Request, res: Response) => {
 
     perf.end();
     return res.json({ event: serializeEvent(ev) });
+  } catch (e) {
+    return handleRouteError(res, e, "Events");
+  }
+});
+
+async function loadEventPackageContext(eventId: string, catererId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { eventId, catererId },
+    orderBy: { updatedAt: "desc" },
+    select: {
+      id: true,
+      lineItems: {
+        where: { unitType: "tiered_per_head" },
+        select: {
+          packageId: true,
+          package: {
+            select: {
+              id: true,
+              name: true,
+              items: { orderBy: { sortOrder: "asc" } }
+            }
+          }
+        },
+        take: 1
+      }
+    }
+  });
+
+  const packageLine = quote?.lineItems[0];
+  if (!packageLine?.packageId || !packageLine.package) return null;
+
+  return {
+    quoteId: quote!.id,
+    packageId: packageLine.packageId,
+    packageName: packageLine.package.name,
+    packageItems: packageLine.package.items
+  };
+}
+
+router.get("/:id/menu-preferences", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "events:read");
+    const id = paramId(req);
+
+    const event = await prisma.event.findFirst({
+      where: { id, catererId: caterer.id },
+      select: { id: true }
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    const pkgCtx = await loadEventPackageContext(id, caterer.id);
+    if (!pkgCtx) {
+      return res.json({ hasPackage: false });
+    }
+
+    const preferences = await loadMenuPreferencesForEvent(id);
+    const slotLabels = expandPackageSlotLabels(
+      pkgCtx.packageItems.map((item) => ({ label: item.label, quantity: item.quantity }))
+    );
+
+    const menuItems = await prisma.menuItem.findMany({
+      where: { catererId: caterer.id },
+      orderBy: [{ usageCount: "desc" }, { name: "asc" }],
+      select: {
+        id: true,
+        category: true,
+        name: true,
+        defaultPrice: true,
+        defaultUnit: true,
+        usageCount: true,
+        isDefault: true
+      }
+    });
+
+    const menuItemsByCategory: Record<string, typeof menuItems> = {};
+    for (const item of menuItems) {
+      const key = item.category;
+      if (!menuItemsByCategory[key]) menuItemsByCategory[key] = [];
+      menuItemsByCategory[key]!.push(item);
+    }
+
+    return res.json({
+      hasPackage: true,
+      quoteId: pkgCtx.quoteId,
+      packageId: pkgCtx.packageId,
+      packageName: pkgCtx.packageName,
+      slotLabels,
+      packageItems: pkgCtx.packageItems,
+      preferences: preferences.map((p) => ({
+        slotLabel: p.slotLabel,
+        selectedItem: p.selectedItem
+      })),
+      totalSlots: slotLabels.length,
+      configuredCount: preferences.filter((p) => p.selectedItem.trim()).length,
+      menuItemsByCategory
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "Events");
+  }
+});
+
+router.patch("/:id/menu-preferences", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "events:write");
+    const id = paramId(req);
+
+    const event = await prisma.event.findFirst({
+      where: { id, catererId: caterer.id },
+      select: { id: true }
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+
+    const pkgCtx = await loadEventPackageContext(id, caterer.id);
+    if (!pkgCtx) {
+      return res.status(400).json({ error: "No package on this event's quote." });
+    }
+
+    const parsed = parseMenuPreferencesPatch(req.body);
+    if (!parsed) {
+      return res.status(400).json({ error: "Invalid preferences payload." });
+    }
+
+    const allowedSlots = new Set(
+      expandPackageSlotLabels(
+        pkgCtx.packageItems.map((item) => ({ label: item.label, quantity: item.quantity }))
+      )
+    );
+
+    for (const pref of parsed) {
+      if (!allowedSlots.has(pref.slotLabel)) {
+        return res.status(400).json({ error: `Invalid slot: ${pref.slotLabel}` });
+      }
+    }
+
+    const saved = await saveMenuPreferences(id, pkgCtx.packageId, parsed);
+
+    return res.json({
+      preferences: saved.map((p) => ({
+        slotLabel: p.slotLabel,
+        selectedItem: p.selectedItem
+      }))
+    });
   } catch (e) {
     return handleRouteError(res, e, "Events");
   }

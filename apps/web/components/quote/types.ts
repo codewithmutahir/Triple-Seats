@@ -12,11 +12,12 @@ export type ItemCategory =
   | "beverages"
   | "equipment"
   | "delivery"
+  | "labor"
   | "other";
 
 export type QuoteUnit = "per_head" | "by_tray" | "flat" | "per_piece" | "tiered_per_head";
 
-export type QuoteStatus = "draft" | "sent" | "accepted" | "declined";
+export type QuoteStatus = "draft" | "sent" | "accepted" | "declined" | "archived";
 
 export type PackagePriceTier = {
   id: string;
@@ -108,6 +109,7 @@ export type Quote = {
   dueDate: string | null;
   totalAmount: number;
   createdAt?: string;
+  updatedAt?: string;
   packageSelections?: Record<string, Record<string, { id: string; name: string }[]>>;
   lineItems: QuoteLineItem[];
   event?: QuoteEvent;
@@ -129,6 +131,7 @@ export const CATEGORY_LABELS: Record<ItemCategory, string> = {
   beverages: "BEVERAGES",
   equipment: "EQUIPMENT",
   delivery: "DELIVERY",
+  labor: "LABOR & STAFFING",
   other: "OTHER"
 };
 
@@ -215,6 +218,12 @@ export const MENU_SECTIONS: {
     label: "Delivery",
     borderClass: "border-l-indigo-400",
     emptyMessage: "No delivery charges yet"
+  },
+  {
+    category: "labor",
+    label: "Labor & Staff",
+    borderClass: "border-l-violet-500",
+    emptyMessage: "No staffing added yet — add servers, chefs, etc."
   }
 ];
 
@@ -230,7 +239,8 @@ export const MENU_SECTION_GROUPS: {
   { groupLabel: "BBQ", categories: ["bbq"] },
   { groupLabel: "Sides", categories: ["side_items"] },
   { groupLabel: "Dessert & Drinks", categories: ["dessert", "beverages"] },
-  { groupLabel: "Logistics", categories: ["equipment", "delivery"] }
+  { groupLabel: "Logistics", categories: ["equipment", "delivery"] },
+  { groupLabel: "Staffing", categories: ["labor"] }
 ];
 
 export const UNIT_LABELS: Record<QuoteUnit, string> = {

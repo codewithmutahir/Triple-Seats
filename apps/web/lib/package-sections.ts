@@ -36,3 +36,16 @@ export function getPackageSlotsForSection(
   const slots = packageItemsForSection(items, category);
   return slots.length > 0 ? slots : undefined;
 }
+
+/** When a package is selected, hide food categories covered by the package; keep extras. */
+export function shouldShowQuoteCategory(
+  category: ItemCategory,
+  packageItems: PackageIncludedItem[] | undefined
+): boolean {
+  if (!packageItems?.length) return true;
+  if (category === "equipment" || category === "delivery" || category === "beverages" || category === "labor") {
+    return true;
+  }
+  const slots = getPackageSlotsForSection(packageItems, category);
+  return slots === undefined;
+}

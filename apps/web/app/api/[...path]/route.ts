@@ -35,7 +35,10 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   const path = pathSegments.join("/");
   const target = `${apiOrigin()}/api/${path}${req.nextUrl.search}`;
   const isLongRunning =
-    path.endsWith("/pdf") || path.endsWith("/send") || path.includes("/pdf/");
+    path.endsWith("/pdf") ||
+    path.endsWith("/send") ||
+    path.endsWith("/kitchen-sheet") ||
+    path.includes("/pdf/");
 
   const forwardHeaders = new Headers();
   const accept = req.headers.get("accept");

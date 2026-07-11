@@ -64,6 +64,7 @@ const CATEGORIES: { value: ItemCategory; label: string }[] = [
   { value: "beverages", label: "Beverages" },
   { value: "equipment", label: "Equipment" },
   { value: "delivery", label: "Delivery" },
+  { value: "labor", label: "Labor & Staffing" },
   { value: "other", label: "Other" }
 ];
 

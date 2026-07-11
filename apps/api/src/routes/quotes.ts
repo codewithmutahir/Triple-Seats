@@ -19,6 +19,8 @@ import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 import { ensureDefaultItemsForCategory, seedMenuItemsForCaterer } from "../lib/seed-menu-items";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
+import { syncMenuPreferencesForPackage, loadMenuPreferencesForEvent } from "../lib/menu-preferences";
+import { archiveQuote, getLatestActiveQuote } from "../lib/event-quotes";
 import { parsePackageSelections } from "../lib/package-selections";
 import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
 
@@ -26,6 +28,14 @@ const router = Router();
 
 async function loadQuotePdf() {
   return import("../lib/quote-pdf.js");
+}
+
+async function loadKitchenSheetPdf() {
+  return import("../lib/kitchen-sheet-pdf.js");
+}
+
+async function loadLaborSheetPdf() {
+  return import("../lib/labor-sheet-pdf.js");
 }
 
 function paramId(req: Request, key = "id"): string {
@@ -39,6 +49,66 @@ async function loadQuoteForCaterer(quoteId: string, catererId: string) {
     where: { id: quoteId, catererId },
     include: quoteInclude
   });
+}
+
+type QuoteExportBody = {
+  packageSelections?: unknown;
+  packageId?: unknown;
+  guestCount?: unknown;
+};
+
+async function syncQuoteForExport(
+  quoteId: string,
+  catererId: string,
+  body: QuoteExportBody
+): Promise<QuoteWithRelations | null> {
+  const quote = await loadQuoteForCaterer(quoteId, catererId);
+  if (!quote) return null;
+
+  if (body.guestCount !== undefined) {
+    const guestCount = Number(body.guestCount);
+    if (!Number.isInteger(guestCount) || guestCount < 1 || guestCount > 10_000) {
+      throw Object.assign(new Error("Invalid guestCount."), { status: 400 });
+    }
+    await updateGuestCountAndPackageTiers(quoteId, catererId, guestCount);
+  }
+
+  if (body.packageSelections !== undefined) {
+    const parsed = parsePackageSelections(body.packageSelections);
+    if (parsed === null) {
+      throw Object.assign(new Error("Invalid packageSelections."), { status: 400 });
+    }
+    await prisma.quote.update({
+      where: { id: quoteId },
+      data: { packageSelections: parsed }
+    });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "packageId")) {
+    const raw = body.packageId;
+    const packageId =
+      typeof raw === "string" && raw.trim() ? raw.trim() : null;
+
+    if (!packageId) {
+      await removePackageFromQuote(quoteId, catererId);
+    } else {
+      const current = await loadQuoteForCaterer(quoteId, catererId);
+      const existingPackage = current?.lineItems.find((item) => item.unitType === "tiered_per_head");
+      if (!existingPackage || existingPackage.packageId !== packageId) {
+        await addPackageToQuote(quoteId, catererId, packageId);
+      }
+    }
+  }
+
+  const refreshed = await loadQuoteForCaterer(quoteId, catererId);
+  if (!refreshed) return null;
+
+  const guestCount = refreshed.event?.guestCountEstimate ?? 0;
+  const customerType = refreshed.event?.customerType ?? "b2c";
+  await applySendTierFixes(quoteId, catererId, refreshed.lineItems, guestCount, customerType);
+  await persistQuoteTotals(quoteId);
+
+  return (await loadQuoteForCaterer(quoteId, catererId)) as QuoteWithRelations | null;
 }
 
 async function persistQuoteTotals(quoteId: string) {
@@ -173,12 +243,12 @@ async function persistQuoteTotals(quoteId: string) {
 }
 
 async function addPackageToQuote(quoteId: string, catererId: string, packageId: string) {
-  await prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const quote = await tx.quote.findFirst({
       where: { id: quoteId, catererId },
       include: {
         lineItems: true,
-        event: { select: { guestCountEstimate: true, customerType: true } }
+        event: { select: { id: true, guestCountEstimate: true, customerType: true } }
       }
     });
     if (!quote) {
@@ -187,7 +257,10 @@ async function addPackageToQuote(quoteId: string, catererId: string, packageId: 
 
     const pkg = await tx.cateringPackage.findFirst({
       where: { id: packageId, catererId },
-      include: { tiers: { orderBy: { minGuests: "asc" } } }
+      include: {
+        tiers: { orderBy: { minGuests: "asc" } },
+        items: { orderBy: { sortOrder: "asc" } }
+      }
     });
     if (!pkg) {
       throw Object.assign(new Error("Package not found."), { status: 404 });
@@ -204,7 +277,7 @@ async function addPackageToQuote(quoteId: string, catererId: string, packageId: 
       where: { quoteId, unitType: "tiered_per_head" }
     });
 
-    await tx.quoteLineItem.create({
+    const lineItem = await tx.quoteLineItem.create({
       data: {
         quoteId,
         packageId: pkg.id,
@@ -218,9 +291,27 @@ async function addPackageToQuote(quoteId: string, catererId: string, packageId: 
         notes: formatTierLabel(activeTier)
       }
     });
+
+    return { lineItem, eventId: quote.eventId, pkgItems: pkg.items };
   });
 
-  return persistQuoteTotals(quoteId);
+  await persistQuoteTotals(quoteId);
+
+  if (created.eventId) {
+    await syncMenuPreferencesForPackage(
+      created.eventId,
+      packageId,
+      catererId,
+      created.pkgItems.map((item) => ({ label: item.label, quantity: item.quantity }))
+    );
+  }
+
+  return {
+    id: created.lineItem.id,
+    packageId: created.lineItem.packageId!,
+    unitPrice: created.lineItem.unitPrice,
+    name: created.lineItem.name
+  };
 }
 
 async function removePackageFromQuote(quoteId: string, catererId: string) {
@@ -231,7 +322,8 @@ async function removePackageFromQuote(quoteId: string, catererId: string) {
     where: { quoteId, unitType: "tiered_per_head" }
   });
 
-  return persistQuoteTotals(quoteId);
+  await persistQuoteTotals(quoteId);
+  return { ok: true as const };
 }
 
 async function updateGuestCountAndPackageTiers(
@@ -463,7 +555,7 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
         }
       }),
       prisma.quote.findFirst({
-        where: { eventId, catererId: caterer.id },
+        where: { eventId, catererId: caterer.id, status: { not: "archived" } },
         orderBy: { createdAt: "desc" },
         include: quoteBuilderInclude
       }),
@@ -1103,15 +1195,15 @@ router.post("/:id/package", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "packageId is required." });
     }
 
-    const updated = await addPackageToQuote(quoteId, caterer.id, body.packageId!.trim());
-    if (!updated) {
+    const result = await addPackageToQuote(quoteId, caterer.id, body.packageId!.trim());
+    if (!result) {
       return res.status(404).json({ error: "Quote not found." });
     }
 
     perf.step("db:add-package");
     perf.end();
 
-    return res.json({ quote: serializeQuoteTotalsPatch(updated) });
+    return res.json(result);
   } catch (e) {
     const status =
       e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
@@ -1131,15 +1223,15 @@ router.delete("/:id/package", async (req: Request, res: Response) => {
     const quoteId = paramId(req);
     const perf = timer(`quote:remove-package:${quoteId}`);
 
-    const updated = await removePackageFromQuote(quoteId, caterer.id);
-    if (!updated) {
+    const result = await removePackageFromQuote(quoteId, caterer.id);
+    if (!result) {
       return res.status(404).json({ error: "Quote not found." });
     }
 
     perf.step("db:remove-package");
     perf.end();
 
-    return res.json({ quote: serializeQuoteTotalsPatch(updated) });
+    return res.json(result);
   } catch (e) {
     const status =
       e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 0;
@@ -1190,6 +1282,7 @@ router.post("/:id/duplicate", async (req: Request, res: Response) => {
     });
 
     await persistQuoteTotals(duplicate.id);
+    await archiveQuote(source.id, caterer.id);
     const full = await loadQuoteForCaterer(duplicate.id, caterer.id);
     return res.status(201).json({
       quote: serializeQuote((full ?? duplicate) as QuoteWithRelations)
@@ -1203,18 +1296,10 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
   const quoteId = paramId(req);
   try {
     const { caterer } = await getAuthorizedSession(req, "quotes:read");
-    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
-    if (!quote) {
+    const body = req.body as QuoteExportBody;
+    const quoteForPdf = await syncQuoteForExport(quoteId, caterer.id, body);
+    if (!quoteForPdf) {
       return res.status(404).json({ error: "Quote not found." });
-    }
-
-    const body = req.body as { packageSelections?: unknown };
-    let quoteForPdf = quote as QuoteWithRelations;
-    if (body.packageSelections !== undefined) {
-      const parsed = parsePackageSelections(body.packageSelections);
-      if (parsed !== null) {
-        quoteForPdf = { ...quoteForPdf, packageSelections: parsed };
-      }
     }
 
     const { generateQuotePdfBuffer } = await loadQuotePdf();
@@ -1236,6 +1321,82 @@ router.post("/:id/pdf", async (req: Request, res: Response) => {
     }
     return res.status(status === 404 ? 404 : 500).json({
       error: status === 500 ? "Failed to generate PDF" : message
+    });
+  }
+});
+
+router.post("/:id/kitchen-sheet", async (req: Request, res: Response) => {
+  const quoteId = paramId(req);
+  try {
+    const { caterer } = await getAuthorizedSession(req, "quotes:read");
+    const body = req.body as QuoteExportBody;
+    const quoteForSheet = await syncQuoteForExport(quoteId, caterer.id, body);
+    if (!quoteForSheet) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    const menuPreferences = await loadMenuPreferencesForEvent(quoteForSheet.eventId);
+    const { generateKitchenSheetPdfBuffer } = await loadKitchenSheetPdf();
+    const buffer = await generateKitchenSheetPdfBuffer({
+      quote: quoteForSheet,
+      menuPreferences
+    });
+    if (!buffer.length) {
+      return res.status(500).json({ error: "Generated kitchen sheet was empty." });
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="kitchen-sheet-${quoteId}.pdf"`
+    );
+    return res.end(buffer);
+  } catch (e) {
+    const status =
+      e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 500;
+    const message =
+      e instanceof Error && e.message ? e.message : "Failed to generate kitchen sheet";
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[kitchen-sheet route] Error:", { quoteId, message, status });
+    }
+    return res.status(status === 404 ? 404 : 500).json({
+      error: status === 500 ? "Failed to generate kitchen sheet" : message
+    });
+  }
+});
+
+router.post("/:id/labor-sheet", async (req: Request, res: Response) => {
+  const quoteId = paramId(req);
+  try {
+    const { caterer } = await getAuthorizedSession(req, "quotes:read");
+    const body = req.body as QuoteExportBody;
+    const quoteForSheet = await syncQuoteForExport(quoteId, caterer.id, body);
+    if (!quoteForSheet) {
+      return res.status(404).json({ error: "Quote not found." });
+    }
+
+    const { generateLaborSheetPdfBuffer } = await loadLaborSheetPdf();
+    const buffer = await generateLaborSheetPdfBuffer({ quote: quoteForSheet });
+    if (!buffer.length) {
+      return res.status(500).json({ error: "Generated labor sheet was empty." });
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="labor-sheet-${quoteId}.pdf"`
+    );
+    return res.end(buffer);
+  } catch (e) {
+    const status =
+      e && typeof e === "object" && "status" in e ? Number((e as { status: number }).status) : 500;
+    const message =
+      e instanceof Error && e.message ? e.message : "Failed to generate labor sheet";
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[labor-sheet route] Error:", { quoteId, message, status });
+    }
+    return res.status(status === 404 ? 404 : 500).json({
+      error: status === 500 ? "Failed to generate labor sheet" : message
     });
   }
 });
@@ -1326,8 +1487,7 @@ async function processSendJob(quoteId: string, caterer: SessionCaterer) {
       attachments: [
         {
           filename: `quote-${quoteId}.pdf`,
-          content: pdfBuffer,
-          contentType: "application/pdf"
+          content: pdfBuffer.toString("base64")
         }
       ]
     });
@@ -1359,7 +1519,8 @@ router.post("/:id/send", async (req: Request, res: Response) => {
   try {
     const { caterer } = await getAuthorizedSession(req, "quotes:write");
     const quoteId = paramId(req);
-    const quote = await loadQuoteForCaterer(quoteId, caterer.id);
+    const body = req.body as QuoteExportBody;
+    const quote = await syncQuoteForExport(quoteId, caterer.id, body);
     if (!quote) {
       return res.status(404).json({ error: "Quote not found." });
     }

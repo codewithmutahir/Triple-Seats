@@ -4,9 +4,7 @@ import { differenceInCalendarDays, format, startOfDay } from "date-fns";
 import {
   ArrowLeft,
   CalendarDays,
-  CheckCircle2,
   ChevronRight,
-  ClipboardList,
   Clock,
   Loader2,
   Mail,
@@ -16,7 +14,6 @@ import {
   Phone,
   Plus,
   RefreshCw,
-  Trash2,
   Users
 } from "lucide-react";
 import Link from "next/link";
@@ -28,7 +25,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -42,16 +38,30 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { MenuPreferencesCard } from "@/components/quote/menu-preferences-card";
+import { EventDiscussionsTab } from "@/components/events/event-discussions-tab";
+import { EventDocumentsTab } from "@/components/events/event-documents-tab";
+import { EventHistoryTab } from "@/components/events/event-history-tab";
+import { EventPaymentsTab } from "@/components/events/event-payments-tab";
+import { EventTasksTab } from "@/components/events/event-tasks-tab";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   CUSTOMER_TYPE_LABELS,
   EVENT_TYPE_LABELS,
   EVENT_TYPE_VALUES,
+  ORDER_MODE_LABELS,
+  ORDER_MODE_VALUES,
+  SERVICE_TYPE_LABELS,
+  SERVICE_TYPE_VALUES,
   formatCustomerType,
+  formatEventServiceLabel,
   formatEventType,
   type CustomerTypeValue,
-  type EventTypeValue
+  type EventTypeValue,
+  type OrderModeValue,
+  type ServiceTypeValue
 } from "@/lib/event-customer-types";
-import { formatEventTimeRange } from "@/lib/event-datetime";
+import { formatEventTimeDisplay, formatEventTimeRange } from "@/lib/event-datetime";
 import { RefreshingBadge } from "@/components/refreshing-badge";
 import { ListPagination } from "@/components/dashboard/list-pagination";
 import {
@@ -381,7 +391,9 @@ function toTaskPayload(task: {
 
 function EventDetailInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const eventId = searchParams.get("eventId");
+  const activeTab = searchParams.get("tab") ?? "overview";
   const qc = useQueryClient();
 
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
@@ -403,6 +415,7 @@ function EventDetailInner() {
     notesMutation,
     guestMutation,
     updateMutation,
+    timeMutation,
     changeCustomerType,
     canWriteEvents
   } = useEventDetailMutations(eventId);
@@ -422,9 +435,7 @@ function EventDetailInner() {
   });
   const [guestEditing, setGuestEditing] = useState(false);
   const [additionalNotes, setAdditionalNotes] = useState("");
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [taskSaving, setTaskSaving] = useState(false);
-  const [showQuickTaskForm, setShowQuickTaskForm] = useState(false);
+  const [eventTimeEdit, setEventTimeEdit] = useState("");
   const taskMutationSeqRef = useRef(0);
   const bumpTaskOp = () => ++taskMutationSeqRef.current;
   const isLatestTaskOp = (opId: number) => opId === taskMutationSeqRef.current;
@@ -441,6 +452,7 @@ function EventDetailInner() {
       guestCount: event.guestCountEstimate ?? ""
     });
     setAdditionalNotes(event.additionalNotes);
+    setEventTimeEdit(event.eventTime ?? "");
   }, [event]);
 
   useEffect(() => {
@@ -465,7 +477,12 @@ function EventDetailInner() {
     return [...event.activity].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   }, [event]);
 
-  function patchEvent(patch: { eventType?: EventTypeValue; customerType?: CustomerTypeValue }) {
+  function patchEvent(patch: {
+    eventType?: EventTypeValue;
+    serviceType?: ServiceTypeValue;
+    orderMode?: OrderModeValue;
+    customerType?: CustomerTypeValue;
+  }) {
     if (!eventId || !event) return;
     updateMutation.mutate(patch);
   }
@@ -478,6 +495,14 @@ function EventDetailInner() {
   function patchStatus(next: string) {
     if (!eventId || !event || next === event.status) return;
     statusMutation.mutate(next);
+  }
+
+  function saveEventTime() {
+    if (!eventId || !event || !canWriteEvents) return;
+    const next = eventTimeEdit.trim() || null;
+    const prev = event.eventTime?.trim() || null;
+    if (next === prev) return;
+    timeMutation.mutate(next);
   }
 
   function saveNotes() {
@@ -501,27 +526,14 @@ function EventDetailInner() {
     });
   }
 
-  async function addTask(fromQuick: boolean) {
-    if (!eventId || !newTaskTitle.trim() || !canWriteTasks) return;
-    setTaskSaving(true);
-    try {
-      const { task } = await api.tasks.create({ eventId, title: newTaskTitle.trim() });
-      qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
-        old ? { ...old, tasks: [...old.tasks, toTaskPayload(task)] } : old
-      );
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      quoteAnalytics.taskAdded({
-        eventId,
-        taskTitle: newTaskTitle.trim(),
-        source: fromQuick ? "quick" : "list"
-      });
-      setNewTaskTitle("");
-      if (fromQuick) setShowQuickTaskForm(false);
-    } catch {
-      toast.error("Failed to add task");
-    } finally {
-      setTaskSaving(false);
-    }
+  async function addTaskByTitle(title: string) {
+    if (!eventId || !canWriteTasks) return;
+    const { task } = await api.tasks.create({ eventId, title });
+    qc.setQueryData<EventDetailPayload>(detailKey, (old) =>
+      old ? { ...old, tasks: [...old.tasks, toTaskPayload(task)] } : old
+    );
+    void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    quoteAnalytics.taskAdded({ eventId, taskTitle: title, source: "list" });
   }
 
   async function toggleTask(task: TaskPayload, completed: boolean) {
@@ -615,13 +627,16 @@ function EventDetailInner() {
   if (!event) return null;
 
   const guestName = [guestEdit.firstName, guestEdit.lastName].filter(Boolean).join(" ") || "—";
-  const fieldSaving = updateMutation.isPending;
+  const fieldSaving = updateMutation.isPending || timeMutation.isPending;
   const notesSaving = notesMutation.isPending;
+
+  function setTab(tab: string) {
+    if (!eventId) return;
+    router.replace(`/dashboard/events?eventId=${encodeURIComponent(eventId)}&tab=${tab}`);
+  }
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
           {/* Header */}
           <Card>
             <CardContent className="space-y-4 p-6">
@@ -679,6 +694,20 @@ function EventDetailInner() {
               </div>
             </CardContent>
           </Card>
+
+      <Tabs value={activeTab} onValueChange={setTab}>
+        <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="discussions">Discussions</TabsTrigger>
+          <TabsTrigger value="tasks">Tasks</TabsTrigger>
+          <TabsTrigger value="payments">Payments</TabsTrigger>
+          <TabsTrigger value="documents">Documents</TabsTrigger>
+          <TabsTrigger value="history">History</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="mt-4">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
 
           {/* Guest */}
           <Card>
@@ -791,9 +820,21 @@ function EventDetailInner() {
                 </div>
                 <div className="flex items-start gap-2">
                   <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div>
+                  <div className="w-full">
                     <p className="text-xs font-medium text-muted-foreground">Event time</p>
-                    <p>{formatEventTimeRange(event.startTime, event.endTime)}</p>
+                    {canWriteEvents ? (
+                      <Input
+                        id="event-time"
+                        placeholder="e.g. 6:30 PM"
+                        value={eventTimeEdit}
+                        disabled={fieldSaving}
+                        onChange={(e) => setEventTimeEdit(e.target.value)}
+                        onBlur={() => saveEventTime()}
+                        className="mt-1 h-9"
+                      />
+                    ) : (
+                      <p>{formatEventTimeDisplay(event)}</p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-start gap-2">
@@ -803,28 +844,53 @@ function EventDetailInner() {
                     <p>{locationDisplay}</p>
                   </div>
                 </div>
-                <div className="sm:col-span-2 space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">Event</p>
-                  {canWriteEvents ? (
-                  <Select
-                    value={event.eventType}
-                    disabled={fieldSaving}
-                    onValueChange={(v) => void patchEvent({ eventType: v as EventTypeValue })}
-                  >
-                    <SelectTrigger className="max-w-xs bg-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EVENT_TYPE_VALUES.map((value) => (
-                        <SelectItem key={value} value={value}>
-                          {EVENT_TYPE_LABELS[value]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  ) : (
-                    <p className="text-sm">{event.eventTypeLabel ?? formatEventType(event.eventType)}</p>
-                  )}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Event type</p>
+                    {canWriteEvents ? (
+                      <Select
+                        value={event.serviceType ?? "full_service"}
+                        disabled={fieldSaving}
+                        onValueChange={(v) => void patchEvent({ serviceType: v as ServiceTypeValue })}
+                      >
+                        <SelectTrigger className="bg-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SERVICE_TYPE_VALUES.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {SERVICE_TYPE_LABELS[value]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p className="text-sm">{event.serviceTypeLabel ?? SERVICE_TYPE_LABELS.full_service}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Order mode</p>
+                    {canWriteEvents ? (
+                      <Select
+                        value={event.orderMode ?? "delivery"}
+                        disabled={fieldSaving}
+                        onValueChange={(v) => void patchEvent({ orderMode: v as OrderModeValue })}
+                      >
+                        <SelectTrigger className="bg-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ORDER_MODE_VALUES.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {ORDER_MODE_LABELS[value]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p className="text-sm">{event.orderModeLabel ?? ORDER_MODE_LABELS.delivery}</p>
+                    )}
+                  </div>
                 </div>
               </div>
               {event.preferredSlots.length > 0 ? (
@@ -863,25 +929,14 @@ function EventDetailInner() {
             </CardContent>
           </Card>
 
-          {/* Activity */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Activity</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-3">
-                {sortedActivity.map((a, i) => (
-                  <li key={`${a.at}-${i}`} className="flex gap-3 text-sm">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                    <div>
-                      <p>{a.label}</p>
-                      <p className="text-xs text-muted-foreground">{formatShortDateTime(a.at)}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+          {eventId ? (
+            <MenuPreferencesCard
+              eventId={eventId}
+              variant="full"
+              readOnly
+              quoteBuilderLink={`/dashboard/quotes?eventId=${encodeURIComponent(eventId)}`}
+            />
+          ) : null}
         </div>
 
         {/* Right column */}
@@ -905,86 +960,21 @@ function EventDetailInner() {
                 type="button"
                 variant="outline"
                 className="justify-between bg-white"
-                onClick={() => setShowQuickTaskForm((v) => !v)}
+                onClick={() => setTab("tasks")}
               >
                 Add task
                 <Plus className="h-4 w-4" />
               </Button>
               ) : null}
-              {canWriteTasks && showQuickTaskForm ? (
-                <div className="flex gap-2 pt-1">
-                  <Input
-                    placeholder="Task title"
-                    value={newTaskTitle}
-                    onChange={(e) => setNewTaskTitle(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void addTask(true);
-                    }}
-                  />
-                  <Button type="button" size="sm" disabled={taskSaving} onClick={() => void addTask(true)}>
-                    {taskSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
-                  </Button>
-                </div>
-              ) : null}
-              <Button variant="outline" className="justify-between bg-white" asChild>
-                <Link href={`/dashboard/discussions?eventId=${encodeURIComponent(event.id)}`}>
-                  Send message
-                  <MessageSquare className="h-4 w-4" />
-                </Link>
+              <Button
+                type="button"
+                variant="outline"
+                className="justify-between bg-white"
+                onClick={() => setTab("discussions")}
+              >
+                Send message
+                <MessageSquare className="h-4 w-4" />
               </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Tasks</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {canWriteTasks ? (
-              <div className="flex gap-2">
-                <Input
-                  placeholder="New task…"
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void addTask(false);
-                  }}
-                />
-                <Button type="button" size="icon" variant="secondary" disabled={taskSaving} onClick={() => void addTask(false)}>
-                  {taskSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                </Button>
-              </div>
-              ) : null}
-              {event.tasks.length === 0 ? (
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <ClipboardList className="h-4 w-4" />
-                  No tasks yet
-                </p>
-              ) : (
-                <ul className="space-y-2">
-                  {event.tasks.map((t) => (
-                    <li
-                      key={t.id}
-                      className="flex items-start gap-2 rounded-md border border-slate-100 bg-slate-50/50 p-2"
-                    >
-                      <Checkbox
-                        className="mt-1"
-                        checked={t.status === "done"}
-                        disabled={!canWriteTasks}
-                        onCheckedChange={(c) => void toggleTask(t, c === true)}
-                      />
-                      <span className={cn("flex-1 text-sm", t.status === "done" && "text-muted-foreground line-through")}>
-                        {t.title}
-                      </span>
-                      {canWriteTasks ? (
-                      <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => void deleteTask(t.id)}>
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </CardContent>
           </Card>
 
@@ -1004,7 +994,7 @@ function EventDetailInner() {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Event time</p>
-                <p className="font-medium">{formatEventTimeRange(event.startTime, event.endTime)}</p>
+                <p className="font-medium">{formatEventTimeDisplay(event)}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Location</p>
@@ -1014,6 +1004,44 @@ function EventDetailInner() {
           </Card>
         </div>
       </div>
+        </TabsContent>
+
+        <TabsContent value="discussions" className="mt-4">
+          {eventId ? <EventDiscussionsTab eventId={eventId} /> : null}
+        </TabsContent>
+
+        <TabsContent value="tasks" className="mt-4">
+          <EventTasksTab
+            tasks={event.tasks}
+            canWriteTasks={canWriteTasks}
+            onAddTask={addTaskByTitle}
+            onToggleTask={toggleTask}
+            onDeleteTask={deleteTask}
+          />
+        </TabsContent>
+
+        <TabsContent value="payments" className="mt-4">
+          {eventId ? (
+            <EventPaymentsTab
+              eventId={eventId}
+              eventStatus={event.status}
+              onSuggestComplete={() => {
+                toast.message("Balance paid in full", {
+                  description: "Consider marking this event as Completed."
+                });
+              }}
+            />
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="documents" className="mt-4">
+          {eventId ? <EventDocumentsTab eventId={eventId} /> : null}
+        </TabsContent>
+
+        <TabsContent value="history" className="mt-4">
+          <EventHistoryTab event={event} activity={sortedActivity} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

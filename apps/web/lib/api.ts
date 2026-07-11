@@ -23,6 +23,7 @@ import {
 } from "@/lib/settings-types";
 import type { CatererProfile } from "@/lib/caterer-profile";
 import type { EventDetailPayload } from "@/lib/event-types";
+import type { QuoteExportPayload } from "@/lib/quote-export";
 import { CLIENT_LIST_FETCH_SIZE, fetchAllListPages } from "@/lib/client-list-filter";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -145,7 +146,56 @@ export const api = {
           method: "PATCH",
           body: JSON.stringify({ customerType })
         }
-      )
+      ),
+    menuPreferences: (id: string) =>
+      apiFetch<import("@/lib/menu-preference-types").MenuPreferencesPayload>(
+        `/api/events/${encodeURIComponent(id)}/menu-preferences`
+      ),
+    updateMenuPreferences: (
+      id: string,
+      body: import("@/lib/menu-preference-types").MenuPreferencesSaveInput
+    ) =>
+      apiFetch<{ preferences: import("@/lib/menu-preference-types").MenuPreferenceEntry[] }>(
+        `/api/events/${encodeURIComponent(id)}/menu-preferences`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      ),
+    updateTime: (id: string, eventTime: string | null) =>
+      apiFetch<{ eventTime: string | null; event: EventDetailPayload }>(
+        `/api/events/${encodeURIComponent(id)}/time`,
+        { method: "PATCH", body: JSON.stringify({ eventTime }) }
+      ).then((r) => r.event),
+    clientHistory: (params: { email?: string; phone?: string; excludeEventId?: string }) => {
+      const qs = new URLSearchParams();
+      if (params.email) qs.set("email", params.email);
+      if (params.phone) qs.set("phone", params.phone);
+      if (params.excludeEventId) qs.set("excludeEventId", params.excludeEventId);
+      return apiFetch<{ items: import("@/lib/payment-types").ClientHistoryEntry[] }>(
+        `/api/events/client-history?${qs.toString()}`
+      ).then((r) => r.items);
+    }
+  },
+
+  payments: {
+    byEvent: (eventId: string) =>
+      apiFetch<import("@/lib/payment-types").EventPaymentsPayload>(
+        `/api/payments/event/${encodeURIComponent(eventId)}`
+      ),
+    create: (body: {
+      eventId: string;
+      amount: number;
+      method: import("@/lib/payment-types").PaymentMethod;
+      note?: string;
+      paymentDate?: string;
+    }) =>
+      apiFetch<
+        import("@/lib/payment-types").EventPaymentsPayload & {
+          payment: import("@/lib/payment-types").PaymentRecord;
+        }
+      >("/api/payments", { method: "POST", body: JSON.stringify(body) }),
+    delete: (paymentId: string) =>
+      apiFetch<
+        import("@/lib/payment-types").EventPaymentsPayload & { ok: boolean; eventId: string }
+      >(`/api/payments/${encodeURIComponent(paymentId)}`, { method: "DELETE" })
   },
 
   leads: {
@@ -193,15 +243,14 @@ export const api = {
         { method: "PATCH", body: JSON.stringify(data) }
       ),
     addPackage: (quoteId: string, packageId: string) =>
-      apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
+      apiFetch<{ id: string; packageId: string; unitPrice: number; name: string }>(
         `/api/quotes/${encodeURIComponent(quoteId)}/package`,
         { method: "POST", body: JSON.stringify({ packageId }) }
       ),
     removePackage: (quoteId: string) =>
-      apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
-        `/api/quotes/${encodeURIComponent(quoteId)}/package`,
-        { method: "DELETE" }
-      ),
+      apiFetch<{ ok: true }>(`/api/quotes/${encodeURIComponent(quoteId)}/package`, {
+        method: "DELETE"
+      }),
     updateGuestCount: (quoteId: string, guestCount: number) =>
       apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
         `/api/quotes/${encodeURIComponent(quoteId)}/guest-count`,
@@ -212,10 +261,32 @@ export const api = {
         `/api/quotes/${encodeURIComponent(quoteId)}/duplicate`,
         { method: "POST" }
       ),
-    send: (quoteId: string) =>
-      apiFetch<{ ok: boolean }>(`/api/quotes/${encodeURIComponent(quoteId)}/send`, { method: "POST" }),
-    pdf: (quoteId: string) =>
-      fetch(`/api/quotes/${encodeURIComponent(quoteId)}/pdf`, { credentials: "include" })
+    send: (quoteId: string, payload: QuoteExportPayload) =>
+      apiFetch<{ status: string; quoteId: string }>(
+        `/api/quotes/${encodeURIComponent(quoteId)}/send`,
+        { method: "POST", body: JSON.stringify(payload) }
+      ),
+    pdf: (quoteId: string, payload: QuoteExportPayload) =>
+      fetch(`/api/quotes/${encodeURIComponent(quoteId)}/pdf`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }),
+    kitchenSheet: (quoteId: string, payload: QuoteExportPayload) =>
+      fetch(`/api/quotes/${encodeURIComponent(quoteId)}/kitchen-sheet`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }),
+    laborSheet: (quoteId: string, payload: QuoteExportPayload) =>
+      fetch(`/api/quotes/${encodeURIComponent(quoteId)}/labor-sheet`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
   },
 
   tasks: {

@@ -4,6 +4,7 @@ import { useCallback, useRef } from "react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import type { EventDetailPayload } from "@/lib/event-types";
+import type { OrderModeValue, ServiceTypeValue } from "@/lib/event-customer-types";
 import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { queryKeys } from "@/lib/query-keys";
@@ -133,6 +134,12 @@ export function useEventDetailMutations(eventId: string | null) {
       patchCache((old) => ({
         ...old,
         ...(typeof data.eventType === "string" ? { eventType: data.eventType as EventDetailPayload["eventType"] } : {}),
+        ...(typeof data.serviceType === "string"
+          ? { serviceType: data.serviceType as ServiceTypeValue }
+          : {}),
+        ...(typeof data.orderMode === "string"
+          ? { orderMode: data.orderMode as OrderModeValue }
+          : {}),
         ...(typeof data.customerType === "string"
           ? { customerType: data.customerType as EventDetailPayload["customerType"] }
           : {})
@@ -182,17 +189,34 @@ export function useEventDetailMutations(eventId: string | null) {
     [eventId, canWrite, customerTypeMutation]
   );
 
+  const timeMutation = useMutation({
+    mutationFn: (eventTime: string | null) => api.events.updateTime(eventId!, eventTime),
+    onMutate: async (eventTime) => {
+      if (!canWrite) return denyMutation();
+      const prev = qc.getQueryData<EventDetailPayload>(detailKey);
+      patchCache((old) => ({ ...old, eventTime }));
+      return { prev };
+    },
+    onError: (err, _eventTime, ctx) => {
+      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+      handleMutationError(err, ctx, "Failed to update event time");
+    },
+    onSuccess: (event) => qc.setQueryData(detailKey, event)
+  });
+
   return {
     statusMutation,
     notesMutation,
     guestMutation,
     updateMutation,
+    timeMutation,
     changeCustomerType,
     canWriteEvents: canWrite,
     isSaving:
       statusMutation.isPending ||
       notesMutation.isPending ||
       guestMutation.isPending ||
-      updateMutation.isPending
+      updateMutation.isPending ||
+      timeMutation.isPending
   };
 }

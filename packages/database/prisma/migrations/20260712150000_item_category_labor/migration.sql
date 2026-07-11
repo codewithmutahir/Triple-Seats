@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ItemCategory" ADD VALUE IF NOT EXISTS 'labor';

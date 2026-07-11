@@ -7,7 +7,6 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
 import type { QuoteBuilderPayload } from "@/lib/quote-builder-api";
-import type { PackageSelections } from "@/lib/package-selections";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { resolveCreatedLineItem } from "@/lib/quote-line-items";
 import { queryKeys } from "@/lib/query-keys";
@@ -103,10 +102,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   }
 
   type QuoteMetaRevert = Partial<
-    Pick<
-      BuilderData["quote"],
-      "taxRate" | "depositPct" | "notes" | "dueDate" | "status" | "packageSelections"
-    >
+    Pick<BuilderData["quote"], "taxRate" | "depositPct" | "notes" | "dueDate" | "status">
   >;
 
   const quoteMetaRevertFrom = (
@@ -119,9 +115,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     if (data.notes !== undefined) revert.notes = quote.notes;
     if (data.dueDate !== undefined) revert.dueDate = quote.dueDate ?? null;
     if (typeof data.status === "string") revert.status = quote.status;
-    if (data.packageSelections !== undefined) {
-      revert.packageSelections = quote.packageSelections;
-    }
     return revert;
   };
 
@@ -522,72 +515,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     }
   });
 
-  const updatePackageSelectionsMutation = useMutation({
-    mutationFn: ({
-      quoteId,
-      packageSelections
-    }: {
-      quoteId: string;
-      packageSelections: PackageSelections;
-    }) => api.quotes.update(quoteId, { packageSelections }),
-    onMutate: async ({ packageSelections }) => {
-      if (!canWrite) return denyMutation();
-      const prev = qc.getQueryData<BuilderData>(builderKey);
-      if (!prev?.quote) return denyMutation();
-
-      const revert: QuoteMetaRevert = {
-        packageSelections: prev.quote.packageSelections
-      };
-
-      const categories = Object.keys(packageSelections);
-      const totalSelections = categories.reduce(
-        (sum, cat) =>
-          sum +
-          Object.values(packageSelections[cat] ?? {}).reduce(
-            (inner, items) => inner + items.length,
-            0
-          ),
-        0
-      );
-      quoteAnalytics.packageItemsUpdated({
-        ...builderContext(),
-        categories,
-        totalSelections
-      });
-
-      patchBuilder((old) => ({
-        ...old,
-        quote: {
-          ...old.quote,
-          packageSelections
-        }
-      }));
-
-      return { revert };
-    },
-    onSuccess: (result, _vars, ctx) => {
-      if (!ctx) return;
-      patchBuilder((old) => ({
-        ...old,
-        quote: {
-          ...old.quote,
-          packageSelections: result.quote.packageSelections
-        }
-      }));
-    },
-    onError: (err, _vars, ctx) => {
-      if (!ctx?.revert) return;
-      patchBuilder((old) => ({
-        ...old,
-        quote: {
-          ...old.quote,
-          ...ctx.revert
-        }
-      }));
-      handleMutationError(err, ctx, "Failed to save package selections");
-    }
-  });
-
   const addPackageMutation = useMutation({
     mutationFn: ({ quoteId, packageId }: { quoteId: string; packageId: string }) =>
       api.quotes.addPackage(quoteId, packageId),
@@ -601,20 +528,27 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
 
-      const serverPackageLines = result.quote.lineItems.filter(
-        (item) => item.unitType === "tiered_per_head"
-      );
-
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
-          lineItems: [
-            ...old.quote.lineItems.filter((item) => item.unitType !== "tiered_per_head"),
-            ...serverPackageLines
-          ]
+          lineItems: old.quote.lineItems.map((item) => {
+            if (item.unitType !== "tiered_per_head") return item;
+            if (item.packageId !== packageId && !item.id.startsWith("temp_pkg_")) return item;
+            return {
+              ...item,
+              id: result.id,
+              packageId: result.packageId,
+              unitPrice: result.unitPrice,
+              name: result.name
+            };
+          })
         }
       }));
+
+      if (eventId) {
+        void qc.invalidateQueries({ queryKey: queryKeys.events.menuPreferences(eventId) });
+      }
     },
     onError: (err, { packageId }, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
@@ -638,7 +572,9 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onSuccess: (_result, _vars, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
-      // Cache already correct from optimistic remove
+      if (eventId) {
+        void qc.invalidateQueries({ queryKey: queryKeys.events.menuPreferences(eventId) });
+      }
     },
     onError: (err, _vars, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
@@ -804,7 +740,6 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     updateItemMutation,
     updateQuoteMutation,
     saveQuoteSettingsMutation,
-    updatePackageSelectionsMutation,
     enqueueQuoteUpdate,
     addPackageMutation,
     removePackageMutation,
