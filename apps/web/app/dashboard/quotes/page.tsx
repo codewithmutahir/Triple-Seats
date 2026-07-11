@@ -3,10 +3,12 @@
 import { format } from "date-fns";
 import {
   ArrowLeft,
+  Check,
   ChevronUp,
   Copy,
   FileText,
   Loader2,
+  Save,
   Send,
   Truck,
   Trash2
@@ -16,9 +18,8 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { SaveIndicator } from "@/components/save-indicator";
 import { AddItemPayload } from "@/components/quote/add-item-form";
-import { PackagesSection, packageSummaryLabel } from "@/components/quote/packages-section";
+import { PackagesSection, PackageSelectionsApplyBar, packageSummaryLabel } from "@/components/quote/packages-section";
 import { QuoteSection } from "@/components/quote/quote-section";
 import {
   CATEGORY_LABELS,
@@ -58,7 +59,6 @@ import {
   type UiPackageSelectionEntry
 } from "@/lib/package-selections";
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
-import { useDebouncedCallback } from "@/lib/use-debounce";
 import { parseApiError } from "@/lib/user-facing-error";
 import { isForbiddenError } from "@/lib/api-error";
 import { quoteAnalytics } from "@/lib/quote-analytics";
@@ -90,6 +90,16 @@ function formatEventDate(iso: string) {
   }
 }
 
+type SettingsState = {
+  taxRate: number;
+  depositPct: number;
+  notes: string;
+};
+
+type SettingsSaveStatus = "idle" | "saving" | "saved" | "error";
+
+type GlobalSaveStatus = "idle" | "saving" | "unsaved" | "error";
+
 function unitTypeSummary(item: QuoteLineItem, guestCount: number): string {
   if (item.unitType === "tiered_per_head") {
     return `× ${guestCount} guests`;
@@ -120,7 +130,9 @@ function QuoteBuilderPage() {
   const { data: builderData, isLoading: loading, error: queryError } = useQuoteBuilderQuery(eventId);
   const {
     addItemMutation,
-    updateQuoteMutation,
+    enqueueQuoteUpdate,
+    saveQuoteSettingsMutation,
+    updatePackageSelectionsMutation,
     addPackageMutation,
     removePackageMutation,
     updateGuestCountMutation,
@@ -130,10 +142,9 @@ function QuoteBuilderPage() {
     updateLineItemOptimistic,
     removeLineItemOptimistic,
     latestPackageIdRef,
+    isItemMutating,
+    isPackageMutating,
     isGuestCountMutating,
-    isSaving,
-    isSaveSuccess,
-    isSaveError,
     canWriteQuotes
   } = useQuoteBuilderMutations(eventId);
 
@@ -149,11 +160,15 @@ function QuoteBuilderPage() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [sendLoading, setSendLoading] = useState(false);
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
+  const [settingsSaveStatus, setSettingsSaveStatus] = useState<SettingsSaveStatus>("idle");
+  const [saveFailed, setSaveFailed] = useState(false);
 
-  const [taxPct, setTaxPct] = useState("8.75");
-  const [depositPctInput, setDepositPctInput] = useState("50");
-  const [notes, setNotes] = useState("");
-  const [dueDate, setDueDate] = useState<Date | undefined>();
+  const [settingsState, setSettingsState] = useState<SettingsState>({
+    taxRate: 0.0875,
+    depositPct: 0.5,
+    notes: ""
+  });
+  const [settingsDueDate, setSettingsDueDate] = useState<Date | undefined>();
 
   const [deliveryDistance, setDeliveryDistance] = useState("");
   const [deliveryRate, setDeliveryRate] = useState("");
@@ -162,14 +177,10 @@ function QuoteBuilderPage() {
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, true]))
   );
 
-  const [packageItemSelections, setPackageItemSelections] = useState<UiPackageSelections>(() =>
+  const [localSelections, setLocalSelections] = useState<UiPackageSelections>(() =>
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}]))
   );
 
-  const settingsInitialized = useRef(false);
-  const skipSettingsSaveRef = useRef(true);
-  const packageSelectionsInitialized = useRef(false);
-  const skipPackageSelectionsSaveRef = useRef(true);
   const quoteLoadedRef = useRef<string | null>(null);
   const quoteCreatedTrackedRef = useRef<string | null>(null);
   const quoteOpenedTrackedRef = useRef<string | null>(null);
@@ -206,15 +217,23 @@ function QuoteBuilderPage() {
 
   const customerType = quote?.event?.customerType ?? "b2c";
 
-  const taxRate = useMemo(() => {
-    const t = parseFloat(taxPct) / 100;
-    return Number.isFinite(t) ? t : (quote?.taxRate ?? 0.0875);
-  }, [taxPct, quote?.taxRate]);
+  const settingsDirty = useMemo(() => {
+    if (!quote) return false;
+    const nextDueDate = settingsDueDate ? settingsDueDate.toISOString() : null;
+    const currentDueDate = quote.dueDate ? new Date(quote.dueDate).toISOString() : null;
+    return (
+      settingsState.taxRate !== quote.taxRate ||
+      settingsState.depositPct !== quote.depositPct ||
+      (settingsState.notes.trim() || "") !== (quote.notes ?? "") ||
+      nextDueDate !== currentDueDate
+    );
+  }, [quote, settingsState, settingsDueDate]);
 
-  const depositPct = useMemo(() => {
-    const d = parseFloat(depositPctInput) / 100;
-    return Number.isFinite(d) ? d : (quote?.depositPct ?? 0.5);
-  }, [depositPctInput, quote?.depositPct]);
+  const selectionsDirty = useMemo(() => {
+    if (!quote) return false;
+    const stored = uiSelectionsToStored(localSelections, menuItemsByCategory);
+    return !packageSelectionsEqual(stored, quote.packageSelections);
+  }, [quote, localSelections, menuItemsByCategory]);
 
   const displayLineItems = useMemo(() => {
     return lineItems.map((item) => {
@@ -231,8 +250,14 @@ function QuoteBuilderPage() {
   }, [lineItems, liveGuestCount, customerType, packages]);
 
   const totals = useMemo(
-    () => calculateQuoteTotals(displayLineItems, taxRate, depositPct, liveGuestCount),
-    [displayLineItems, taxRate, depositPct, liveGuestCount]
+    () =>
+      calculateQuoteTotals(
+        displayLineItems,
+        settingsState.taxRate,
+        settingsState.depositPct,
+        liveGuestCount
+      ),
+    [displayLineItems, settingsState.taxRate, settingsState.depositPct, liveGuestCount]
   );
 
   const deliveryTotal = useMemo(() => {
@@ -292,80 +317,119 @@ function QuoteBuilderPage() {
 
   useEffect(() => {
     if (!quote) return;
-    skipSettingsSaveRef.current = true;
-    settingsInitialized.current = true;
-    setTaxPct(String((quote.taxRate * 100).toFixed(2).replace(/\.?0+$/, "")));
-    setDepositPctInput(String(Math.round(quote.depositPct * 100)));
-    setNotes(quote.notes ?? "");
-    setDueDate(quote.dueDate ? new Date(quote.dueDate) : undefined);
-
-    skipPackageSelectionsSaveRef.current = true;
-    packageSelectionsInitialized.current = true;
-    setPackageItemSelections(storedSelectionsToUi(quote.packageSelections));
+    setSettingsState({
+      taxRate: quote.taxRate,
+      depositPct: quote.depositPct,
+      notes: quote.notes ?? ""
+    });
+    setSettingsDueDate(quote.dueDate ? new Date(quote.dueDate) : undefined);
+    setLocalSelections(storedSelectionsToUi(quote.packageSelections));
+    setSettingsSaveStatus("idle");
+    setSaveFailed(false);
   }, [quote?.id]);
 
-  const savePackageSelections = useDebouncedCallback(
-    useCallback(() => {
-      if (!packageSelectionsInitialized.current || !quote) return;
-      if (skipPackageSelectionsSaveRef.current) {
-        skipPackageSelectionsSaveRef.current = false;
-        return;
-      }
+  const updateSetting = useCallback(<K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
+    setSettingsState((prev) => ({ ...prev, [key]: value }));
+    setSettingsSaveStatus("idle");
+    setSaveFailed(false);
+  }, []);
 
-      const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
-      if (packageSelectionsEqual(stored, quote.packageSelections)) return;
+  const saveSettings = useCallback(async (): Promise<boolean> => {
+    if (!quote || !settingsDirty) return true;
 
-      updateQuoteMutation.mutate({
+    setSettingsSaveStatus("saving");
+    try {
+      await saveQuoteSettingsMutation.mutateAsync({
         quoteId: quote.id,
-        data: { packageSelections: stored }
+        settings: {
+          taxRate: settingsState.taxRate,
+          depositPct: settingsState.depositPct,
+          notes: settingsState.notes.trim() || null,
+          dueDate: settingsDueDate ? settingsDueDate.toISOString() : null
+        }
       });
-    }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]),
-    500
-  );
-
-  const flushPackageSelections = useCallback(async () => {
-    if (!packageSelectionsInitialized.current || !quote) return;
-    const stored = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
-    if (packageSelectionsEqual(stored, quote.packageSelections)) return;
-    await updateQuoteMutation.mutateAsync({
-      quoteId: quote.id,
-      data: { packageSelections: stored }
-    });
-  }, [quote, packageItemSelections, menuItemsByCategory, updateQuoteMutation]);
-
-  const saveSettings = useDebouncedCallback(() => {
-    if (!settingsInitialized.current || !quote) return;
-    if (skipSettingsSaveRef.current) {
-      skipSettingsSaveRef.current = false;
-      return;
+      setSettingsSaveStatus("saved");
+      setSaveFailed(false);
+      window.setTimeout(() => setSettingsSaveStatus("idle"), 2000);
+      return true;
+    } catch {
+      setSettingsSaveStatus("error");
+      setSaveFailed(true);
+      return false;
     }
+  }, [
+    quote,
+    settingsDirty,
+    settingsState,
+    settingsDueDate,
+    saveQuoteSettingsMutation
+  ]);
 
-    const tax = parseFloat(taxPct) / 100;
-    const deposit = parseFloat(depositPctInput) / 100;
-    if (!Number.isFinite(tax) || !Number.isFinite(deposit)) return;
+  const applySelections = useCallback(async (): Promise<boolean> => {
+    if (!quote || !selectionsDirty) return true;
 
-    const nextNotes = notes.trim() || null;
-    const nextDueDate = dueDate ? dueDate.toISOString() : null;
-    const currentDueDate = quote.dueDate ? new Date(quote.dueDate).toISOString() : null;
-    if (
-      tax === quote.taxRate &&
-      deposit === quote.depositPct &&
-      nextNotes === (quote.notes ?? null) &&
-      nextDueDate === currentDueDate
-    ) {
-      return;
+    const stored = uiSelectionsToStored(localSelections, menuItemsByCategory);
+    try {
+      await updatePackageSelectionsMutation.mutateAsync({
+        quoteId: quote.id,
+        packageSelections: stored
+      });
+      setSaveFailed(false);
+      toast.success("Package selections saved");
+      return true;
+    } catch {
+      setSaveFailed(true);
+      return false;
     }
+  }, [
+    quote,
+    selectionsDirty,
+    localSelections,
+    menuItemsByCategory,
+    updatePackageSelectionsMutation
+  ]);
 
-    updateQuoteMutation.mutate({
-      quoteId: quote.id,
-      data: {
-        taxRate: tax,
-        depositPct: deposit,
-        notes: nextNotes,
-        dueDate: nextDueDate
-      }
-    });
-  }, 800);
+  const retryLastSave = useCallback(async () => {
+    let ok = true;
+    if (settingsDirty) ok = (await saveSettings()) && ok;
+    if (selectionsDirty) ok = (await applySelections()) && ok;
+    if (ok) setSaveFailed(false);
+  }, [settingsDirty, selectionsDirty, saveSettings, applySelections]);
+
+  const anyMutationPending =
+    isItemMutating ||
+    isPackageMutating ||
+    isGuestCountMutating ||
+    saveQuoteSettingsMutation.isPending ||
+    updatePackageSelectionsMutation.isPending ||
+    pdfLoading ||
+    sendLoading;
+
+  const globalStatus: GlobalSaveStatus = (() => {
+    if (anyMutationPending) return "saving";
+    if (settingsDirty || selectionsDirty) return "unsaved";
+    if (saveFailed || settingsSaveStatus === "error") return "error";
+    return "idle";
+  })();
+
+  const warnUnsavedBeforeExport = useCallback(async (): Promise<boolean> => {
+    if (!settingsDirty && !selectionsDirty) return true;
+
+    const parts: string[] = [];
+    if (settingsDirty) parts.push("settings (tax rate, deposit, notes, due date)");
+    if (selectionsDirty) parts.push("package item selections");
+
+    const confirmed = window.confirm(
+      `You have unsaved ${parts.join(" and ")}. ` +
+        "The PDF/email will use previously saved values. Save changes first?"
+    );
+    if (!confirmed) return true;
+
+    let ok = true;
+    if (settingsDirty) ok = (await saveSettings()) && ok;
+    if (selectionsDirty) ok = (await applySelections()) && ok;
+    return ok;
+  }, [settingsDirty, selectionsDirty, saveSettings, applySelections]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading || packagesLoading) return;
@@ -378,16 +442,6 @@ function QuoteBuilderPage() {
       perfRef.current?.end();
     }
   }, [quote, loading, packagesLoading, error]);
-
-  useEffect(() => {
-    if (!quote || !settingsInitialized.current) return;
-    saveSettings();
-  }, [taxPct, depositPctInput, notes, dueDate, saveSettings]);
-
-  useEffect(() => {
-    if (!quote || !packageSelectionsInitialized.current) return;
-    savePackageSelections();
-  }, [packageItemSelections, savePackageSelections]);
 
   const addLineItemOptimistic = useCallback(
     (category: ItemCategory, payload: AddItemPayload) => {
@@ -447,11 +501,8 @@ function QuoteBuilderPage() {
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic, eventId]);
 
   const clearPackageSelections = useCallback(() => {
-    // Cancel any pending debounced save and skip the next auto-save after clearing.
-    savePackageSelections.cancel();
-    skipPackageSelectionsSaveRef.current = true;
-    setPackageItemSelections(Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
-  }, [savePackageSelections]);
+    setLocalSelections(Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
+  }, []);
 
   const addPackageToQuote = useCallback(
     (packageId: string) => {
@@ -529,10 +580,11 @@ function QuoteBuilderPage() {
 
   const handlePackageItemsChange = useCallback(
     (category: string, selections: Record<string, UiPackageSelectionEntry[]>) => {
-      setPackageItemSelections((prev) => ({
+      setLocalSelections((prev) => ({
         ...prev,
         [category]: selections
       }));
+      setSaveFailed(false);
     },
     []
   );
@@ -540,11 +592,10 @@ function QuoteBuilderPage() {
   const saveDraft = useCallback(() => {
     if (!quote) return;
     quoteAnalytics.draftSaved({ eventId, quoteId: quote.id });
-    updateQuoteMutation.mutate(
-      { quoteId: quote.id, data: { status: "draft" } },
-      { onSuccess: () => toast.success("Draft saved.") }
+    void enqueueQuoteUpdate({ quoteId: quote.id, data: { status: "draft" } }).then(() =>
+      toast.success("Draft saved.")
     );
-  }, [quote, eventId, updateQuoteMutation]);
+  }, [quote, eventId, enqueueQuoteUpdate]);
 
   const duplicateQuote = useCallback(() => {
     if (!quote) return;
@@ -556,21 +607,14 @@ function QuoteBuilderPage() {
   const handleGeneratePDF = useCallback(async () => {
     if (!quote || pdfLoading) return;
 
+    const canProceed = await warnUnsavedBeforeExport();
+    if (!canProceed) return;
+
     setPdfLoading(true);
     try {
-      const storedSelections = uiSelectionsToStored(packageItemSelections, menuItemsByCategory);
-
-      try {
-        await flushPackageSelections();
-      } catch {
-        // Still generate PDF with current UI selections even if background save failed.
-      }
-
       const res = await fetch(`/api/quotes/${encodeURIComponent(quote.id)}/pdf`, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ packageSelections: storedSelections })
+        credentials: "include"
       });
       if (!res.ok) {
         if (res.status === 403) return;
@@ -603,7 +647,7 @@ function QuoteBuilderPage() {
     } finally {
       setPdfLoading(false);
     }
-  }, [quote, pdfLoading, flushPackageSelections, packageItemSelections, menuItemsByCategory, eventId, totals.grandTotal]);
+  }, [quote, pdfLoading, warnUnsavedBeforeExport, eventId, totals.grandTotal]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -699,7 +743,7 @@ function QuoteBuilderPage() {
               <span>{formatUsd(totals.subtotal)}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
-              <span>Tax ({formatTaxRatePercent(taxRate)}%)</span>
+              <span>Tax ({formatTaxRatePercent(settingsState.taxRate)}%)</span>
               <span>{formatUsd(totals.tax)}</span>
             </div>
           </div>
@@ -711,7 +755,7 @@ function QuoteBuilderPage() {
 
           <div className="space-y-1 border-t pt-3">
             <div className="flex justify-between">
-              <span>Deposit ({Math.round(depositPct * 100)}%)</span>
+              <span>Deposit ({Math.round(settingsState.depositPct * 100)}%)</span>
               <span>{formatUsd(totals.deposit)}</span>
             </div>
             <div className="flex justify-between font-medium">
@@ -835,12 +879,6 @@ function QuoteBuilderPage() {
 
   return (
     <div className="relative p-4 pb-28 md:p-6 lg:pb-24">
-      <SaveIndicator
-        isPending={isSaving}
-        isSuccess={isSaveSuccess && !isSaving}
-        isError={isSaveError}
-      />
-
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <Button variant="ghost" size="sm" className="-ml-2 mb-2" asChild>
@@ -1021,7 +1059,7 @@ function QuoteBuilderPage() {
                       includedItems={includedItems}
                       catalogItems={menuItemsByCategory[section.category]}
                       customerType={customerType}
-                      selectedPackageItems={packageItemSelections[section.category]}
+                      selectedPackageItems={localSelections[section.category]}
                       onPackageItemsChange={(selections) =>
                         handlePackageItemsChange(section.category, selections)
                       }
@@ -1032,76 +1070,134 @@ function QuoteBuilderPage() {
               </div>
             </div>
           ))}
+
+          <PackageSelectionsApplyBar
+            dirty={selectionsDirty}
+            applying={updatePackageSelectionsMutation.isPending}
+            onApply={() => void applySelections()}
+            readOnly={!canWriteQuotes}
+          />
         </div>
 
         <div className="space-y-4 lg:col-span-2">
           {summaryPanel}
 
           <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Settings</CardTitle>
-              <p className="text-xs text-muted-foreground">Changes save automatically</p>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Settings</CardTitle>
+              {settingsDirty ? (
+                <span className="flex items-center gap-1 text-xs text-amber-600">
+                  <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                  Unsaved
+                </span>
+              ) : null}
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="tax-pct">Tax rate (%)</Label>
+                  <Label htmlFor="tax-pct" className="text-xs">
+                    Tax rate (%)
+                  </Label>
                   <Input
                     id="tax-pct"
                     type="number"
                     min={0}
                     step="0.1"
-                    value={taxPct}
+                    value={settingsState.taxRate * 100}
                     readOnly={!canWriteQuotes}
                     disabled={!canWriteQuotes}
-                    onChange={(e) => setTaxPct(e.target.value)}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      if (Number.isFinite(value)) updateSetting("taxRate", value / 100);
+                    }}
                   />
                 </div>
                 <div>
-                  <Label htmlFor="deposit-pct">Deposit (%)</Label>
+                  <Label htmlFor="deposit-pct" className="text-xs">
+                    Deposit (%)
+                  </Label>
                   <Input
                     id="deposit-pct"
                     type="number"
                     min={0}
                     max={100}
-                    value={depositPctInput}
+                    value={settingsState.depositPct * 100}
                     readOnly={!canWriteQuotes}
                     disabled={!canWriteQuotes}
-                    onChange={(e) => setDepositPctInput(e.target.value)}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      if (Number.isFinite(value)) updateSetting("depositPct", value / 100);
+                    }}
                   />
                 </div>
               </div>
               <div>
-                <Label>Due date</Label>
+                <Label className="text-xs">Due date</Label>
                 {canWriteQuotes ? (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="mt-1 w-full justify-start font-normal">
-                      {dueDate ? format(dueDate, "PPP") : "Pick a date"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar mode="single" selected={dueDate} onSelect={setDueDate} />
-                  </PopoverContent>
-                </Popover>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="mt-1 w-full justify-start font-normal">
+                        {settingsDueDate ? format(settingsDueDate, "PPP") : "Pick a date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={settingsDueDate}
+                        onSelect={(date) => {
+                          setSettingsDueDate(date);
+                          setSettingsSaveStatus("idle");
+                          setSaveFailed(false);
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
                 ) : (
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {dueDate ? format(dueDate, "PPP") : "—"}
+                    {settingsDueDate ? format(settingsDueDate, "PPP") : "—"}
                   </p>
                 )}
               </div>
               <div>
-                <Label htmlFor="quote-notes">Notes</Label>
+                <Label htmlFor="quote-notes" className="text-xs">
+                  Notes
+                </Label>
                 <Textarea
                   id="quote-notes"
                   rows={3}
-                  value={notes}
+                  value={settingsState.notes}
                   readOnly={!canWriteQuotes}
                   disabled={!canWriteQuotes}
-                  onChange={(e) => setNotes(e.target.value)}
+                  onChange={(e) => updateSetting("notes", e.target.value)}
                   placeholder="Terms, special requests…"
                 />
               </div>
+              {canWriteQuotes ? (
+                <Button
+                  type="button"
+                  onClick={() => void saveSettings()}
+                  disabled={!settingsDirty || settingsSaveStatus === "saving"}
+                  className="w-full"
+                  variant={settingsDirty ? "default" : "outline"}
+                >
+                  {settingsSaveStatus === "saving" ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : settingsDirty ? (
+                    <>
+                      <Save className="mr-2 h-4 w-4" />
+                      Save Settings
+                    </>
+                  ) : (
+                    <>
+                      <Check className="mr-2 h-4 w-4 text-green-500" />
+                      Settings Saved
+                    </>
+                  )}
+                </Button>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -1151,7 +1247,9 @@ function QuoteBuilderPage() {
                 setSendLoading(true);
                 toast.message("Sending quote — generating PDF and email…");
                 try {
-                  await flushPackageSelections();
+                  const canProceed = await warnUnsavedBeforeExport();
+                  if (!canProceed) return;
+
                   const res = await fetch(
                     `/api/quotes/${encodeURIComponent(quote.id)}/send`,
                     { method: "POST", credentials: "include" }
@@ -1199,6 +1297,59 @@ function QuoteBuilderPage() {
           </div>
           ) : null}
         </div>
+      </div>
+
+      <div
+        className="fixed bottom-0 left-0 right-0 z-10 flex h-8 items-center border-t bg-background/95 px-4 text-xs text-muted-foreground backdrop-blur-sm md:left-64"
+        role="status"
+        aria-live="polite"
+      >
+        {globalStatus === "idle" ? (
+          <span className="flex items-center gap-1.5">
+            <div className="h-1.5 w-1.5 rounded-full bg-green-500" />
+            All changes saved
+          </span>
+        ) : null}
+        {globalStatus === "saving" ? (
+          <span className="flex items-center gap-1.5">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Saving...
+          </span>
+        ) : null}
+        {globalStatus === "unsaved" ? (
+          <span className="flex items-center gap-2">
+            <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            {settingsDirty && selectionsDirty
+              ? "Settings and selections not saved"
+              : settingsDirty
+                ? "Settings not saved"
+                : "Package selections not saved"}
+            {canWriteQuotes ? (
+              <button
+                type="button"
+                onClick={() => void retryLastSave()}
+                className="text-amber-700 underline hover:text-amber-900"
+              >
+                Save now
+              </button>
+            ) : null}
+          </span>
+        ) : null}
+        {globalStatus === "error" ? (
+          <span className="flex items-center gap-2">
+            <div className="h-1.5 w-1.5 rounded-full bg-red-500" />
+            Save failed
+            {canWriteQuotes ? (
+              <button
+                type="button"
+                onClick={() => void retryLastSave()}
+                className="text-red-700 underline hover:text-red-900"
+              >
+                Retry
+              </button>
+            ) : null}
+          </span>
+        ) : null}
       </div>
     </div>
   );
