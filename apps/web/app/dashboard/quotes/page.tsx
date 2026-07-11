@@ -4,6 +4,7 @@ import { format } from "date-fns";
 import {
   ArrowLeft,
   Check,
+  ChefHat,
   ChevronUp,
   Copy,
   FileText,
@@ -11,7 +12,8 @@ import {
   Save,
   Send,
   Truck,
-  Trash2
+  Trash2,
+  Users
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -19,7 +21,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { toast } from "sonner";
 
 import { AddItemPayload } from "@/components/quote/add-item-form";
-import { PackagesSection, PackageSelectionsApplyBar, packageSummaryLabel } from "@/components/quote/packages-section";
+import { PackagesSection, packageSummaryLabel } from "@/components/quote/packages-section";
+import { MenuPreferencesCard } from "@/components/quote/menu-preferences-card";
 import { QuoteSection } from "@/components/quote/quote-section";
 import {
   CATEGORY_LABELS,
@@ -50,15 +53,10 @@ import {
 } from "@/lib/quote-totals";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { formatEventDateWithTime } from "@/lib/event-datetime";
-import { getPackageSlotsForSection } from "@/lib/package-sections";
-import {
-  packageSelectionsEqual,
-  storedSelectionsToUi,
-  uiSelectionsToStored,
-  type UiPackageSelections,
-  type UiPackageSelectionEntry
-} from "@/lib/package-selections";
+import { shouldShowQuoteCategory } from "@/lib/package-sections";
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
+import { api } from "@/lib/api";
+import type { QuoteExportPayload } from "@/lib/quote-export";
 import { parseApiError } from "@/lib/user-facing-error";
 import { isForbiddenError } from "@/lib/api-error";
 import { quoteAnalytics } from "@/lib/quote-analytics";
@@ -132,7 +130,6 @@ function QuoteBuilderPage() {
     addItemMutation,
     enqueueQuoteUpdate,
     saveQuoteSettingsMutation,
-    updatePackageSelectionsMutation,
     addPackageMutation,
     removePackageMutation,
     updateGuestCountMutation,
@@ -158,6 +155,8 @@ function QuoteBuilderPage() {
   const error = queryError?.message ?? null;
 
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [kitchenSheetLoading, setKitchenSheetLoading] = useState(false);
+  const [laborSheetLoading, setLaborSheetLoading] = useState(false);
   const [sendLoading, setSendLoading] = useState(false);
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
   const [settingsSaveStatus, setSettingsSaveStatus] = useState<SettingsSaveStatus>("idle");
@@ -175,10 +174,6 @@ function QuoteBuilderPage() {
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, true]))
-  );
-
-  const [localSelections, setLocalSelections] = useState<UiPackageSelections>(() =>
-    Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}]))
   );
 
   const quoteLoadedRef = useRef<string | null>(null);
@@ -228,12 +223,6 @@ function QuoteBuilderPage() {
       nextDueDate !== currentDueDate
     );
   }, [quote, settingsState, settingsDueDate]);
-
-  const selectionsDirty = useMemo(() => {
-    if (!quote) return false;
-    const stored = uiSelectionsToStored(localSelections, menuItemsByCategory);
-    return !packageSelectionsEqual(stored, quote.packageSelections);
-  }, [quote, localSelections, menuItemsByCategory]);
 
   const displayLineItems = useMemo(() => {
     return lineItems.map((item) => {
@@ -323,7 +312,6 @@ function QuoteBuilderPage() {
       notes: quote.notes ?? ""
     });
     setSettingsDueDate(quote.dueDate ? new Date(quote.dueDate) : undefined);
-    setLocalSelections(storedSelectionsToUi(quote.packageSelections));
     setSettingsSaveStatus("idle");
     setSaveFailed(false);
   }, [quote?.id]);
@@ -365,71 +353,68 @@ function QuoteBuilderPage() {
     saveQuoteSettingsMutation
   ]);
 
-  const applySelections = useCallback(async (): Promise<boolean> => {
-    if (!quote || !selectionsDirty) return true;
-
-    const stored = uiSelectionsToStored(localSelections, menuItemsByCategory);
-    try {
-      await updatePackageSelectionsMutation.mutateAsync({
-        quoteId: quote.id,
-        packageSelections: stored
-      });
-      setSaveFailed(false);
-      toast.success("Package selections saved");
-      return true;
-    } catch {
-      setSaveFailed(true);
-      return false;
-    }
-  }, [
-    quote,
-    selectionsDirty,
-    localSelections,
-    menuItemsByCategory,
-    updatePackageSelectionsMutation
-  ]);
-
   const retryLastSave = useCallback(async () => {
-    let ok = true;
-    if (settingsDirty) ok = (await saveSettings()) && ok;
-    if (selectionsDirty) ok = (await applySelections()) && ok;
+    const ok = await saveSettings();
     if (ok) setSaveFailed(false);
-  }, [settingsDirty, selectionsDirty, saveSettings, applySelections]);
+  }, [saveSettings]);
 
   const anyMutationPending =
     isItemMutating ||
     isPackageMutating ||
     isGuestCountMutating ||
     saveQuoteSettingsMutation.isPending ||
-    updatePackageSelectionsMutation.isPending ||
     pdfLoading ||
+    kitchenSheetLoading ||
+    laborSheetLoading ||
     sendLoading;
 
   const globalStatus: GlobalSaveStatus = (() => {
     if (anyMutationPending) return "saving";
-    if (settingsDirty || selectionsDirty) return "unsaved";
+    if (settingsDirty) return "unsaved";
     if (saveFailed || settingsSaveStatus === "error") return "error";
     return "idle";
   })();
 
   const warnUnsavedBeforeExport = useCallback(async (): Promise<boolean> => {
-    if (!settingsDirty && !selectionsDirty) return true;
-
-    const parts: string[] = [];
-    if (settingsDirty) parts.push("settings (tax rate, deposit, notes, due date)");
-    if (selectionsDirty) parts.push("package item selections");
+    if (!settingsDirty) return true;
 
     const confirmed = window.confirm(
-      `You have unsaved ${parts.join(" and ")}. ` +
+      "You have unsaved quote settings (tax rate, deposit, notes, due date). " +
         "The PDF/email will use previously saved values. Save changes first?"
     );
     if (!confirmed) return true;
 
-    let ok = true;
-    if (settingsDirty) ok = (await saveSettings()) && ok;
-    if (selectionsDirty) ok = (await applySelections()) && ok;
-    return ok;
-  }, [settingsDirty, selectionsDirty, saveSettings, applySelections]);
+    return saveSettings();
+  }, [settingsDirty, saveSettings]);
+
+  const buildExportPayload = useCallback((): QuoteExportPayload => {
+    return {
+      packageId: selectedPkgId,
+      guestCount: liveGuestCount
+    };
+  }, [selectedPkgId, liveGuestCount]);
+
+  const ensureExportReady = useCallback(async (): Promise<boolean> => {
+    const canProceed = await warnUnsavedBeforeExport();
+    if (!canProceed) return false;
+
+    if (liveGuestCount < 1) {
+      toast.error("Set a guest count of at least 1 before exporting.");
+      return false;
+    }
+
+    let attempts = 0;
+    while (anyMutationPending && attempts < 50) {
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+      attempts += 1;
+    }
+    if (anyMutationPending) {
+      toast.error("Still saving changes — please try again in a moment.");
+      return false;
+    }
+
+    return true;
+  }, [warnUnsavedBeforeExport, liveGuestCount, anyMutationPending]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading || packagesLoading) return;
@@ -500,10 +485,6 @@ function QuoteBuilderPage() {
     setDeliveryRate("");
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic, eventId]);
 
-  const clearPackageSelections = useCallback(() => {
-    setLocalSelections(Object.fromEntries(MENU_SECTIONS.map((s) => [s.category, {}])));
-  }, []);
-
   const addPackageToQuote = useCallback(
     (packageId: string) => {
       if (!quote) return;
@@ -511,7 +492,6 @@ function QuoteBuilderPage() {
       if (!pkg) return;
       setSelectedPkgId(packageId);
       selectPackageOptimistic(pkg, packages);
-      clearPackageSelections();
       const activeTier = getActiveTier(pkg.tiers, liveGuestCount, quote.event?.customerType ?? "b2c");
       quoteAnalytics.packageSelected({
         eventId,
@@ -536,10 +516,10 @@ function QuoteBuilderPage() {
       quote,
       packages,
       addPackageMutation,
-      clearPackageSelections,
       selectPackageOptimistic,
       latestPackageIdRef,
-      liveGuestCount
+      liveGuestCount,
+      eventId
     ]
   );
 
@@ -553,7 +533,6 @@ function QuoteBuilderPage() {
     });
     setSelectedPkgId(null);
     removePackageOptimistic();
-    clearPackageSelections();
     removePackageMutation.mutate(quote.id, {
       onError: () => {
         setSelectedPkgId(latestPackageIdRef.current);
@@ -565,7 +544,6 @@ function QuoteBuilderPage() {
     selectedPkgId,
     selectedPackage,
     removePackageMutation,
-    clearPackageSelections,
     removePackageOptimistic,
     latestPackageIdRef
   ]);
@@ -576,17 +554,6 @@ function QuoteBuilderPage() {
       updateGuestCountMutation.mutate({ quoteId: quote.id, guestCount: nextGuestCount });
     },
     [quote, updateGuestCountMutation]
-  );
-
-  const handlePackageItemsChange = useCallback(
-    (category: string, selections: Record<string, UiPackageSelectionEntry[]>) => {
-      setLocalSelections((prev) => ({
-        ...prev,
-        [category]: selections
-      }));
-      setSaveFailed(false);
-    },
-    []
   );
 
   const saveDraft = useCallback(() => {
@@ -607,15 +574,12 @@ function QuoteBuilderPage() {
   const handleGeneratePDF = useCallback(async () => {
     if (!quote || pdfLoading) return;
 
-    const canProceed = await warnUnsavedBeforeExport();
+    const canProceed = await ensureExportReady();
     if (!canProceed) return;
 
     setPdfLoading(true);
     try {
-      const res = await fetch(`/api/quotes/${encodeURIComponent(quote.id)}/pdf`, {
-        method: "POST",
-        credentials: "include"
-      });
+      const res = await api.quotes.pdf(quote.id, buildExportPayload());
       if (!res.ok) {
         if (res.status === 403) return;
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -647,7 +611,81 @@ function QuoteBuilderPage() {
     } finally {
       setPdfLoading(false);
     }
-  }, [quote, pdfLoading, warnUnsavedBeforeExport, eventId, totals.grandTotal]);
+  }, [quote, pdfLoading, ensureExportReady, buildExportPayload, eventId, totals.grandTotal]);
+
+  const handleGenerateKitchenSheet = useCallback(async () => {
+    if (!quote || kitchenSheetLoading) return;
+
+    const canProceed = await ensureExportReady();
+    if (!canProceed) return;
+
+    setKitchenSheetLoading(true);
+    try {
+      const res = await api.quotes.kitchenSheet(quote.id, buildExportPayload());
+      if (!res.ok) {
+        if (res.status === 403) return;
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(parseApiError(body, res.status, res.statusText));
+        return;
+      }
+      const blob = await res.blob();
+      if (blob.size === 0) {
+        toast.error("Kitchen sheet download was empty. Please try again.");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kitchen-sheet-${quote.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Kitchen sheet downloaded!");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate kitchen sheet";
+      toast.error(message);
+    } finally {
+      setKitchenSheetLoading(false);
+    }
+  }, [quote, kitchenSheetLoading, ensureExportReady, buildExportPayload]);
+
+  const handleGenerateLaborSheet = useCallback(async () => {
+    if (!quote || laborSheetLoading) return;
+
+    const canProceed = await ensureExportReady();
+    if (!canProceed) return;
+
+    setLaborSheetLoading(true);
+    try {
+      const res = await api.quotes.laborSheet(quote.id, buildExportPayload());
+      if (!res.ok) {
+        if (res.status === 403) return;
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        toast.error(parseApiError(body, res.status, res.statusText));
+        return;
+      }
+      const blob = await res.blob();
+      if (blob.size === 0) {
+        toast.error("Labor sheet download was empty. Please try again.");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `labor-sheet-${quote.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Labor sheet downloaded!");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate labor sheet";
+      toast.error(message);
+    } finally {
+      setLaborSheetLoading(false);
+    }
+  }, [quote, laborSheetLoading, ensureExportReady, buildExportPayload]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -933,6 +971,10 @@ function QuoteBuilderPage() {
             readOnly={!canWriteQuotes}
           />
 
+          {eventId && selectedPkgId ? (
+            <MenuPreferencesCard eventId={eventId} readOnly={!canWriteQuotes} />
+          ) : null}
+
           {MENU_SECTION_GROUPS.map((group) => (
             <div key={group.groupLabel}>
               <h3 className="border-b px-2 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -940,6 +982,13 @@ function QuoteBuilderPage() {
               </h3>
               <div className="space-y-4 pt-4">
                 {group.categories.map((category) => {
+                  if (
+                    selectedPackage &&
+                    !shouldShowQuoteCategory(category, selectedPackage.items)
+                  ) {
+                    return null;
+                  }
+
                   if (category === "delivery") {
                     return (
                       <Card key="delivery">
@@ -1026,11 +1075,6 @@ function QuoteBuilderPage() {
                   const section = MENU_SECTIONS.find((s) => s.category === category);
                   if (!section) return null;
 
-                  const includedItems = getPackageSlotsForSection(
-                    selectedPackage?.items,
-                    section.category
-                  );
-
                   return (
                     <QuoteSection
                       key={section.category}
@@ -1053,16 +1097,7 @@ function QuoteBuilderPage() {
                       onAdd={(payload) => addLineItemOptimistic(section.category, payload)}
                       onUpdate={updateLineItemOptimistic}
                       onDelete={removeLineItemOptimistic}
-                      includedPackageName={
-                        includedItems !== undefined ? selectedPackage?.name : undefined
-                      }
-                      includedItems={includedItems}
-                      catalogItems={menuItemsByCategory[section.category]}
                       customerType={customerType}
-                      selectedPackageItems={localSelections[section.category]}
-                      onPackageItemsChange={(selections) =>
-                        handlePackageItemsChange(section.category, selections)
-                      }
                       readOnly={!canWriteQuotes}
                     />
                   );
@@ -1071,26 +1106,14 @@ function QuoteBuilderPage() {
             </div>
           ))}
 
-          <PackageSelectionsApplyBar
-            dirty={selectionsDirty}
-            applying={updatePackageSelectionsMutation.isPending}
-            onApply={() => void applySelections()}
-            readOnly={!canWriteQuotes}
-          />
         </div>
 
         <div className="space-y-4 lg:col-span-2">
           {summaryPanel}
 
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Settings</CardTitle>
-              {settingsDirty ? (
-                <span className="flex items-center gap-1 text-xs text-amber-600">
-                  <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                  Unsaved
-                </span>
-              ) : null}
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -1225,6 +1248,44 @@ function QuoteBuilderPage() {
               type="button"
               variant="outline"
               className="w-full"
+              disabled={kitchenSheetLoading}
+              onClick={() => void handleGenerateKitchenSheet()}
+            >
+              {kitchenSheetLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating kitchen sheet...
+                </>
+              ) : (
+                <>
+                  <ChefHat className="mr-2 h-4 w-4" />
+                  Generate Kitchen Sheet
+                </>
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              disabled={laborSheetLoading}
+              onClick={() => void handleGenerateLaborSheet()}
+            >
+              {laborSheetLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating labor sheet...
+                </>
+              ) : (
+                <>
+                  <Users className="mr-2 h-4 w-4" />
+                  Generate Labor Sheet
+                </>
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
               disabled={pdfLoading}
               onClick={() => void handleGeneratePDF()}
             >
@@ -1247,26 +1308,11 @@ function QuoteBuilderPage() {
                 setSendLoading(true);
                 toast.message("Sending quote — generating PDF and email…");
                 try {
-                  const canProceed = await warnUnsavedBeforeExport();
+                  const canProceed = await ensureExportReady();
                   if (!canProceed) return;
 
-                  const res = await fetch(
-                    `/api/quotes/${encodeURIComponent(quote.id)}/send`,
-                    { method: "POST", credentials: "include" }
-                  );
-                  const body = (await res.json().catch(() => null)) as {
-                    error?: string;
-                    quote?: { event?: { primaryGuest?: { email?: string | null } } };
-                  } | null;
-                  if (!res.ok) {
-                    if (res.status === 403) return;
-                    toast.error(parseApiError(body, res.status, res.statusText));
-                    return;
-                  }
-                  const guestEmail =
-                    body?.quote?.event?.primaryGuest?.email ??
-                    quote.event?.primaryGuest?.email ??
-                    "guest";
+                  await api.quotes.send(quote.id, buildExportPayload());
+                  const guestEmail = quote.event?.primaryGuest?.email ?? "guest";
                   toast.success(`Quote sent to ${guestEmail}!`);
                   quoteAnalytics.sent({
                     eventId,
@@ -1280,8 +1326,10 @@ function QuoteBuilderPage() {
                     fromStatus: quote.status,
                     toStatus: "sent"
                   });
-                } catch {
-                  toast.error("Failed to send quote.");
+                } catch (err) {
+                  if (isForbiddenError(err)) return;
+                  const message = err instanceof Error ? err.message : "Failed to send quote.";
+                  toast.error(message);
                 } finally {
                   setSendLoading(false);
                 }
@@ -1319,11 +1367,7 @@ function QuoteBuilderPage() {
         {globalStatus === "unsaved" ? (
           <span className="flex items-center gap-2">
             <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            {settingsDirty && selectionsDirty
-              ? "Settings and selections not saved"
-              : settingsDirty
-                ? "Settings not saved"
-                : "Package selections not saved"}
+            {settingsDirty ? "Settings not saved" : "Unsaved changes"}
             {canWriteQuotes ? (
               <button
                 type="button"

@@ -27,6 +27,7 @@ import { leadsRouter } from "./routes/leads";
 import { messagesRouter } from "./routes/messages";
 import { menuItemsRouter } from "./routes/menu-items";
 import { packagesRouter } from "./routes/packages";
+import { paymentsRouter } from "./routes/payments";
 import { quotesRouter } from "./routes/quotes";
 import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
@@ -176,6 +177,7 @@ function createApp() {
   app.use("/api/messages", messagesRouter);
   app.use("/api/menu-items", menuItemsRouter);
   app.use("/api/packages", packagesRouter);
+  app.use("/api/payments", paymentsRouter);
   app.use("/api/quotes", quotesRouter);
   app.use("/api/reports", reportsRouter);
   app.use("/api/tasks", tasksRouter);

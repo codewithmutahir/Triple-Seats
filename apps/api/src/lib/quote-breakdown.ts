@@ -59,6 +59,8 @@ export function breakdownQuoteLineItems(
       delivery += total;
     } else if (item.category === "equipment") {
       equipment += total;
+    } else if (item.category === "labor") {
+      labor += total;
     } else if (FOOD_CATEGORIES.has(item.category)) {
       food += total;
     } else if (item.category === "other") {

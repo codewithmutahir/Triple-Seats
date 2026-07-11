@@ -47,6 +47,7 @@ export type SettingsItemCategory =
   | "beverages"
   | "equipment"
   | "delivery"
+  | "labor"
   | "other";
 
 export type SettingsMenuItem = {
@@ -76,5 +77,6 @@ export const EMPTY_MENU_ITEMS_BY_CATEGORY: SettingsMenuItemsByCategory = {
   beverages: [],
   equipment: [],
   delivery: [],
+  labor: [],
   other: []
 };

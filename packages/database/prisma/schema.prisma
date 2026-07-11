@@ -48,6 +48,20 @@ enum QuoteStatus {
   sent
   accepted
   declined
+  archived
+}
+
+enum PaymentMethod {
+  cash
+  credit_card
+  bank_transfer
+  other
+}
+
+enum PaymentStatus {
+  pending
+  completed
+  refunded
 }
 
 enum ItemCategory {
@@ -64,6 +78,7 @@ enum ItemCategory {
   beverages
   equipment
   delivery
+  labor
   other
 }
 
@@ -98,6 +113,16 @@ enum EventType {
   full_service
 }
 
+enum ServiceType {
+  full_service
+  order_by_tray
+}
+
+enum OrderMode {
+  delivery
+  pickup
+}
+
 enum CustomerType {
   b2b
   b2c
@@ -125,6 +150,7 @@ model Caterer {
   tasks             Task[]
   messages          Message[]
   paymentReminders  PaymentReminder[]
+  payments          Payment[]
   teamMembers       TeamMember[]
   auditLogs         AuditLog[]
 
@@ -293,9 +319,12 @@ model Event {
   primaryGuestId     String?
   title              String
   eventType          EventType         @default(full_service)
+  serviceType        ServiceType       @default(full_service)
+  orderMode          OrderMode         @default(delivery)
   customerType       CustomerType      @default(b2c)
   status             EventStatus       @default(lead)
   eventDate          DateTime
+  eventTime          String?
   startTime          DateTime?
   endTime            DateTime?
   venueName          String?
@@ -311,6 +340,8 @@ model Event {
   tasks              Task[]
   messages           Message[]
   paymentReminders   PaymentReminder[]
+  menuPreferences    MenuPreference[]
+  payments           Payment[]
 
   @@index([catererId])
   @@index([catererId, status])
@@ -321,6 +352,21 @@ model Event {
   @@index([leadId])
   @@index([primaryGuestId])
   @@map("events")
+}
+
+model MenuPreference {
+  id           String   @id @default(cuid())
+  eventId      String
+  packageId    String
+  slotLabel    String
+  selectedItem String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, slotLabel])
+  @@index([eventId])
+  @@map("menu_preferences")
 }
 
 model Quote {
@@ -340,6 +386,7 @@ model Quote {
   event       Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
   lineItems   QuoteLineItem[]
   reminders   PaymentReminder[]
+  payments    Payment[]
 
   @@index([catererId])
   @@index([eventId])
@@ -479,6 +526,28 @@ model Message {
   @@index([eventId])
   @@index([guestId])
   @@map("messages")
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  catererId   String
+  eventId     String
+  quoteId     String?
+  amount      Float
+  method      PaymentMethod
+  status      PaymentStatus @default(completed)
+  note        String?
+  addedBy     String
+  paymentDate DateTime      @default(now())
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  caterer     Caterer       @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  quote       Quote?        @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  @@index([catererId])
+  @@index([eventId])
+  @@map("payments")
 }
 
 model PaymentReminder {

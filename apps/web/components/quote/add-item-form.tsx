@@ -100,6 +100,7 @@ function HighlightedName({ name, query }: { name: string; query: string }) {
 
 function getDefaultUnitType(category: ItemCategory): QuoteUnit {
   if (category === "equipment") return "per_piece";
+  if (category === "labor") return "flat";
   return "per_head";
 }
 

@@ -1,4 +1,4 @@
-import type { CustomerTypeValue, EventTypeValue } from "@/lib/event-customer-types";
+import type { CustomerTypeValue, EventTypeValue, OrderModeValue, ServiceTypeValue } from "@/lib/event-customer-types";
 
 export type ActivityEntry = { at: string; type: string; label: string };
 
@@ -24,9 +24,14 @@ export type EventDetailPayload = {
   title: string;
   eventType: EventTypeValue;
   eventTypeLabel: string;
+  serviceType: ServiceTypeValue;
+  orderMode: OrderModeValue;
+  serviceTypeLabel: string;
+  orderModeLabel: string;
   customerType: CustomerTypeValue;
   status: string;
   eventDate: string;
+  eventTime: string | null;
   startTime: string | null;
   endTime: string | null;
   venueName: string | null;

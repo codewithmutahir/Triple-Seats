@@ -21,7 +21,7 @@ async function fetchQuoteBuilderLegacy(eventId: string) {
   );
   if (!quotesRes.ok) return quotesRes;
 
-  let quote = quotesRes.data.items[0];
+  let quote = quotesRes.data.items.find((item) => item.status !== "archived") ?? quotesRes.data.items[0];
   if (!quote) {
     const createRes = await apiFetchJson<{ quote: Quote }>("/api/quotes", {
       method: "POST",

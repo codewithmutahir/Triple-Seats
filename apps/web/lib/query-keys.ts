@@ -13,6 +13,9 @@ export const queryKeys = {
     list: (filters: ListFilters = {}) => [...queryKeys.events.all, "list", filters] as const,
     listAll: () => [...queryKeys.events.all, "list", "__all__"] as const,
     detail: (id: string) => [...queryKeys.events.all, "detail", id] as const,
+    menuPreferences: (id: string) => [...queryKeys.events.all, "menu-preferences", id] as const,
+    clientHistory: (email: string, phone: string, excludeEventId: string) =>
+      [...queryKeys.events.all, "client-history", email, phone, excludeEventId] as const,
     stats: () => [...queryKeys.events.all, "stats"] as const
   },
 
@@ -26,6 +29,11 @@ export const queryKeys = {
     all: ["quotes"] as const,
     builder: (eventId: string) => [...queryKeys.quotes.all, "builder", eventId] as const,
     detail: (id: string) => [...queryKeys.quotes.all, "detail", id] as const
+  },
+
+  payments: {
+    all: ["payments"] as const,
+    byEvent: (eventId: string) => [...queryKeys.payments.all, "event", eventId] as const
   },
 
   packages: {

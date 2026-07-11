@@ -14,6 +14,7 @@ type ItemCategory =
   | "beverages"
   | "equipment"
   | "delivery"
+  | "labor"
   | "other";
 
 const DEFAULT_ITEMS: Record<
@@ -142,6 +143,16 @@ const DEFAULT_ITEMS: Record<
     { name: "Cutlery", defaultPrice: 3, defaultUnit: "flat" }
   ],
   delivery: [],
+  labor: [
+    { name: "Servers", defaultPrice: 15, defaultUnit: "flat" },
+    { name: "Chef", defaultPrice: 50, defaultUnit: "flat" },
+    { name: "Kitchen Assistant", defaultPrice: 20, defaultUnit: "flat" },
+    { name: "Event Coordinator", defaultPrice: 40, defaultUnit: "flat" },
+    { name: "Bartender", defaultPrice: 25, defaultUnit: "flat" },
+    { name: "Setup Crew", defaultPrice: 18, defaultUnit: "flat" },
+    { name: "Cleanup Crew", defaultPrice: 18, defaultUnit: "flat" },
+    { name: "Security", defaultPrice: 20, defaultUnit: "flat" }
+  ],
   other: []
 };
 
