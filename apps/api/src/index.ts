@@ -212,6 +212,23 @@ function createApp() {
   return app;
 }
 
+async function connectDbAndEnsureSchema() {
+  try {
+    await connectDB();
+    await ensureCatererSlugSchema();
+    await ensureCateringPackagesSchema();
+    await ensureEventServiceFieldsSchema();
+    await ensureEventTimeSchema();
+    await ensureQuoteStatusArchived();
+    await ensurePaymentsSchema();
+    await ensureQuoteUnitEnum();
+    await ensureQuotePackageSelectionsSchema();
+    console.log("[db] Schema checks complete");
+  } catch (err) {
+    console.error("[db] Startup schema/connect failed — API still listening for /health/live:", err);
+  }
+}
+
 async function start() {
   validateEnv();
 
@@ -220,7 +237,7 @@ async function start() {
 
   const app = createApp();
   const server = app.listen(port, host, () => {
-    console.log(`✅ API running on port ${port}`);
+    console.log(`✅ API ready on port ${port}`);
     console.log(`   Environment: ${process.env.NODE_ENV ?? "development"}`);
     console.log(`   Auth URL: ${process.env.BETTER_AUTH_URL ?? "(not set)"}`);
   });
@@ -239,20 +256,7 @@ async function start() {
     console.warn("Resend: RESEND_API_KEY missing — lead emails and auth emails disabled.");
   }
 
-  try {
-    await connectDB();
-    await ensureCatererSlugSchema();
-    await ensureCateringPackagesSchema();
-    await ensureEventServiceFieldsSchema();
-    await ensureEventTimeSchema();
-    await ensureQuoteStatusArchived();
-    await ensurePaymentsSchema();
-    await ensureQuoteUnitEnum();
-    await ensureQuotePackageSelectionsSchema();
-    console.log("[db] Schema checks complete");
-  } catch (err) {
-    console.error("[db] Startup schema/connect failed — API still listening for /health/live:", err);
-  }
+  void connectDbAndEnsureSchema();
 }
 
 process.on("unhandledRejection", (reason) => {
