@@ -12,7 +12,7 @@ import { auth } from "./lib/auth";
 import { ensureCatererSlugSchema } from "./lib/ensure-caterer-slug-schema";
 import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-schema";
 import { ensureQuotePackageSelectionsSchema } from "./lib/ensure-quote-package-selections";
-import { ensureEventServiceFieldsSchema } from "./lib/ensure-event-service-fields";
+import { ensureMenuPreferencesSchema } from "./lib/ensure-menu-preferences-schema";
 import { ensureEventTimeSchema } from "./lib/ensure-event-time";
 import { ensurePaymentsSchema } from "./lib/ensure-payments-schema";
 import { ensureQuoteStatusArchived } from "./lib/ensure-quote-status-archived";
@@ -218,6 +218,7 @@ async function connectDbAndEnsureSchema() {
     await ensureCatererSlugSchema();
     await ensureCateringPackagesSchema();
     await ensureEventServiceFieldsSchema();
+    await ensureMenuPreferencesSchema();
     await ensureEventTimeSchema();
     await ensureQuoteStatusArchived();
     await ensurePaymentsSchema();

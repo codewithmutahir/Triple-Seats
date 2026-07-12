@@ -3,7 +3,7 @@ import { Router, type Request, type Response } from "express";
 
 import { parseItemCategory, parseQuoteUnit } from "../lib/quote-serialize";
 import { ensureDefaultItemsForCategory } from "../lib/seed-menu-items";
-import { getAuthorizedSession } from "../lib/authorized-session";
+import { getAuthorizedSession, getSessionWithAnyPermission } from "../lib/authorized-session";
 import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
@@ -86,7 +86,7 @@ router.get("/", async (req: Request, res: Response) => {
 
     const perf = timer(`menu-items:${category}`);
 
-    const { caterer } = await getAuthorizedSession(req, "settings:read");
+    const { caterer } = await getSessionWithAnyPermission(req, ["quotes:read", "settings:read"]);
     perf.step("session");
 
     await ensureDefaultItemsForCategory(caterer.id, category);

@@ -663,7 +663,8 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
         "bbq",
         "dessert",
         "beverages",
-        "equipment"
+        "equipment",
+        "labor"
       ] as const;
       await Promise.all(
         categories.map((category) => ensureDefaultItemsForCategory(caterer.id, category))

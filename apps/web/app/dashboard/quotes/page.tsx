@@ -205,6 +205,9 @@ function QuoteBuilderPage() {
     [selectedPkgId, packages]
   );
 
+  const packageIncludedItems =
+    selectedPackage?.items ?? packageLineItem?.package?.items ?? undefined;
+
   const savingPackageId =
     addPackageMutation.isPending && addPackageMutation.variables?.packageId
       ? addPackageMutation.variables.packageId
@@ -983,8 +986,8 @@ function QuoteBuilderPage() {
               <div className="space-y-4 pt-4">
                 {group.categories.map((category) => {
                   if (
-                    selectedPackage &&
-                    !shouldShowQuoteCategory(category, selectedPackage.items)
+                    packageIncludedItems?.length &&
+                    !shouldShowQuoteCategory(category, packageIncludedItems)
                   ) {
                     return null;
                   }
@@ -1099,6 +1102,7 @@ function QuoteBuilderPage() {
                       onDelete={removeLineItemOptimistic}
                       customerType={customerType}
                       readOnly={!canWriteQuotes}
+                      catalogItems={menuItemsByCategory[section.category]}
                     />
                   );
                 })}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Pencil } from "lucide-react";
+import { Loader2, Pencil } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -36,15 +36,36 @@ export function MenuPreferencesCard({
   const [sheetOpen, setSheetOpen] = useState(false);
   const key = queryKeys.events.menuPreferences(eventId);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: key,
     queryFn: () => api.events.menuPreferences(eventId),
     enabled: Boolean(eventId),
-    staleTime: 60_000
+    staleTime: 60_000,
+    retry: 1
   });
 
   if (isLoading) {
-    return null;
+    return (
+      <Card>
+        <CardContent className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading menu preferences…
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Card>
+        <CardContent className="space-y-2 py-4 text-sm">
+          <p className="text-destructive">Could not load menu preferences.</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
   }
 
   if (!data?.hasPackage && variant === "compact") {
