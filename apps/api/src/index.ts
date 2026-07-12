@@ -12,6 +12,10 @@ import { auth } from "./lib/auth";
 import { ensureCatererSlugSchema } from "./lib/ensure-caterer-slug-schema";
 import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-schema";
 import { ensureQuotePackageSelectionsSchema } from "./lib/ensure-quote-package-selections";
+import { ensureEventServiceFieldsSchema } from "./lib/ensure-event-service-fields";
+import { ensureEventTimeSchema } from "./lib/ensure-event-time";
+import { ensurePaymentsSchema } from "./lib/ensure-payments-schema";
+import { ensureQuoteStatusArchived } from "./lib/ensure-quote-status-archived";
 import { ensureQuoteUnitEnum } from "./lib/ensure-quote-units";
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { logger } from "./lib/logger";
@@ -208,6 +212,23 @@ function createApp() {
   return app;
 }
 
+async function connectDbAndEnsureSchema() {
+  try {
+    await connectDB();
+    await ensureCatererSlugSchema();
+    await ensureCateringPackagesSchema();
+    await ensureEventServiceFieldsSchema();
+    await ensureEventTimeSchema();
+    await ensureQuoteStatusArchived();
+    await ensurePaymentsSchema();
+    await ensureQuoteUnitEnum();
+    await ensureQuotePackageSelectionsSchema();
+    console.log("[db] Schema checks complete");
+  } catch (err) {
+    console.error("[db] Startup schema/connect failed — API still listening for /health/live:", err);
+  }
+}
+
 async function start() {
   validateEnv();
 
@@ -216,7 +237,7 @@ async function start() {
 
   const app = createApp();
   const server = app.listen(port, host, () => {
-    console.log(`✅ API running on port ${port}`);
+    console.log(`✅ API ready on port ${port}`);
     console.log(`   Environment: ${process.env.NODE_ENV ?? "development"}`);
     console.log(`   Auth URL: ${process.env.BETTER_AUTH_URL ?? "(not set)"}`);
   });
@@ -235,16 +256,7 @@ async function start() {
     console.warn("Resend: RESEND_API_KEY missing — lead emails and auth emails disabled.");
   }
 
-  try {
-    await connectDB();
-    await ensureCatererSlugSchema();
-    await ensureCateringPackagesSchema();
-    await ensureQuoteUnitEnum();
-    await ensureQuotePackageSelectionsSchema();
-    console.log("[db] Schema checks complete");
-  } catch (err) {
-    console.error("[db] Startup schema/connect failed — API still listening for /health/live:", err);
-  }
+  void connectDbAndEnsureSchema();
 }
 
 process.on("unhandledRejection", (reason) => {

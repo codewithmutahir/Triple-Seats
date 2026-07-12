@@ -2,40 +2,32 @@
  * Blocks until the local API responds (avoids Next proxy ECONNREFUSED when turbo starts tasks in parallel).
  */
 const url = process.env.API_HEALTH_URL ?? "http://127.0.0.1:4000/health/live";
-const maxMs = Number(process.env.API_WAIT_MAX_MS ?? 180_000);
-const pollMs = 300;
-const logEveryMs = 15_000;
-const start = Date.now();
-let lastLog = start;
+const POLL_INTERVAL = 500;
+const MAX_WAIT = Number(process.env.API_WAIT_MAX_MS ?? 30_000);
 
-let ready = false;
+async function waitForApi() {
+  const start = Date.now();
 
-while (Date.now() - start < maxMs) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-    if (res.ok) {
-      await res.arrayBuffer().catch(() => {});
-      ready = true;
-      break;
+  while (Date.now() - start < MAX_WAIT) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        console.log("[wait-for-api] API ready!");
+        return;
+      }
+    } catch {
+      /* retry */
     }
-    await res.arrayBuffer().catch(() => {});
-  } catch {
-    /* retry */
+
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    if (elapsed > 0 && elapsed % 5 === 0) {
+      process.stdout.write(`\r[wait-for-api] Waiting... ${elapsed}s`);
+    }
+
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
   }
 
-  const now = Date.now();
-  if (now - lastLog >= logEveryMs) {
-    const elapsed = Math.round((now - start) / 1000);
-    console.log(`[wait-for-api] Still waiting for ${url} (${elapsed}s)…`);
-    lastLog = now;
-  }
-
-  await new Promise((r) => setTimeout(r, pollMs));
+  console.error("[wait-for-api] Timeout — starting anyway");
 }
 
-if (ready) {
-  process.exitCode = 0;
-} else {
-  console.error(`[wait-for-api] Timed out after ${maxMs}ms waiting for ${url}`);
-  process.exitCode = 1;
-}
+await waitForApi();
