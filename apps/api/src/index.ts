@@ -14,6 +14,8 @@ import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-sch
 import { ensureQuotePackageSelectionsSchema } from "./lib/ensure-quote-package-selections";
 import { ensureEventServiceFieldsSchema } from "./lib/ensure-event-service-fields";
 import { ensureEventTimeSchema } from "./lib/ensure-event-time";
+import { ensurePaymentsSchema } from "./lib/ensure-payments-schema";
+import { ensureQuoteStatusArchived } from "./lib/ensure-quote-status-archived";
 import { ensureQuoteUnitEnum } from "./lib/ensure-quote-units";
 import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { logger } from "./lib/logger";
@@ -243,6 +245,8 @@ async function start() {
     await ensureCateringPackagesSchema();
     await ensureEventServiceFieldsSchema();
     await ensureEventTimeSchema();
+    await ensureQuoteStatusArchived();
+    await ensurePaymentsSchema();
     await ensureQuoteUnitEnum();
     await ensureQuotePackageSelectionsSchema();
     console.log("[db] Schema checks complete");
