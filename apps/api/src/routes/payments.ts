@@ -3,6 +3,8 @@ import { Router, type Request, type Response } from "express";
 
 import { getLatestActiveQuote } from "../lib/event-quotes";
 import { getAuthorizedSession } from "../lib/authorized-session";
+import { createCloverHostedCheckout, getCloverConfig } from "../lib/clover";
+import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
@@ -63,6 +65,11 @@ function serializePayment(
     addedBy: string;
     paymentDate: Date;
     createdAt: Date;
+    provider?: string | null;
+    checkoutSessionId?: string | null;
+    checkoutUrl?: string | null;
+    expiresAt?: Date | null;
+    externalPaymentId?: string | null;
   },
   addedByName: string | null
 ) {
@@ -77,7 +84,12 @@ function serializePayment(
     addedBy: payment.addedBy,
     addedByName,
     paymentDate: payment.paymentDate.toISOString(),
-    createdAt: payment.createdAt.toISOString()
+    createdAt: payment.createdAt.toISOString(),
+    provider: payment.provider ?? null,
+    checkoutSessionId: payment.checkoutSessionId ?? null,
+    checkoutUrl: payment.checkoutUrl ?? null,
+    expiresAt: payment.expiresAt?.toISOString() ?? null,
+    externalPaymentId: payment.externalPaymentId ?? null
   };
 }
 
@@ -120,6 +132,45 @@ async function buildPaymentSummary(eventId: string, catererId: string) {
   };
 }
 
+async function sendPaymentLinkEmail(opts: {
+  to: string;
+  guestName: string;
+  amount: number;
+  checkoutUrl: string;
+  eventTitle: string;
+  note?: string;
+}) {
+  const resend = getResend();
+  if (!resend) return { sent: false as const, reason: "email_not_configured" as const };
+
+  const amountLabel = opts.amount.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD"
+  });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { error } = await resend.emails.send({
+        from: resendFromEmail(),
+        to: opts.to,
+        subject: `Payment request — ${opts.eventTitle}`,
+        html: `
+          <p>Hi ${escapeHtml(opts.guestName)},</p>
+          <p>Please pay <strong>${escapeHtml(amountLabel)}</strong> for <strong>${escapeHtml(opts.eventTitle)}</strong>.</p>
+          ${opts.note ? `<p>${escapeHtml(opts.note)}</p>` : ""}
+          <p><a href="${escapeHtml(opts.checkoutUrl)}">Pay securely with card</a></p>
+          <p>This link expires in about 15 minutes. If it expires, ask us to send a new one.</p>
+        `
+      });
+      if (!error) return { sent: true as const };
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, 200 * 2 ** attempt));
+  }
+  return { sent: false as const, reason: "send_failed" as const };
+}
+
 router.get("/event/:eventId", async (req: Request, res: Response) => {
   try {
     const perf = timer("payments:event");
@@ -143,6 +194,7 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
       eventId,
       eventStatus: event.status,
       paymentsEnabled: event.status === "booked" || event.status === "completed",
+      cloverConfigured: getCloverConfig().configured,
       ...summary
     });
   } catch (e) {
@@ -196,6 +248,176 @@ router.post("/", async (req: Request, res: Response) => {
       payment: serializePayment(payment, addedByName),
       eventStatus: event.status,
       paymentsEnabled: event.status === "booked" || event.status === "completed",
+      cloverConfigured: getCloverConfig().configured,
+      ...summary
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "Payments");
+  }
+});
+
+/** Create Clover Hosted Checkout payment link for an event. */
+router.post("/links", async (req: Request, res: Response) => {
+  try {
+    const { caterer, user } = await getAuthorizedSession(req, "events:write");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const eventId = typeof body.eventId === "string" ? body.eventId.trim() : "";
+    const amountRaw = Number(body.amount);
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    const sendEmail = body.sendEmail !== false;
+    const idemHeader = req.headers["idempotency-key"];
+    const idempotencyKey =
+      (typeof idemHeader === "string" ? idemHeader.trim() : "") ||
+      (typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "") ||
+      null;
+
+    if (!eventId || !Number.isFinite(amountRaw) || amountRaw <= 0) {
+      return res.status(400).json({ error: "eventId and a positive amount are required." });
+    }
+
+    if (!getCloverConfig().configured) {
+      return res.status(503).json({
+        error: "Clover is not configured. Set CLOVER_MERCHANT_ID and CLOVER_ECOMMERCE_PRIVATE_KEY."
+      });
+    }
+
+    if (idempotencyKey) {
+      const prior = await prisma.payment.findFirst({
+        where: { idempotencyKey, catererId: caterer.id }
+      });
+      if (prior) {
+        const summary = await buildPaymentSummary(prior.eventId, caterer.id);
+        const nameMap = await resolveAddedByNames([prior.addedBy]);
+        return res.json({
+          payment: serializePayment(prior, nameMap.get(prior.addedBy) ?? null),
+          checkoutUrl: prior.checkoutUrl,
+          emailSent: false,
+          reused: true,
+          paymentsEnabled: true,
+          cloverConfigured: true,
+          ...summary
+        });
+      }
+    }
+
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, catererId: caterer.id },
+      select: {
+        id: true,
+        status: true,
+        title: true,
+        primaryGuest: {
+          select: { firstName: true, lastName: true, email: true, phone: true }
+        }
+      }
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found." });
+    }
+    if (event.status !== "booked" && event.status !== "completed") {
+      return res.status(400).json({
+        error: "Payment links can only be created when the event is Booked or Completed."
+      });
+    }
+
+    const summaryBefore = await buildPaymentSummary(eventId, caterer.id);
+    if (summaryBefore.balanceDue <= 0.009) {
+      return res.status(400).json({ error: "This event is already paid in full." });
+    }
+
+    const amount = Math.min(
+      Math.round(amountRaw * 100) / 100,
+      Math.round(summaryBefore.balanceDue * 100) / 100
+    );
+    if (amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount." });
+    }
+
+    const reusable = await prisma.payment.findFirst({
+      where: {
+        eventId,
+        catererId: caterer.id,
+        provider: "clover",
+        status: "pending",
+        amount,
+        expiresAt: { gt: new Date() },
+        checkoutUrl: { not: null }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+    if (reusable?.checkoutUrl) {
+      const nameMap = await resolveAddedByNames([reusable.addedBy]);
+      return res.json({
+        payment: serializePayment(reusable, nameMap.get(reusable.addedBy) ?? null),
+        checkoutUrl: reusable.checkoutUrl,
+        emailSent: false,
+        reused: true,
+        eventStatus: event.status,
+        paymentsEnabled: true,
+        cloverConfigured: true,
+        ...summaryBefore
+      });
+    }
+
+    const guest = event.primaryGuest;
+    const guestName =
+      [guest?.firstName, guest?.lastName].filter(Boolean).join(" ").trim() || "Guest";
+
+    const session = await createCloverHostedCheckout({
+      amountDollars: amount,
+      lineName: event.title?.trim() || "Event payment",
+      lineNote: note || undefined,
+      customer: {
+        email: guest?.email ?? undefined,
+        firstName: guest?.firstName ?? undefined,
+        lastName: guest?.lastName ?? undefined,
+        phoneNumber: guest?.phone ?? undefined
+      }
+    });
+
+    const payment = await prisma.payment.create({
+      data: {
+        catererId: caterer.id,
+        eventId,
+        quoteId: summaryBefore.quoteId,
+        amount,
+        method: "credit_card",
+        status: "pending",
+        note: note || "Clover payment link",
+        addedBy: user.id,
+        paymentDate: new Date(),
+        provider: "clover",
+        checkoutSessionId: session.checkoutSessionId,
+        checkoutUrl: session.href,
+        expiresAt: new Date(session.expirationTime),
+        idempotencyKey
+      }
+    });
+
+    let emailSent = false;
+    if (sendEmail && guest?.email) {
+      const mail = await sendPaymentLinkEmail({
+        to: guest.email,
+        guestName,
+        amount,
+        checkoutUrl: session.href,
+        eventTitle: event.title?.trim() || "your event",
+        note: note || undefined
+      });
+      emailSent = mail.sent;
+    }
+
+    const summary = await buildPaymentSummary(eventId, caterer.id);
+    const addedByName = user.name?.trim() || user.email || "Team member";
+
+    return res.status(201).json({
+      payment: serializePayment(payment, addedByName),
+      checkoutUrl: session.href,
+      emailSent,
+      reused: false,
+      eventStatus: event.status,
+      paymentsEnabled: true,
+      cloverConfigured: true,
       ...summary
     });
   } catch (e) {
@@ -219,7 +441,12 @@ router.delete("/:id", async (req: Request, res: Response) => {
     await prisma.payment.delete({ where: { id } });
     const summary = await buildPaymentSummary(existing.eventId, caterer.id);
 
-    return res.json({ ok: true, eventId: existing.eventId, ...summary });
+    return res.json({
+      ok: true,
+      eventId: existing.eventId,
+      cloverConfigured: getCloverConfig().configured,
+      ...summary
+    });
   } catch (e) {
     return handleRouteError(res, e, "Payments");
   }

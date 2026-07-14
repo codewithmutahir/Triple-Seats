@@ -62,6 +62,7 @@ enum PaymentStatus {
   pending
   completed
   refunded
+  failed
 }
 
 enum ItemCategory {
@@ -556,24 +557,33 @@ model Message {
 }
 
 model Payment {
-  id          String        @id @default(cuid())
-  catererId   String
-  eventId     String
-  quoteId     String?
-  amount      Float
-  method      PaymentMethod
-  status      PaymentStatus @default(completed)
-  note        String?
-  addedBy     String
-  paymentDate DateTime      @default(now())
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  caterer     Caterer       @relation(fields: [catererId], references: [id], onDelete: Cascade)
-  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  quote       Quote?        @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  id                 String        @id @default(cuid())
+  catererId          String
+  eventId            String
+  quoteId            String?
+  amount             Float
+  method             PaymentMethod
+  status             PaymentStatus @default(completed)
+  note               String?
+  addedBy            String
+  paymentDate        DateTime      @default(now())
+  provider           String?
+  checkoutSessionId  String?
+  externalPaymentId  String?
+  checkoutUrl        String?
+  expiresAt          DateTime?
+  idempotencyKey     String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  caterer            Caterer       @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  event              Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  quote              Quote?        @relation(fields: [quoteId], references: [id], onDelete: SetNull)
 
+  @@unique([checkoutSessionId])
+  @@unique([idempotencyKey])
   @@index([catererId])
   @@index([eventId])
+  @@index([externalPaymentId])
   @@map("payments")
 }
 

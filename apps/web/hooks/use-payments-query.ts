@@ -117,9 +117,44 @@ export function useEventPaymentsMutations(eventId: string | null) {
     }
   });
 
+  const createLinkMutation = useMutation({
+    mutationFn: (body: { amount: number; note?: string; sendEmail?: boolean }) =>
+      api.payments.createLink({
+        eventId: eventId!,
+        amount: body.amount,
+        note: body.note,
+        sendEmail: body.sendEmail,
+        idempotencyKey: `link_${eventId}_${Date.now()}`
+      }),
+    onMutate: async () => {
+      if (!canWrite || !eventId) return denyMutation();
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<EventPaymentsPayload>(key);
+      return { prev };
+    },
+    onSuccess: (data) => {
+      qc.setQueryData<EventPaymentsPayload>(key, {
+        eventId: data.eventId,
+        eventStatus: data.eventStatus,
+        paymentsEnabled: data.paymentsEnabled,
+        cloverConfigured: data.cloverConfigured,
+        quoteId: data.quoteId,
+        quoteTotal: data.quoteTotal,
+        totalPaid: data.totalPaid,
+        balanceDue: data.balanceDue,
+        payments: data.payments
+      });
+    },
+    onError: (err, _body, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      handleMutationError(err, ctx, "Failed to create payment link");
+    }
+  });
+
   return {
     recordMutation,
     deleteMutation,
+    createLinkMutation,
     canWritePayments: canWrite
   };
 }
