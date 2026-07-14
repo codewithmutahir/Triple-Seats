@@ -11,6 +11,16 @@ export function handleRouteError(res: Response, e: unknown, label = "Route") {
   if (status === 403) {
     return res.status(403).json({ error: (e as Error).message || "Forbidden" });
   }
+  if (Number.isFinite(status) && status >= 400 && status < 500) {
+    return res.status(status).json({
+      error: e instanceof Error && e.message ? e.message : "Bad request"
+    });
+  }
+  if (Number.isFinite(status) && status >= 500 && status < 600 && status !== 500) {
+    return res.status(status).json({
+      error: e instanceof Error && e.message ? e.message : "Upstream error"
+    });
+  }
   if (process.env.NODE_ENV !== "production") {
     console.error(`${label} error:`, e);
   } else {

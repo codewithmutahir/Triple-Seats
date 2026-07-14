@@ -2,19 +2,10 @@ import { prisma } from "@tripeseats/database";
 
 let ensured = false;
 
-/** Ensures payments table, enums, and QuoteStatus.archived exist (pooler-safe patch). */
+/** Ensures payments table, enums, and Clover columns exist (pooler-safe patch). */
 export async function ensurePaymentsSchema() {
   if (ensured) return;
   try {
-    const tables = await prisma.$queryRaw<{ table_name: string }[]>`
-      SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = 'payments'
-    `;
-    if (tables.length > 0) {
-      ensured = true;
-      return;
-    }
-
     await prisma.$executeRawUnsafe(`
       DO $$ BEGIN
         ALTER TYPE "QuoteStatus" ADD VALUE IF NOT EXISTS 'archived';
@@ -37,6 +28,13 @@ export async function ensurePaymentsSchema() {
     `);
 
     await prisma.$executeRawUnsafe(`
+      DO $$ BEGIN
+        ALTER TYPE "PaymentStatus" ADD VALUE IF NOT EXISTS 'failed';
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+
+    await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "payments" (
         "id" TEXT NOT NULL,
         "catererId" TEXT NOT NULL,
@@ -48,6 +46,12 @@ export async function ensurePaymentsSchema() {
         "note" TEXT,
         "addedBy" TEXT NOT NULL,
         "paymentDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "provider" TEXT,
+        "checkoutSessionId" TEXT,
+        "externalPaymentId" TEXT,
+        "checkoutUrl" TEXT,
+        "expiresAt" TIMESTAMP(3),
+        "idempotencyKey" TEXT,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" TIMESTAMP(3) NOT NULL,
         CONSTRAINT "payments_pkey" PRIMARY KEY ("id")
@@ -55,10 +59,38 @@ export async function ensurePaymentsSchema() {
     `);
 
     await prisma.$executeRawUnsafe(
+      `ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "provider" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "checkoutSessionId" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "externalPaymentId" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "checkoutUrl" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP(3)`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "idempotencyKey" TEXT`
+    );
+
+    await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "payments_catererId_idx" ON "payments"("catererId")`
     );
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "payments_eventId_idx" ON "payments"("eventId")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "payments_externalPaymentId_idx" ON "payments"("externalPaymentId")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "payments_checkoutSessionId_key" ON "payments"("checkoutSessionId")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "payments_idempotencyKey_key" ON "payments"("idempotencyKey")`
     );
 
     await prisma.$executeRawUnsafe(`
@@ -95,7 +127,9 @@ export async function ensurePaymentsSchema() {
     `);
 
     ensured = true;
-    console.log("[db] Patched payments schema.");
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[db] Patched payments schema.");
+    }
   } catch (e) {
     console.warn("[db] payments schema patch skipped:", e);
   }

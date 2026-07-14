@@ -192,6 +192,20 @@ export const api = {
           payment: import("@/lib/payment-types").PaymentRecord;
         }
       >("/api/payments", { method: "POST", body: JSON.stringify(body) }),
+    createLink: (body: {
+      eventId: string;
+      amount: number;
+      note?: string;
+      sendEmail?: boolean;
+      idempotencyKey?: string;
+    }) =>
+      apiFetch<import("@/lib/payment-types").CreatePaymentLinkResult>("/api/payments/links", {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: body.idempotencyKey
+          ? { "Idempotency-Key": body.idempotencyKey }
+          : undefined
+      }),
     delete: (paymentId: string) =>
       apiFetch<
         import("@/lib/payment-types").EventPaymentsPayload & { ok: boolean; eventId: string }

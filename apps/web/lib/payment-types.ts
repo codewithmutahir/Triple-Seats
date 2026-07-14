@@ -12,17 +12,30 @@ export type PaymentRecord = {
   addedByName: string | null;
   paymentDate: string;
   createdAt: string;
+  provider?: string | null;
+  checkoutSessionId?: string | null;
+  checkoutUrl?: string | null;
+  expiresAt?: string | null;
+  externalPaymentId?: string | null;
 };
 
 export type EventPaymentsPayload = {
   eventId: string;
   eventStatus: string;
   paymentsEnabled: boolean;
+  cloverConfigured?: boolean;
   quoteId: string | null;
   quoteTotal: number;
   totalPaid: number;
   balanceDue: number;
   payments: PaymentRecord[];
+};
+
+export type CreatePaymentLinkResult = EventPaymentsPayload & {
+  payment: PaymentRecord;
+  checkoutUrl: string | null;
+  emailSent: boolean;
+  reused: boolean;
 };
 
 export type ClientHistoryEntry = {

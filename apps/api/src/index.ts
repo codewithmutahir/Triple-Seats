@@ -36,6 +36,7 @@ import { messagesRouter } from "./routes/messages";
 import { menuItemsRouter } from "./routes/menu-items";
 import { packagesRouter } from "./routes/packages";
 import { paymentsRouter } from "./routes/payments";
+import { handleCloverWebhook } from "./routes/clover-webhooks";
 import { quotesRouter } from "./routes/quotes";
 import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
@@ -94,6 +95,18 @@ function createApp() {
       credentials: true
     })
   );
+
+  // Clover Hosted Checkout webhooks — raw body for signature verify; before express.json().
+  app.get("/api/webhooks/clover", (_req, res) => res.status(200).json({ ok: true }));
+  app.head("/api/webhooks/clover", (_req, res) => res.status(200).end());
+  app.post(
+    "/api/webhooks/clover",
+    express.raw({ type: "*/*", limit: "1mb" }),
+    (req, res) => {
+      void handleCloverWebhook(req, res);
+    }
+  );
+
   app.use(express.json({ limit: "256kb" }));
 
   if (!isProd) {
