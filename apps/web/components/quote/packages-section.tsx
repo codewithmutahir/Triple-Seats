@@ -3,7 +3,7 @@
 import { Check, ChevronDown, Info, Loader2, Package } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
+import type { CateringPackage, PackagePriceTier, QuoteLineItem } from "@/components/quote/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,10 +13,10 @@ import { Label } from "@/components/ui/label";
 import {
   formatTierRange,
   formatUsd,
-  getActiveTier,
-  guestCountForTier,
+  findTierByPricePerHead,
   lineItemTotal,
-  packageLineTotal
+  tiersEqual,
+  tiersForCustomerType
 } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +31,8 @@ type PackagesSectionProps = {
   guestCountUpdating?: boolean;
   onGuestCountPreview?: (guestCount: number) => void;
   onGuestCountCommit: (guestCount: number) => void;
-  onAdd: (packageId: string) => void;
+  onAdd: (packageId: string, tierId?: string) => void;
+  onPackageTierSelect?: (packageId: string, tier: PackagePriceTier) => void;
   onRemove: () => void;
   readOnly?: boolean;
 };
@@ -50,30 +51,31 @@ function parseGuestInput(value: string): number | null {
 
 function PackageCard({
   pkg,
-  guestCount,
   customerType,
   isSelected,
   isSaving,
   tierUnavailable,
+  selectedTier,
   onAdd,
   onRemove,
   onSelectTier,
   readOnly = false
 }: {
   pkg: CateringPackage;
-  guestCount: number;
   customerType: "b2b" | "b2c";
   isSelected: boolean;
   isSaving?: boolean;
   tierUnavailable: boolean;
+  selectedTier: PackagePriceTier | null;
   onAdd: () => void;
   onRemove: () => void;
-  onSelectTier: (guestCount: number) => void;
+  onSelectTier: (tier: PackagePriceTier) => void;
   readOnly?: boolean;
 }) {
   const [tiersOpen, setTiersOpen] = useState(false);
   const [itemsOpen, setItemsOpen] = useState(false);
-  const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
+  const visibleTiers = tiersForCustomerType(pkg.tiers, customerType) as PackagePriceTier[];
+  const activeTier = selectedTier;
   const itemCount = pkg.items.reduce((sum, i) => sum + i.quantity, 0);
 
   return (
@@ -112,7 +114,7 @@ function PackageCard({
             <p className="text-xs text-muted-foreground">({formatTierRange(activeTier)} guests)</p>
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">No tier for current guest count</p>
+          <p className="text-sm text-muted-foreground">Select a pricing tier below</p>
         )}
 
         <Collapsible open={tiersOpen} onOpenChange={setTiersOpen}>
@@ -128,16 +130,14 @@ function PackageCard({
                 <span>Guests</span>
                 <span className="text-right">Per Head</span>
               </div>
-              {pkg.tiers.map((tier) => {
-                const isActive =
-                  activeTier?.minGuests === tier.minGuests &&
-                  activeTier?.maxGuests === tier.maxGuests;
+              {visibleTiers.map((tier) => {
+                const isActive = activeTier ? tiersEqual(activeTier, tier) : false;
                 return (
                   <button
-                    key={`${tier.minGuests}-${tier.maxGuests ?? "plus"}`}
+                    key={tier.id}
                     type="button"
                     disabled={readOnly}
-                    onClick={() => !readOnly && onSelectTier(guestCountForTier(tier))}
+                    onClick={() => !readOnly && onSelectTier(tier)}
                     className={cn(
                       "grid w-full grid-cols-2 border-t px-3 py-2 text-left tabular-nums transition-colors hover:bg-muted/80",
                       isActive && "bg-primary text-primary-foreground hover:bg-primary/90"
@@ -210,12 +210,16 @@ export function PackagesSection({
   onGuestCountPreview,
   onGuestCountCommit,
   onAdd,
+  onPackageTierSelect,
   onRemove,
   readOnly = false
 }: PackagesSectionProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [guestInput, setGuestInput] = useState(String(guestCount || ""));
   const [previewGuestCount, setPreviewGuestCount] = useState(guestCount);
+  const [pendingTierByPackageId, setPendingTierByPackageId] = useState<
+    Record<string, PackagePriceTier>
+  >({});
   const inputRef = useRef<HTMLInputElement | null>(null);
   const lastEmittedRef = useRef<number>(guestCount);
   const commitTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -224,28 +228,16 @@ export function PackagesSection({
     ? (packages.find((p) => p.id === selectedPackageId) ?? null)
     : null;
 
-  const selectedPackageTier = selectedPackage
-    ? getActiveTier(selectedPackage.tiers, previewGuestCount, customerType)
-    : null;
+  const selectedPackageTier =
+    selectedPackage && packageLineItem?.packageId === selectedPackage.id
+      ? (findTierByPricePerHead(
+          selectedPackage.tiers,
+          packageLineItem.appliedTier ?? packageLineItem.unitPrice,
+          customerType
+        ) as PackagePriceTier | null)
+      : null;
 
-  const previewPackageLineItem = packageLineItem
-    ? (() => {
-        if (packageLineItem.unitType !== "tiered_per_head") return packageLineItem;
-        const tiers =
-          packageLineItem.package?.tiers ??
-          packages.find((p) => p.id === packageLineItem.packageId)?.tiers ??
-          [];
-        const tier = getActiveTier(tiers, previewGuestCount, customerType);
-        if (!tier) {
-          return { ...packageLineItem, unitPrice: 0, appliedTier: null };
-        }
-        return {
-          ...packageLineItem,
-          unitPrice: tier.pricePerHead,
-          appliedTier: tier.pricePerHead
-        };
-      })()
-    : null;
+  const previewPackageLineItem = packageLineItem ?? null;
 
   // Reflect cached guestCount when input is not focused.
   useEffect(() => {
@@ -298,12 +290,23 @@ export function PackagesSection({
     commitGuestCount(parsed);
   }
 
-  function handleTierGuestCount(nextGuestCount: number) {
-    clearTimeout(commitTimerRef.current);
-    lastEmittedRef.current = nextGuestCount;
-    setGuestInput(String(nextGuestCount || ""));
-    applyPreview(nextGuestCount);
-    onGuestCountCommit(nextGuestCount);
+  function handleSelectTier(packageId: string, tier: PackagePriceTier) {
+    if (selectedPackageId === packageId && packageLineItem) {
+      onPackageTierSelect?.(packageId, tier);
+      return;
+    }
+    setPendingTierByPackageId((prev) => ({ ...prev, [packageId]: tier }));
+  }
+
+  function resolveTierForPackage(pkg: CateringPackage): PackagePriceTier | null {
+    if (selectedPackageId === pkg.id && packageLineItem?.packageId === pkg.id) {
+      return findTierByPricePerHead(
+        pkg.tiers,
+        packageLineItem.appliedTier ?? packageLineItem.unitPrice,
+        customerType
+      ) as PackagePriceTier | null;
+    }
+    return pendingTierByPackageId[pkg.id] ?? null;
   }
 
   return (
@@ -337,7 +340,7 @@ export function PackagesSection({
         <CollapsibleContent className="overflow-visible data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
           <CardContent className="space-y-4 border-t pt-4">
             <p className="text-sm text-muted-foreground">
-              Set guest count to pick a pricing tier, or click a tier row below.
+              Guest count sets per-head totals. Choose a package tier separately.
             </p>
 
             <div className="max-w-xs space-y-2">
@@ -366,17 +369,15 @@ export function PackagesSection({
               </div>
               {selectedPackageTier ? (
                 <p className="text-xs text-muted-foreground">
-                  Active tier: {formatUsd(selectedPackageTier.pricePerHead)}/person (
+                  Selected tier: {formatUsd(selectedPackageTier.pricePerHead)}/person (
                   {formatTierRange(selectedPackageTier)} guests)
                 </p>
-              ) : activeTierLabel(previewGuestCount, packages, customerType) ? (
-                <p className="text-xs text-muted-foreground">
-                  {activeTierLabel(previewGuestCount, packages, customerType)}
-                </p>
               ) : previewGuestCount > 0 ? (
-                <p className="text-xs text-amber-700">No package tier matches this guest count.</p>
+                <p className="text-xs text-muted-foreground">
+                  {previewGuestCount} guests — per-head line items use this count.
+                </p>
               ) : (
-                <p className="text-xs text-muted-foreground">Enter guests to preview package pricing.</p>
+                <p className="text-xs text-muted-foreground">Enter guests for per-head pricing.</p>
               )}
             </div>
 
@@ -386,24 +387,24 @@ export function PackagesSection({
               <p className="text-sm text-muted-foreground">No packages configured yet.</p>
             ) : (
               <div className="grid gap-4 md:grid-cols-3">
-                {packages.map((pkg) => (
+                {packages.map((pkg) => {
+                  const selectedTier = resolveTierForPackage(pkg);
+                  return (
                   <PackageCard
                     key={pkg.id}
                     pkg={pkg}
-                    guestCount={previewGuestCount}
                     customerType={customerType}
                     isSelected={selectedPackageId === pkg.id}
                     isSaving={savingPackageId === pkg.id}
-                    tierUnavailable={
-                      previewGuestCount <= 0 ||
-                      !getActiveTier(pkg.tiers, previewGuestCount, customerType)
-                    }
-                    onSelectTier={handleTierGuestCount}
-                    onAdd={() => onAdd(pkg.id)}
+                    tierUnavailable={tiersForCustomerType(pkg.tiers, customerType).length === 0}
+                    selectedTier={selectedTier}
+                    onSelectTier={(tier) => handleSelectTier(pkg.id, tier)}
+                    onAdd={() => onAdd(pkg.id, selectedTier?.id)}
                     onRemove={onRemove}
                     readOnly={readOnly}
                   />
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -456,22 +457,7 @@ export function packageSummaryLabel(item: QuoteLineItem, guestCount: number): st
   return `${item.name} × ${guestCount} guests`;
 }
 
-function activeTierLabel(
-  guestCount: number,
-  packages: CateringPackage[],
-  customerType: "b2b" | "b2c"
-): string | null {
-  if (guestCount <= 0 || packages.length === 0) return null;
-  for (const pkg of packages) {
-    const tier = getActiveTier(pkg.tiers, guestCount, customerType);
-    if (tier) {
-      return `Active tier: ${formatUsd(tier.pricePerHead)}/person (${formatTierRange(tier)} guests)`;
-    }
-  }
-  return null;
-}
-
-export { packageLineTotal };
+export { packageLineTotal } from "@/lib/quote-totals";
 
 type PackageSelectionsApplyBarProps = {
   dirty: boolean;

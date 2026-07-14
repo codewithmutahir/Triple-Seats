@@ -61,6 +61,42 @@ export function guestCountForTier(tier: PackagePriceTierLike): number {
   return tier.minGuests;
 }
 
+export function tiersForCustomerType(
+  tiers: PackagePriceTierLike[],
+  customerType: "b2b" | "b2c" = "b2c"
+): PackagePriceTierLike[] {
+  const forCustomer = tiers.filter(
+    (tier) => tier.customerType === customerType || tier.customerType == null
+  );
+  return forCustomer.length > 0 ? forCustomer : tiers;
+}
+
+export function findTierById(
+  tiers: PackagePriceTierLike[],
+  tierId: string | null | undefined
+): PackagePriceTierLike | null {
+  if (!tierId) return null;
+  return tiers.find((tier) => (tier as PackagePriceTierLike & { id?: string }).id === tierId) ?? null;
+}
+
+export function findTierByPricePerHead(
+  tiers: PackagePriceTierLike[],
+  pricePerHead: number | null | undefined,
+  customerType: "b2b" | "b2c" = "b2c"
+): PackagePriceTierLike | null {
+  if (pricePerHead == null) return null;
+  const pool = tiersForCustomerType(tiers, customerType);
+  return pool.find((tier) => tier.pricePerHead === pricePerHead) ?? null;
+}
+
+export function tiersEqual(a: PackagePriceTierLike, b: PackagePriceTierLike): boolean {
+  return (
+    a.minGuests === b.minGuests &&
+    a.maxGuests === b.maxGuests &&
+    a.pricePerHead === b.pricePerHead
+  );
+}
+
 export function packageLineTotal(
   tier: PackagePriceTierLike | null,
   guestCount: number,

@@ -6,6 +6,7 @@ import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 import { seedPackagesForCaterer } from "../lib/seed-packages";
 import { isCustomerType, type CustomerTypeValue } from "../lib/event-customer-types";
+import { buildDefaultKitchenQtys, KITCHEN_GUEST_BANDS } from "../lib/package-kitchen-qty-defaults";
 
 const router = Router();
 
@@ -14,6 +15,27 @@ function paramId(req: Request, key = "id"): string {
   return Array.isArray(raw) ? raw[0]! : String(raw);
 }
 
+const packageInclude = {
+  tiers: { orderBy: { minGuests: "asc" as const } },
+  items: { orderBy: { sortOrder: "asc" as const } },
+  kitchenQtys: { orderBy: [{ guestBand: "asc" as const }, { category: "asc" as const }] }
+};
+
+type KitchenQtyInput = {
+  guestBand: number;
+  category: string;
+  quantity: number;
+};
+
+function serializeKitchenQtys(
+  rows: { guestBand: number; category: string; quantity: number }[]
+) {
+  return rows.map((row) => ({
+    guestBand: row.guestBand,
+    category: row.category,
+    quantity: row.quantity
+  }));
+}
 
 function serializePackage(
   pkg: Awaited<ReturnType<typeof loadPackages>>[number],
@@ -41,29 +63,70 @@ function serializePackage(
       label: i.label,
       quantity: i.quantity,
       sortOrder: i.sortOrder
-    }))
+    })),
+    kitchenQtys: serializeKitchenQtys(pkg.kitchenQtys ?? [])
   };
+}
+
+function normalizeKitchenQtyInputs(
+  raw: KitchenQtyInput[] | undefined,
+  itemLabels: string[]
+): KitchenQtyInput[] {
+  if (raw?.length) {
+    return raw
+      .filter(
+        (row) =>
+          typeof row.category === "string" &&
+          row.category.trim() &&
+          typeof row.guestBand === "number" &&
+          (KITCHEN_GUEST_BANDS as readonly number[]).includes(row.guestBand) &&
+          typeof row.quantity === "number" &&
+          Number.isFinite(row.quantity)
+      )
+      .map((row) => ({
+        guestBand: row.guestBand,
+        category: row.category.trim(),
+        quantity: Math.max(0, row.quantity)
+      }));
+  }
+  return buildDefaultKitchenQtys(itemLabels);
 }
 
 async function loadPackages(catererId: string) {
   return prisma.cateringPackage.findMany({
     where: { catererId },
     orderBy: { sortOrder: "asc" },
-    include: {
-      tiers: { orderBy: { minGuests: "asc" } },
-      items: { orderBy: { sortOrder: "asc" } }
-    }
+    include: packageInclude
   });
 }
 
 async function loadPackage(catererId: string, packageId: string) {
   return prisma.cateringPackage.findFirst({
     where: { id: packageId, catererId },
-    include: {
-      tiers: { orderBy: { minGuests: "asc" } },
-      items: { orderBy: { sortOrder: "asc" } }
-    }
+    include: packageInclude
   });
+}
+
+/** Backfill default kitchen qty matrix when package has items but empty matrix. */
+async function ensureKitchenQtysForPackages(
+  packages: Awaited<ReturnType<typeof loadPackages>>
+) {
+  let changed = false;
+  for (const pkg of packages) {
+    if ((pkg.kitchenQtys?.length ?? 0) > 0 || pkg.items.length === 0) continue;
+    const rows = buildDefaultKitchenQtys(pkg.items.map((i) => i.label));
+    if (rows.length === 0) continue;
+    await prisma.packageKitchenQty.createMany({
+      data: rows.map((row) => ({
+        packageId: pkg.id,
+        guestBand: row.guestBand,
+        category: row.category,
+        quantity: row.quantity
+      }))
+    });
+    changed = true;
+  }
+  return changed;
 }
 
 router.get("/", async (req: Request, res: Response) => {
@@ -79,6 +142,9 @@ router.get("/", async (req: Request, res: Response) => {
     let packages = await loadPackages(caterer.id);
     if (packages.length === 0) {
       await seedPackagesForCaterer(caterer.id);
+      packages = await loadPackages(caterer.id);
+    }
+    if (await ensureKitchenQtysForPackages(packages)) {
       packages = await loadPackages(caterer.id);
     }
     perf.step("db:packages+tiers+items");
@@ -110,6 +176,7 @@ type PackageBody = {
   sortOrder?: number;
   items?: ItemInput[];
   tiers?: TierInput[];
+  kitchenQtys?: KitchenQtyInput[];
 };
 
 router.post("/", async (req: Request, res: Response) => {
@@ -127,6 +194,9 @@ router.post("/", async (req: Request, res: Response) => {
     const existingCount = await prisma.cateringPackage.count({
       where: { catererId: caterer.id }
     });
+
+    const itemLabels = (body.items ?? []).map((i) => i.label.trim()).filter(Boolean);
+    const kitchenQtys = normalizeKitchenQtyInputs(body.kitchenQtys, itemLabels);
 
     const pkg = await prisma.cateringPackage.create({
       data: {
@@ -153,12 +223,19 @@ router.post("/", async (req: Request, res: Response) => {
                 pricePerHead: t.pricePerHead
               }))
             }
-          : undefined
+          : undefined,
+        kitchenQtys:
+          kitchenQtys.length > 0
+            ? {
+                create: kitchenQtys.map((row) => ({
+                  guestBand: row.guestBand,
+                  category: row.category,
+                  quantity: row.quantity
+                }))
+              }
+            : undefined
       },
-      include: {
-        tiers: { orderBy: { minGuests: "asc" } },
-        items: { orderBy: { sortOrder: "asc" } }
-      }
+      include: packageInclude
     });
 
     perf.step("db:create");
@@ -223,6 +300,25 @@ router.put("/:id", async (req: Request, res: Response) => {
               minGuests: t.minGuests,
               maxGuests: t.maxGuests,
               pricePerHead: t.pricePerHead
+            }))
+          });
+        }
+      }
+
+      if (body.kitchenQtys !== undefined || body.items !== undefined) {
+        const labels =
+          body.items !== undefined
+            ? body.items.map((i) => i.label.trim()).filter(Boolean)
+            : existing.items.map((i) => i.label);
+        const kitchenQtys = normalizeKitchenQtyInputs(body.kitchenQtys, labels);
+        await tx.packageKitchenQty.deleteMany({ where: { packageId } });
+        if (kitchenQtys.length > 0) {
+          await tx.packageKitchenQty.createMany({
+            data: kitchenQtys.map((row) => ({
+              packageId,
+              guestBand: row.guestBand,
+              category: row.category,
+              quantity: row.quantity
             }))
           });
         }

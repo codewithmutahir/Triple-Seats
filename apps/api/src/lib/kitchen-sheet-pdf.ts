@@ -11,6 +11,10 @@ import {
 import { formatEventServiceLabel, legacyEventToServiceFields } from "./event-customer-types";
 import { baseSlotLabel, expandPackageSlotLabels, type MenuPreferenceRow } from "./menu-preferences";
 import {
+  formatKitchenTrayLabel,
+  lookupKitchenQty
+} from "./package-kitchen-qty";
+import {
   categoriesWithItems,
   formatPdfDate,
   formatPdfEventTime,
@@ -190,6 +194,7 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
   const packages = resolvePackageLineItems(quote);
   const packageItem = packages[0];
   const packageItems = packageItem?.package?.items ?? [];
+  const kitchenMatrix = packageItem?.package?.kitchenQtys ?? [];
   const sortedPrefs = sortMenuPreferences(menuPreferences, packageItems);
   const extraItems = quote.lineItems.filter((item) => item.unitType !== "tiered_per_head");
   const itemsByCategory = groupLineItemsByCategory(extraItems);
@@ -221,14 +226,20 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
 
   const preferenceRows =
     sortedPrefs.length > 0
-      ? sortedPrefs.map((pref) =>
-          React.createElement(
+      ? sortedPrefs.map((pref) => {
+          const category = baseSlotLabel(pref.slotLabel);
+          const trays = lookupKitchenQty(kitchenMatrix, category, guestCount);
+          const portion =
+            trays != null
+              ? formatKitchenTrayLabel(trays)
+              : kitchenPortionLabel(guestCount, "per_head", 1);
+          return React.createElement(
             View,
             { key: pref.id, style: styles.prefRow },
-            React.createElement(Text, null, `${baseSlotLabel(pref.slotLabel)}: ${pref.selectedItem}`),
-            React.createElement(Text, null, kitchenPortionLabel(guestCount, "per_head", 1))
-          )
-        )
+            React.createElement(Text, null, `${category}: ${pref.selectedItem}`),
+            React.createElement(Text, null, portion)
+          );
+        })
       : [
           React.createElement(
             Text,

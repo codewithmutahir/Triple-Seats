@@ -48,15 +48,14 @@ import {
   calculateQuoteTotals,
   formatTaxRatePercent,
   formatUsd,
-  getActiveTier,
   lineItemTotal
 } from "@/lib/quote-totals";
 import { formatCustomerType, formatEventType } from "@/lib/event-customer-types";
 import { formatEventDateWithTime } from "@/lib/event-datetime";
-import { shouldShowQuoteCategory } from "@/lib/package-sections";
+import { isPackageCoveredCategory, shouldShowQuoteCategory } from "@/lib/package-sections";
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { api } from "@/lib/api";
-import type { QuoteExportPayload } from "@/lib/quote-export";
+import { buildExportPayloadFromBuilder, downloadPdfFromResponse } from "@/lib/quote-export";
 import { parseApiError } from "@/lib/user-facing-error";
 import { isForbiddenError } from "@/lib/api-error";
 import { quoteAnalytics } from "@/lib/quote-analytics";
@@ -133,6 +132,7 @@ function QuoteBuilderPage() {
     addPackageMutation,
     removePackageMutation,
     updateGuestCountMutation,
+    updatePackageTierMutation,
     duplicateMutation,
     selectPackageOptimistic,
     removePackageOptimistic,
@@ -142,6 +142,10 @@ function QuoteBuilderPage() {
     isItemMutating,
     isPackageMutating,
     isGuestCountMutating,
+    pendingQuoteOpsCount,
+    lineItemsSaveFailed,
+    retryLineItemSaves,
+    drainQuoteMutations,
     canWriteQuotes
   } = useQuoteBuilderMutations(eventId);
 
@@ -205,6 +209,9 @@ function QuoteBuilderPage() {
     [selectedPkgId, packages]
   );
 
+  const packageIncludedItems =
+    selectedPackage?.items ?? packageLineItem?.package?.items ?? undefined;
+
   const savingPackageId =
     addPackageMutation.isPending && addPackageMutation.variables?.packageId
       ? addPackageMutation.variables.packageId
@@ -224,19 +231,7 @@ function QuoteBuilderPage() {
     );
   }, [quote, settingsState, settingsDueDate]);
 
-  const displayLineItems = useMemo(() => {
-    return lineItems.map((item) => {
-      if (item.unitType !== "tiered_per_head") return item;
-      const tiers =
-        item.package?.tiers ?? packages.find((p) => p.id === item.packageId)?.tiers ?? [];
-      if (tiers.length === 0) return item;
-      const tier = getActiveTier(tiers, liveGuestCount, customerType);
-      if (!tier) {
-        return { ...item, unitPrice: 0, appliedTier: null };
-      }
-      return { ...item, unitPrice: tier.pricePerHead, appliedTier: tier.pricePerHead };
-    });
-  }, [lineItems, liveGuestCount, customerType, packages]);
+  const displayLineItems = lineItems;
 
   const totals = useMemo(
     () =>
@@ -354,24 +349,32 @@ function QuoteBuilderPage() {
   ]);
 
   const retryLastSave = useCallback(async () => {
+    if (lineItemsSaveFailed) {
+      try {
+        await retryLineItemSaves();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to save changes.";
+        toast.error(message);
+        return;
+      }
+    }
     const ok = await saveSettings();
     if (ok) setSaveFailed(false);
-  }, [saveSettings]);
+  }, [lineItemsSaveFailed, retryLineItemSaves, saveSettings]);
 
   const anyMutationPending =
-    isItemMutating ||
-    isPackageMutating ||
-    isGuestCountMutating ||
-    saveQuoteSettingsMutation.isPending ||
+    (pendingQuoteOpsCount > 0 && !lineItemsSaveFailed) ||
     pdfLoading ||
     kitchenSheetLoading ||
     laborSheetLoading ||
     sendLoading;
 
+  const exportBlocked = pendingQuoteOpsCount > 0 || settingsDirty || lineItemsSaveFailed;
+
   const globalStatus: GlobalSaveStatus = (() => {
+    if (lineItemsSaveFailed || saveFailed || settingsSaveStatus === "error") return "error";
     if (anyMutationPending) return "saving";
     if (settingsDirty) return "unsaved";
-    if (saveFailed || settingsSaveStatus === "error") return "error";
     return "idle";
   })();
 
@@ -387,12 +390,7 @@ function QuoteBuilderPage() {
     return saveSettings();
   }, [settingsDirty, saveSettings]);
 
-  const buildExportPayload = useCallback((): QuoteExportPayload => {
-    return {
-      packageId: selectedPkgId,
-      guestCount: liveGuestCount
-    };
-  }, [selectedPkgId, liveGuestCount]);
+  const buildExportPayload = useCallback(() => buildExportPayloadFromBuilder(), []);
 
   const ensureExportReady = useCallback(async (): Promise<boolean> => {
     const canProceed = await warnUnsavedBeforeExport();
@@ -403,18 +401,16 @@ function QuoteBuilderPage() {
       return false;
     }
 
-    let attempts = 0;
-    while (anyMutationPending && attempts < 50) {
-      await new Promise((resolve) => window.setTimeout(resolve, 100));
-      attempts += 1;
-    }
-    if (anyMutationPending) {
-      toast.error("Still saving changes — please try again in a moment.");
+    try {
+      await drainQuoteMutations();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Still saving changes — please try again.";
+      toast.error(message);
       return false;
     }
 
     return true;
-  }, [warnUnsavedBeforeExport, liveGuestCount, anyMutationPending]);
+  }, [warnUnsavedBeforeExport, liveGuestCount, drainQuoteMutations]);
 
   useEffect(() => {
     if (perfEndedRef.current || loading || packagesLoading) return;
@@ -486,27 +482,27 @@ function QuoteBuilderPage() {
   }, [quote, deliveryTotal, deliveryDistance, deliveryRate, addLineItemOptimistic, eventId]);
 
   const addPackageToQuote = useCallback(
-    (packageId: string) => {
+    (packageId: string, tierId?: string) => {
       if (!quote) return;
       const pkg = packages.find((p) => p.id === packageId);
       if (!pkg) return;
+      const selectedTier = tierId ? pkg.tiers.find((tier) => tier.id === tierId) ?? null : null;
       setSelectedPkgId(packageId);
-      selectPackageOptimistic(pkg, packages);
-      const activeTier = getActiveTier(pkg.tiers, liveGuestCount, quote.event?.customerType ?? "b2c");
+      selectPackageOptimistic(pkg, packages, selectedTier);
       quoteAnalytics.packageSelected({
         eventId,
         quoteId: quote.id,
         packageId: pkg.id,
         packageName: pkg.name,
         guestCount: liveGuestCount,
-        tierPrice: activeTier?.pricePerHead
+        tierPrice: selectedTier?.pricePerHead
       });
       addPackageMutation.mutate(
-        { quoteId: quote.id, packageId },
+        { quoteId: quote.id, packageId, tierId },
         {
           onError: (err) => {
             setSelectedPkgId(latestPackageIdRef.current);
-            const msg = err instanceof Error ? err.message : "Failed to add package. Check the guest count.";
+            const msg = err instanceof Error ? err.message : "Failed to add package.";
             toast.error(msg);
           }
         }
@@ -521,6 +517,14 @@ function QuoteBuilderPage() {
       liveGuestCount,
       eventId
     ]
+  );
+
+  const selectPackageTier = useCallback(
+    (_packageId: string, tier: CateringPackage["tiers"][number]) => {
+      if (!quote) return;
+      updatePackageTierMutation.mutate({ quoteId: quote.id, tierId: tier.id });
+    },
+    [quote, updatePackageTierMutation]
   );
 
   const removePackageFromQuote = useCallback(() => {
@@ -586,19 +590,15 @@ function QuoteBuilderPage() {
         toast.error(parseApiError(body, res.status, res.statusText));
         return;
       }
-      const blob = await res.blob();
-      if (blob.size === 0) {
-        toast.error("PDF download was empty. Please try again.");
+      const saved = await downloadPdfFromResponse(res, `quote-${quote.id}.pdf`);
+      if (!saved.ok) {
+        toast.error(
+          saved.reason === "empty"
+            ? "PDF download was empty. Please try again."
+            : "PDF download was invalid. Please try again."
+        );
         return;
       }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `quote-${quote.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
       toast.success("PDF downloaded!");
       quoteAnalytics.pdfGenerated({
         eventId,
@@ -628,19 +628,15 @@ function QuoteBuilderPage() {
         toast.error(parseApiError(body, res.status, res.statusText));
         return;
       }
-      const blob = await res.blob();
-      if (blob.size === 0) {
-        toast.error("Kitchen sheet download was empty. Please try again.");
+      const saved = await downloadPdfFromResponse(res, `kitchen-sheet-${quote.id}.pdf`);
+      if (!saved.ok) {
+        toast.error(
+          saved.reason === "empty"
+            ? "Kitchen sheet download was empty. Please try again."
+            : "Kitchen sheet download was invalid. Please try again."
+        );
         return;
       }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `kitchen-sheet-${quote.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
       toast.success("Kitchen sheet downloaded!");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to generate kitchen sheet";
@@ -665,19 +661,15 @@ function QuoteBuilderPage() {
         toast.error(parseApiError(body, res.status, res.statusText));
         return;
       }
-      const blob = await res.blob();
-      if (blob.size === 0) {
-        toast.error("Labor sheet download was empty. Please try again.");
+      const saved = await downloadPdfFromResponse(res, `labor-sheet-${quote.id}.pdf`);
+      if (!saved.ok) {
+        toast.error(
+          saved.reason === "empty"
+            ? "Labor sheet download was empty. Please try again."
+            : "Labor sheet download was invalid. Please try again."
+        );
         return;
       }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `labor-sheet-${quote.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
       toast.success("Labor sheet downloaded!");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to generate labor sheet";
@@ -967,6 +959,7 @@ function QuoteBuilderPage() {
             onGuestCountPreview={handleGuestCountPreview}
             onGuestCountCommit={updateGuestCount}
             onAdd={addPackageToQuote}
+            onPackageTierSelect={selectPackageTier}
             onRemove={removePackageFromQuote}
             readOnly={!canWriteQuotes}
           />
@@ -983,8 +976,7 @@ function QuoteBuilderPage() {
               <div className="space-y-4 pt-4">
                 {group.categories.map((category) => {
                   if (
-                    selectedPackage &&
-                    !shouldShowQuoteCategory(category, selectedPackage.items)
+                    !shouldShowQuoteCategory(category, packageIncludedItems, customerType)
                   ) {
                     return null;
                   }
@@ -1075,6 +1067,13 @@ function QuoteBuilderPage() {
                   const section = MENU_SECTIONS.find((s) => s.category === category);
                   if (!section) return null;
 
+                  const sectionHint =
+                    customerType === "b2c" &&
+                    selectedPackage &&
+                    isPackageCoveredCategory(category, packageIncludedItems)
+                      ? `Included in ${selectedPackage.name} · Add extras below`
+                      : undefined;
+
                   return (
                     <QuoteSection
                       key={section.category}
@@ -1099,6 +1098,8 @@ function QuoteBuilderPage() {
                       onDelete={removeLineItemOptimistic}
                       customerType={customerType}
                       readOnly={!canWriteQuotes}
+                      catalogItems={menuItemsByCategory[section.category]}
+                      sectionHint={sectionHint}
                     />
                   );
                 })}
@@ -1248,7 +1249,7 @@ function QuoteBuilderPage() {
               type="button"
               variant="outline"
               className="w-full"
-              disabled={kitchenSheetLoading}
+              disabled={kitchenSheetLoading || exportBlocked}
               onClick={() => void handleGenerateKitchenSheet()}
             >
               {kitchenSheetLoading ? (
@@ -1267,7 +1268,7 @@ function QuoteBuilderPage() {
               type="button"
               variant="outline"
               className="w-full"
-              disabled={laborSheetLoading}
+              disabled={laborSheetLoading || exportBlocked}
               onClick={() => void handleGenerateLaborSheet()}
             >
               {laborSheetLoading ? (
@@ -1286,7 +1287,7 @@ function QuoteBuilderPage() {
               type="button"
               variant="outline"
               className="w-full"
-              disabled={pdfLoading}
+              disabled={pdfLoading || exportBlocked}
               onClick={() => void handleGeneratePDF()}
             >
               {pdfLoading ? (
@@ -1303,7 +1304,7 @@ function QuoteBuilderPage() {
             </Button>
             <Button
               type="button"
-              disabled={sendLoading}
+              disabled={sendLoading || exportBlocked}
               onClick={async () => {
                 setSendLoading(true);
                 toast.message("Sending quote — generating PDF and email…");
@@ -1361,7 +1362,9 @@ function QuoteBuilderPage() {
         {globalStatus === "saving" ? (
           <span className="flex items-center gap-1.5">
             <Loader2 className="h-3 w-3 animate-spin" />
-            Saving...
+            {pendingQuoteOpsCount > 0
+              ? `Saving ${pendingQuoteOpsCount} change${pendingQuoteOpsCount === 1 ? "" : "s"}…`
+              : "Saving…"}
           </span>
         ) : null}
         {globalStatus === "unsaved" ? (
@@ -1382,7 +1385,9 @@ function QuoteBuilderPage() {
         {globalStatus === "error" ? (
           <span className="flex items-center gap-2">
             <div className="h-1.5 w-1.5 rounded-full bg-red-500" />
-            Save failed
+            {lineItemsSaveFailed
+              ? `Couldn't save ${pendingQuoteOpsCount} change${pendingQuoteOpsCount === 1 ? "" : "s"}`
+              : "Save failed"}
             {canWriteQuotes ? (
               <button
                 type="button"

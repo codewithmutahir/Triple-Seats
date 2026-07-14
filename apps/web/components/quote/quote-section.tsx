@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { AddItemForm, type AddItemPayload } from "@/components/quote/add-item-form";
 import { LineItemRow } from "@/components/quote/line-item-row";
-import type { ItemCategory, QuoteLineItem } from "@/components/quote/types";
+import type { ItemCategory, MenuItem, QuoteLineItem } from "@/components/quote/types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -42,6 +42,8 @@ type QuoteSectionProps = {
   onDelete: (itemId: string) => void;
   customerType?: "b2b" | "b2c";
   readOnly?: boolean;
+  catalogItems?: MenuItem[];
+  sectionHint?: string;
 };
 
 export function QuoteSection({
@@ -57,7 +59,9 @@ export function QuoteSection({
   onUpdate,
   onDelete,
   customerType = "b2c",
-  readOnly = false
+  readOnly = false,
+  catalogItems,
+  sectionHint
 }: QuoteSectionProps) {
   const Icon = SECTION_ICONS[category] ?? Package;
   const sectionSubtotal = items.reduce(
@@ -94,8 +98,16 @@ export function QuoteSection({
         </CollapsibleTrigger>
         <CollapsibleContent className="overflow-visible data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
           <CardContent className="space-y-3 overflow-visible border-t pt-4">
+            {sectionHint ? (
+              <p className="text-xs text-muted-foreground">{sectionHint}</p>
+            ) : null}
             {!readOnly && canAddItems ? (
-              <AddItemForm category={category} existingItems={items} onAdd={onAdd} />
+              <AddItemForm
+                category={category}
+                existingItems={items}
+                catalogItems={catalogItems}
+                onAdd={onAdd}
+              />
             ) : null}
 
             {items.length === 0 ? (

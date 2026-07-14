@@ -222,10 +222,29 @@ export const api = {
       if (!res.ok || !res.data.quote) throw new Error(res.ok ? "Could not load quote." : res.message);
       return res.data;
     },
-    addItem: (quoteId: string, item: Record<string, unknown>) =>
-      apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
+    addItem: (quoteId: string, item: Record<string, unknown>, idempotencyKey?: string) =>
+      apiFetch<{ quote: QuoteBuilderPayload["quote"]; idempotent?: boolean }>(
         `/api/quotes/${encodeURIComponent(quoteId)}/items`,
-        { method: "POST", body: JSON.stringify(item) }
+        {
+          method: "POST",
+          body: JSON.stringify(item),
+          headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined
+        }
+      ),
+    applyOps: (
+      quoteId: string,
+      ops: import("@/lib/quote-ops-types").QuoteOp[],
+      baseRevision?: number
+    ) =>
+      apiFetch<import("@/lib/quote-ops-types").ApplyQuoteOpsResponse>(
+        `/api/quotes/${encodeURIComponent(quoteId)}/ops`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            ops,
+            ...(typeof baseRevision === "number" ? { baseRevision } : {})
+          })
+        }
       ),
     removeItem: (quoteId: string, itemId: string) =>
       apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
@@ -242,15 +261,20 @@ export const api = {
         `/api/quotes/${encodeURIComponent(quoteId)}`,
         { method: "PATCH", body: JSON.stringify(data) }
       ),
-    addPackage: (quoteId: string, packageId: string) =>
+    addPackage: (quoteId: string, packageId: string, tierId?: string) =>
       apiFetch<{ id: string; packageId: string; unitPrice: number; name: string }>(
         `/api/quotes/${encodeURIComponent(quoteId)}/package`,
-        { method: "POST", body: JSON.stringify({ packageId }) }
+        { method: "POST", body: JSON.stringify({ packageId, ...(tierId ? { tierId } : {}) }) }
       ),
     removePackage: (quoteId: string) =>
       apiFetch<{ ok: true }>(`/api/quotes/${encodeURIComponent(quoteId)}/package`, {
         method: "DELETE"
       }),
+    updatePackageTier: (quoteId: string, tierId: string) =>
+      apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
+        `/api/quotes/${encodeURIComponent(quoteId)}/package/tier`,
+        { method: "PATCH", body: JSON.stringify({ tierId }) }
+      ),
     updateGuestCount: (quoteId: string, guestCount: number) =>
       apiFetch<{ quote: QuoteBuilderPayload["quote"] }>(
         `/api/quotes/${encodeURIComponent(quoteId)}/guest-count`,

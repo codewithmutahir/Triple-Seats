@@ -1,16 +1,31 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
-import type { CateringPackage, QuoteLineItem } from "@/components/quote/types";
+import type { CateringPackage, PackagePriceTier, QuoteLineItem } from "@/components/quote/types";
 import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
-import { denyMutation, handleMutationError } from "@/lib/mutation-guard";
+import { denyMutation, handleMutationError, isQuoteOpsConflict } from "@/lib/mutation-guard";
 import type { QuoteBuilderPayload } from "@/lib/quote-builder-api";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { resolveCreatedLineItem } from "@/lib/quote-line-items";
+import type { ApplyQuoteOpsResponse } from "@/lib/quote-ops-types";
+import {
+  drainQuoteBuilderMutations,
+  isPendingQuoteBuilderWork,
+  isQuoteBuilderQueuedMutation,
+  quoteBuilderMutationKeys
+} from "@/lib/quote-builder-mutations";
+import {
+  getQuoteOpsQueue,
+  pendingQuoteOpsQueueCount,
+  quoteOpsQueueHasFailed,
+  retryQuoteOpsQueue,
+  shouldKeepOptimisticLineItems,
+  subscribeQuoteOpsQueue
+} from "@/lib/quote-ops-queue";
 import { queryKeys } from "@/lib/query-keys";
-import { formatTierLabel, getActiveTier } from "@/lib/quote-totals";
+import { formatTierLabel, findTierById, getActiveTier, tiersForCustomerType } from "@/lib/quote-totals";
 
 export function useQuoteBuilderQuery(eventId: string | null) {
   return useQuery({
@@ -22,6 +37,32 @@ export function useQuoteBuilderQuery(eventId: string | null) {
 }
 0.
 type BuilderData = QuoteBuilderPayload;
+
+function publishQuoteRevision(quoteId: string, revision: number) {
+  if (typeof window === "undefined") return;
+  const key = `quote_revision_${quoteId}`;
+  localStorage.setItem(key, String(revision));
+}
+
+function mergeOpsBatchResult(old: BuilderData, result: ApplyQuoteOpsResponse): BuilderData {
+  publishQuoteRevision(result.quote.id, result.revision);
+  return {
+    ...old,
+    quote: {
+      ...old.quote,
+      ...result.quote,
+      revision: result.revision,
+      lineItems: result.quote.lineItems,
+      totalAmount: result.quote.totalAmount,
+      taxRate: result.quote.taxRate,
+      depositPct: result.quote.depositPct,
+      event:
+        old.quote.event && typeof result.guestCount === "number"
+          ? { ...old.quote.event, guestCountEstimate: result.guestCount }
+          : old.quote.event
+    }
+  };
+}
 
 function normalizeItemPatch(
   item: QuoteLineItem | undefined,
@@ -55,11 +96,16 @@ function mergeQuoteLineItem(
 export function buildOptimisticPackageLine(
   quote: BuilderData["quote"],
   pkg: CateringPackage,
-  packages: CateringPackage[]
+  packages: CateringPackage[],
+  selectedTier?: PackagePriceTier | null
 ): QuoteLineItem {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
   const customerType = quote.event?.customerType ?? "b2c";
-  const tier = getActiveTier(pkg.tiers, guestCount, customerType);
+  const tier =
+    selectedTier ??
+    getActiveTier(pkg.tiers, guestCount, customerType) ??
+    tiersForCustomerType(pkg.tiers, customerType)[0] ??
+    null;
   const catalogPkg = packages.find((p) => p.id === pkg.id) ?? pkg;
 
   return {
@@ -131,7 +177,11 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     qc.setQueryData<BuilderData>(builderKey, (old: BuilderData | undefined) => (old ? updater(old) : old));
   };
 
-  const selectPackageOptimistic = (pkg: CateringPackage, packages: CateringPackage[]) => {
+  const selectPackageOptimistic = (
+    pkg: CateringPackage,
+    packages: CateringPackage[],
+    selectedTier?: PackagePriceTier | null
+  ) => {
     if (!canWrite) return;
     latestPackageIdRef.current = pkg.id;
     packageRemovedRef.current = false;
@@ -148,7 +198,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
             : old.quote.event
         },
         pkg,
-        packages
+        packages,
+        selectedTier
       );
 
       return {
@@ -182,14 +233,32 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const addItemMutation = useMutation({
-    mutationFn: ({
+    mutationKey: eventId ? quoteBuilderMutationKeys.addItem(eventId) : undefined,
+    mutationFn: async ({
       quoteId,
-      item
+      item,
+      tempItem
     }: {
       quoteId: string;
       item: Record<string, unknown>;
       tempItem: QuoteLineItem;
-    }) => api.quotes.addItem(quoteId, item),
+    }) => {
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, {
+        type: "add_item",
+        clientRequestId: tempItem.id,
+        category: String(item.category ?? tempItem.category),
+        name: String(item.name ?? tempItem.name),
+        quantity:
+          typeof item.quantity === "number" ? item.quantity : tempItem.quantity,
+        unitPrice:
+          typeof item.unitPrice === "number" ? item.unitPrice : tempItem.unitPrice,
+        unitType: String(item.unitType ?? tempItem.unitType),
+        menuItemId:
+          (item.menuItemId as string | null | undefined) ?? tempItem.menuItemId ?? null,
+        notes: (item.notes as string | null | undefined) ?? tempItem.notes ?? null
+      });
+    },
     onMutate: async ({ tempItem }) => {
       if (!canWrite) return denyMutation();
       const itemKey = lineItemDedupKey(tempItem.category, tempItem.name);
@@ -218,7 +287,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onSuccess: (result, _vars, ctx) => {
       if (!ctx?.tempItem) return;
       patchBuilder((old) => {
-        const resolved = resolveCreatedLineItem(result.quote.lineItems, old.quote.lineItems, {
+        const merged = mergeOpsBatchResult(old, result);
+        const resolved = resolveCreatedLineItem(result.quote.lineItems, merged.quote.lineItems, {
           category: ctx.tempItem.category,
           name: ctx.tempItem.name,
           quantity: ctx.tempItem.quantity,
@@ -237,16 +307,16 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           );
 
         if (!serverMatch) {
-          return old;
+          return merged;
         }
 
-        const withoutTemp = old.quote.lineItems.filter((item) => item.id !== ctx.tempItem.id);
+        const withoutTemp = merged.quote.lineItems.filter((item) => item.id !== ctx.tempItem.id);
         const hasExisting = withoutTemp.some((item) => item.id === serverMatch.id);
 
         return {
-          ...old,
+          ...merged,
           quote: {
-            ...old.quote,
+            ...merged.quote,
             lineItems: hasExisting
               ? withoutTemp.map((item) => (item.id === serverMatch.id ? serverMatch : item))
               : [...withoutTemp, serverMatch]
@@ -255,6 +325,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       });
     },
     onError: (err, _vars, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
       if (
         err &&
         typeof err === "object" &&
@@ -263,6 +334,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       ) {
         return;
       }
+      if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx?.tempItem) return;
       patchBuilder((old) => {
         if (!old.quote.lineItems.some((item) => item.id === ctx.tempItem.id)) return old;
@@ -285,8 +357,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   });
 
   const removeItemMutation = useMutation({
-    mutationFn: ({ quoteId, itemId }: { quoteId: string; itemId: string }) =>
-      api.quotes.removeItem(quoteId, itemId),
+    mutationKey: eventId ? quoteBuilderMutationKeys.removeItem(eventId) : undefined,
+    mutationFn: async ({ quoteId, itemId }: { quoteId: string; itemId: string }) => {
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, {
+        type: "remove_item",
+        itemId
+      });
+    },
     onMutate: async ({ itemId }) => {
       if (!canWrite) return denyMutation();
       const prev = qc.getQueryData<BuilderData>(builderKey);
@@ -319,6 +397,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
     },
     onError: (err, vars, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
+      if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx?.removed) return;
       patchBuilder((old) => {
         if (old.quote.lineItems.some((item) => item.id === vars.itemId)) return old;
@@ -335,7 +415,8 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   });
 
   const updateItemMutation = useMutation({
-    mutationFn: ({
+    mutationKey: eventId ? quoteBuilderMutationKeys.updateItem(eventId) : undefined,
+    mutationFn: async ({
       quoteId,
       itemId,
       data
@@ -347,7 +428,13 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       const current = qc.getQueryData<BuilderData>(builderKey)?.quote.lineItems.find(
         (item) => item.id === itemId
       );
-      return api.quotes.updateItem(quoteId, itemId, normalizeItemPatch(current, data));
+      const patch = normalizeItemPatch(current, data);
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, {
+        type: "update_item",
+        itemId,
+        patch
+      });
     },
     onMutate: async ({ itemId, data }) => {
       if (!canWrite) return denyMutation();
@@ -376,9 +463,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onSuccess: (result, vars, ctx) => {
       if (!ctx) return;
-      patchBuilder((old) => mergeQuoteLineItem(old, vars.quoteId, vars.itemId, result.quote));
+      patchBuilder((old) => {
+        const merged = mergeOpsBatchResult(old, result);
+        return mergeQuoteLineItem(merged, vars.quoteId, vars.itemId, result.quote);
+      });
     },
     onError: (err, vars, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
+      if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx?.previousItem) return;
       patchBuilder((old) => ({
         ...old,
@@ -394,6 +486,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   });
 
   const updateQuoteMutation = useMutation({
+    mutationKey: eventId ? quoteBuilderMutationKeys.updateQuote(eventId) : undefined,
     mutationFn: ({ quoteId, data }: { quoteId: string; data: Record<string, unknown> }) =>
       api.quotes.update(quoteId, data),
     onMutate: async ({ data }) => {
@@ -455,6 +548,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   };
 
   const saveQuoteSettingsMutation = useMutation({
+    mutationKey: eventId ? quoteBuilderMutationKeys.saveSettings(eventId) : undefined,
     mutationFn: ({ quoteId, settings }: { quoteId: string; settings: QuoteSettingsPayload }) =>
       api.quotes.update(quoteId, settings),
     onMutate: async ({ settings }) => {
@@ -516,8 +610,23 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   });
 
   const addPackageMutation = useMutation({
-    mutationFn: ({ quoteId, packageId }: { quoteId: string; packageId: string }) =>
-      api.quotes.addPackage(quoteId, packageId),
+    mutationKey: eventId ? quoteBuilderMutationKeys.addPackage(eventId) : undefined,
+    mutationFn: async ({
+      quoteId,
+      packageId,
+      tierId
+    }: {
+      quoteId: string;
+      packageId: string;
+      tierId?: string;
+    }) => {
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, {
+        type: "add_package",
+        packageId,
+        tierId: tierId ?? null
+      });
+    },
     onMutate: async ({ packageId }) => {
       if (!canWrite) return denyMutation();
       const opId = ++packageOpSeqRef.current;
@@ -528,29 +637,24 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
 
-      patchBuilder((old) => ({
-        ...old,
-        quote: {
-          ...old.quote,
-          lineItems: old.quote.lineItems.map((item) => {
-            if (item.unitType !== "tiered_per_head") return item;
-            if (item.packageId !== packageId && !item.id.startsWith("temp_pkg_")) return item;
-            return {
-              ...item,
-              id: result.id,
-              packageId: result.packageId,
-              unitPrice: result.unitPrice,
-              name: result.name
-            };
-          })
-        }
-      }));
+      patchBuilder((old) => {
+        const merged = mergeOpsBatchResult(old, result);
+        return {
+          ...merged,
+          quote: {
+            ...merged.quote,
+            lineItems: merged.quote.lineItems.filter((item) => !item.id.startsWith("temp_pkg_"))
+          }
+        };
+      });
 
       if (eventId) {
         void qc.invalidateQueries({ queryKey: queryKeys.events.menuPreferences(eventId) });
       }
     },
     onError: (err, { packageId }, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
+      if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
       if (ctx?.snapshot) qc.setQueryData(builderKey, ctx.snapshot);
@@ -563,20 +667,27 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   });
 
   const removePackageMutation = useMutation({
-    mutationFn: (quoteId: string) => api.quotes.removePackage(quoteId),
+    mutationKey: eventId ? quoteBuilderMutationKeys.removePackage(eventId) : undefined,
+    mutationFn: async (quoteId: string) => {
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, { type: "remove_package" });
+    },
     onMutate: async () => {
       if (!canWrite) return denyMutation();
       const opId = ++packageOpSeqRef.current;
       const snapshot = qc.getQueryData<BuilderData>(builderKey);
       return { snapshot, opId };
     },
-    onSuccess: (_result, _vars, ctx) => {
+    onSuccess: (result, _vars, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
+      patchBuilder((old) => mergeOpsBatchResult(old, result));
       if (eventId) {
         void qc.invalidateQueries({ queryKey: queryKeys.events.menuPreferences(eventId) });
       }
     },
     onError: (err, _vars, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
+      if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (!packageRemovedRef.current || latestPackageIdRef.current !== null) return;
       if (ctx?.snapshot) qc.setQueryData(builderKey, ctx.snapshot);
@@ -589,8 +700,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
   });
 
   const updateGuestCountMutation = useMutation({
-    mutationFn: ({ quoteId, guestCount }: { quoteId: string; guestCount: number }) =>
-      api.quotes.updateGuestCount(quoteId, guestCount),
+    mutationKey: eventId ? quoteBuilderMutationKeys.updateGuestCount(eventId) : undefined,
+    mutationFn: async ({ quoteId, guestCount }: { quoteId: string; guestCount: number }) => {
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, {
+        type: "set_guest_count",
+        guestCount
+      });
+    },
     onMutate: async ({ guestCount }) => {
       if (!canWrite) return denyMutation();
       latestGuestCountRef.current = guestCount;
@@ -605,30 +722,60 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }
       if (!prev?.quote) return { prev, guestCount };
 
-      const customerType = prev.quote.event?.customerType ?? "b2c";
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
           event: old.quote.event
             ? { ...old.quote.event, guestCountEstimate: guestCount }
-            : old.quote.event,
+            : old.quote.event
+        }
+      }));
+      return { prev, guestCount };
+    },
+    onSuccess: (result) => {
+      patchBuilder((old) => mergeOpsBatchResult(old, result));
+    },
+    onError: (err, { guestCount }, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
+      if (shouldKeepOptimisticLineItems(eventId)) return;
+      if (guestCount !== latestGuestCountRef.current) return;
+      if (ctx?.prev) qc.setQueryData(builderKey, ctx.prev);
+      handleMutationError(err, ctx, "Failed to update guest count");
+    }
+  });
+
+  const updatePackageTierMutation = useMutation({
+    mutationKey: eventId ? quoteBuilderMutationKeys.updatePackageTier(eventId) : undefined,
+    mutationFn: async ({ quoteId, tierId }: { quoteId: string; tierId: string }) => {
+      if (!eventId) throw new Error("Missing event.");
+      return getQuoteOpsQueue(eventId).enqueueAndWait(quoteId, {
+        type: "set_package_tier",
+        tierId
+      });
+    },
+    onMutate: async ({ tierId }) => {
+      if (!canWrite) return denyMutation();
+      const prev = qc.getQueryData<BuilderData>(builderKey);
+      if (!prev?.quote) return { prev };
+
+      const packageLine = prev.quote.lineItems.find((item) => item.unitType === "tiered_per_head");
+      if (!packageLine?.packageId) return { prev };
+
+      const pkg =
+        prev.packages.find((row) => row.id === packageLine.packageId) ??
+        packageLine.package ??
+        null;
+      const tier = pkg ? findTierById(pkg.tiers, tierId) : null;
+      if (!tier) return { prev };
+
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
           lineItems: old.quote.lineItems.map((item) => {
-            if (item.unitType !== "tiered_per_head") return item;
-            const tiers =
-              item.package?.tiers ??
-              old.packages.find((pkg) => pkg.id === item.packageId)?.tiers ??
-              [];
-            if (tiers.length === 0) return item;
-            const tier = getActiveTier(tiers, guestCount, customerType);
-            if (!tier) {
-              return {
-                ...item,
-                unitPrice: 0,
-                appliedTier: null,
-                appliedTierLabel: null,
-                notes: null
-              };
+            if (item.unitType !== "tiered_per_head" || item.packageId !== packageLine.packageId) {
+              return item;
             }
             return {
               ...item,
@@ -640,19 +787,22 @@ export function useQuoteBuilderMutations(eventId: string | null) {
           })
         }
       }));
-      return { prev, guestCount };
+
+      return { prev };
     },
-    onSuccess: () => {
-      // Client-side tiers already updated — no server merge
+    onSuccess: (result) => {
+      patchBuilder((old) => mergeOpsBatchResult(old, result));
     },
-    onError: (err, { guestCount }, ctx) => {
-      if (guestCount !== latestGuestCountRef.current) return;
+    onError: (err, _vars, ctx) => {
+      if (isQuoteOpsConflict(err)) return;
+      if (shouldKeepOptimisticLineItems(eventId)) return;
       if (ctx?.prev) qc.setQueryData(builderKey, ctx.prev);
-      handleMutationError(err, ctx, "Failed to update guest count");
+      handleMutationError(err, ctx, "Failed to update package tier");
     }
   });
 
   const duplicateMutation = useMutation({
+    mutationKey: eventId ? quoteBuilderMutationKeys.duplicate(eventId) : undefined,
     mutationFn: (quoteId: string) => api.quotes.duplicate(quoteId),
     onMutate: () => {
       if (!canWrite) return denyMutation();
@@ -719,7 +869,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
 
   const isItemMutating =
     addItemMutation.isPending || removeItemMutation.isPending || updateItemMutation.isPending;
-  const isPackageMutating = addPackageMutation.isPending || removePackageMutation.isPending;
+  const isPackageMutating =
+    addPackageMutation.isPending ||
+    removePackageMutation.isPending ||
+    updatePackageTierMutation.isPending;
   const isGuestCountMutating = updateGuestCountMutation.isPending;
 
   const quoteUpdateChainRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -734,6 +887,68 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     [updateQuoteMutation]
   );
 
+  const queuedLineItemOpsCount = useSyncExternalStore(
+    (onStoreChange) => subscribeQuoteOpsQueue(eventId, onStoreChange),
+    () => pendingQuoteOpsQueueCount(eventId),
+    () => 0
+  );
+
+  const lineItemsSaveFailed = useSyncExternalStore(
+    (onStoreChange) => subscribeQuoteOpsQueue(eventId, onStoreChange),
+    () => quoteOpsQueueHasFailed(eventId),
+    () => false
+  );
+
+  const pendingOtherQuoteOpsCount = useIsMutating({
+    predicate: (mutation) =>
+      isPendingQuoteBuilderWork(mutation, eventId) &&
+      !isQuoteBuilderQueuedMutation(mutation, eventId)
+  });
+
+  const pendingQuoteOpsCount = queuedLineItemOpsCount + pendingOtherQuoteOpsCount;
+
+  const drainQuoteMutations = useCallback(async () => {
+    await quoteUpdateChainRef.current.catch(() => undefined);
+    await drainQuoteBuilderMutations(qc, eventId);
+  }, [qc, eventId]);
+
+  useEffect(() => {
+    if (!eventId) return;
+    const queue = getQuoteOpsQueue(eventId);
+    queue.setRevisionProvider(
+      () => qc.getQueryData<BuilderData>(builderKey)?.quote.revision ?? 0
+    );
+    return () => queue.setRevisionProvider(null);
+  }, [eventId, qc, builderKey]);
+
+  useEffect(() => {
+    if (!eventId) return;
+
+    const onStorage = (e: StorageEvent) => {
+      const quoteId = qc.getQueryData<BuilderData>(builderKey)?.quote.id;
+      if (!quoteId || e.key !== `quote_revision_${quoteId}` || !e.newValue) return;
+      const localRevision = qc.getQueryData<BuilderData>(builderKey)?.quote.revision ?? 0;
+      if (Number(e.newValue) > localRevision) {
+        void qc.invalidateQueries({ queryKey: builderKey });
+      }
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [eventId, qc, builderKey]);
+
+  useEffect(() => {
+    if (!eventId) return;
+    return getQuoteOpsQueue(eventId).onConflict((err) => {
+      toast.message(err.message || "Quote was updated elsewhere. Reloading…");
+      void qc.invalidateQueries({ queryKey: builderKey });
+    });
+  }, [eventId, qc, builderKey]);
+
+  const retryLineItemSaves = useCallback(async () => {
+    await retryQuoteOpsQueue(eventId);
+  }, [eventId]);
+
   return {
     addItemMutation,
     removeItemMutation,
@@ -744,6 +959,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     addPackageMutation,
     removePackageMutation,
     updateGuestCountMutation,
+    updatePackageTierMutation,
     duplicateMutation,
     selectPackageOptimistic,
     removePackageOptimistic,
@@ -753,6 +969,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     isItemMutating,
     isPackageMutating,
     isGuestCountMutating,
+    pendingQuoteOpsCount,
+    lineItemsSaveFailed,
+    retryLineItemSaves,
+    drainQuoteMutations,
     canWriteQuotes: canWrite
   };
 }

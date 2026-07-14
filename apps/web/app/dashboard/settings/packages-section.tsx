@@ -44,6 +44,13 @@ import {
 } from "@/hooks/use-settings-queries";
 import { usePermissions } from "@/hooks/use-permissions";
 import type { SettingsPackage } from "@/lib/settings-types";
+import {
+  KITCHEN_GUEST_BANDS,
+  kitchenQtysFromPackage,
+  syncKitchenQtyRows,
+  uniqueKitchenCategories,
+  type KitchenQtyFormRow
+} from "@/lib/package-kitchen-qty";
 import { formatUsd } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +63,7 @@ type PackageFormData = {
   items: { label: string; quantity: number }[];
   b2cTiers: { minGuests: number; maxGuests: number | null; pricePerHead: number }[];
   b2bTiers: { minGuests: number; maxGuests: number | null; pricePerHead: number }[];
+  kitchenQtys: KitchenQtyFormRow[];
 };
 
 const EMPTY_FORM: PackageFormData = {
@@ -64,7 +72,8 @@ const EMPTY_FORM: PackageFormData = {
   minGuests: 200,
   items: [{ label: "", quantity: 1 }],
   b2cTiers: [{ minGuests: 200, maxGuests: 250, pricePerHead: 0 }],
-  b2bTiers: [{ minGuests: 200, maxGuests: 250, pricePerHead: 0 }]
+  b2bTiers: [{ minGuests: 200, maxGuests: 250, pricePerHead: 0 }],
+  kitchenQtys: []
 };
 
 function packageToForm(pkg: Package): PackageFormData {
@@ -83,28 +92,38 @@ function packageToForm(pkg: Package): PackageFormData {
       pricePerHead: t.pricePerHead
     }));
 
+  const items = pkg.items.map((i) => ({ label: i.label, quantity: i.quantity }));
   return {
     name: pkg.name,
     description: pkg.description ?? "",
     minGuests: pkg.minGuests,
-    items: pkg.items.map((i) => ({ label: i.label, quantity: i.quantity })),
+    items,
     b2cTiers: b2cTiers.length ? b2cTiers : EMPTY_FORM.b2cTiers,
-    b2bTiers: b2bTiers.length ? b2bTiers : EMPTY_FORM.b2bTiers
+    b2bTiers: b2bTiers.length ? b2bTiers : EMPTY_FORM.b2bTiers,
+    kitchenQtys: kitchenQtysFromPackage(
+      items.map((i) => i.label),
+      pkg.kitchenQtys ?? []
+    )
   };
 }
 
 function formToBody(data: PackageFormData): PackageWriteBody {
+  const items = data.items
+    .filter((i) => i.label.trim())
+    .map((i, idx) => ({ label: i.label.trim(), quantity: i.quantity, sortOrder: idx }));
   return {
     name: data.name.trim(),
     description: data.description.trim() || null,
     minGuests: data.minGuests,
-    items: data.items
-      .filter((i) => i.label.trim())
-      .map((i, idx) => ({ label: i.label.trim(), quantity: i.quantity, sortOrder: idx })),
+    items,
     tiers: [
       ...data.b2cTiers.map((t) => ({ ...t, customerType: "b2c" as const })),
       ...data.b2bTiers.map((t) => ({ ...t, customerType: "b2b" as const }))
-    ]
+    ],
+    kitchenQtys: syncKitchenQtyRows(
+      items.map((i) => i.label),
+      data.kitchenQtys
+    )
   };
 }
 
@@ -383,6 +402,88 @@ function ItemsEditor({
   );
 }
 
+function KitchenQtyEditor({
+  categories,
+  kitchenQtys,
+  onChange
+}: {
+  categories: string[];
+  kitchenQtys: KitchenQtyFormRow[];
+  onChange: (rows: KitchenQtyFormRow[]) => void;
+}) {
+  function qtyFor(category: string, band: number): number {
+    return (
+      kitchenQtys.find((row) => row.category === category && row.guestBand === band)?.quantity ?? 0
+    );
+  }
+
+  function updateQty(category: string, band: number, quantity: number) {
+    const next = kitchenQtys.filter(
+      (row) => !(row.category === category && row.guestBand === band)
+    );
+    next.push({ category, guestBand: band, quantity: Math.max(0, quantity) });
+    onChange(syncKitchenQtyRows(categories, next));
+  }
+
+  if (categories.length === 0) {
+    return (
+      <div className="space-y-2">
+        <Label className="text-sm font-medium">Kitchen prep quantities</Label>
+        <p className="text-sm text-muted-foreground">
+          Add included item labels to edit tray quantities by guest band.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label className="text-sm font-medium">Kitchen prep quantities</Label>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Trays (or units) per guest band. Kitchen sheet scales with ceil((guests × qty) / band).
+        </p>
+      </div>
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full min-w-[32rem] text-sm">
+          <thead>
+            <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+              <th className="px-3 py-2 text-left font-medium">Category</th>
+              {KITCHEN_GUEST_BANDS.map((band) => (
+                <th key={band} className="px-2 py-2 text-center font-medium tabular-nums">
+                  {band}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {categories.map((category) => (
+              <tr key={category} className="border-b last:border-0">
+                <td className="px-3 py-2 font-medium">{category}</td>
+                {KITCHEN_GUEST_BANDS.map((band) => (
+                  <td key={band} className="px-1 py-1.5">
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={qtyFor(category, band)}
+                      onChange={(e) =>
+                        updateQty(category, band, parseFloat(e.target.value) || 0)
+                      }
+                      className="h-8 w-16 mx-auto text-center tabular-nums"
+                      aria-label={`${category} qty for ${band} guests`}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function PackageFormDialog({
   open,
   onOpenChange,
@@ -430,11 +531,11 @@ function PackageFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editingId ? "Edit Package" : "Create Package"}</DialogTitle>
           <DialogDescription>
-            Configure package details, included items, and pricing tiers
+            Configure package details, included items, kitchen prep quantities, and pricing tiers
           </DialogDescription>
         </DialogHeader>
 
@@ -473,7 +574,25 @@ function PackageFormDialog({
             />
           </div>
 
-          <ItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} />
+          <ItemsEditor
+            items={form.items}
+            onChange={(items) =>
+              setForm((f) => ({
+                ...f,
+                items,
+                kitchenQtys: syncKitchenQtyRows(
+                  items.map((i) => i.label),
+                  f.kitchenQtys
+                )
+              }))
+            }
+          />
+
+          <KitchenQtyEditor
+            categories={uniqueKitchenCategories(form.items.map((i) => i.label))}
+            kitchenQtys={form.kitchenQtys}
+            onChange={(kitchenQtys) => setForm((f) => ({ ...f, kitchenQtys }))}
+          />
 
           <div className="space-y-4">
             <TierEditor

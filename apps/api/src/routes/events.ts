@@ -22,7 +22,8 @@ import {
   expandPackageSlotLabels,
   loadMenuPreferencesForEvent,
   parseMenuPreferencesPatch,
-  saveMenuPreferences
+  saveMenuPreferences,
+  syncMenuPreferencesForPackage
 } from "../lib/menu-preferences";
 import { getAuthorizedSession } from "../lib/authorized-session";
 import { handleRouteError } from "../lib/route-errors";
@@ -684,7 +685,16 @@ router.get("/:id/menu-preferences", async (req: Request, res: Response) => {
       return res.json({ hasPackage: false });
     }
 
-    const preferences = await loadMenuPreferencesForEvent(id);
+    let preferences = await loadMenuPreferencesForEvent(id);
+    if (preferences.length === 0) {
+      await syncMenuPreferencesForPackage(
+        id,
+        pkgCtx.packageId,
+        caterer.id,
+        pkgCtx.packageItems.map((item) => ({ label: item.label, quantity: item.quantity }))
+      );
+      preferences = await loadMenuPreferencesForEvent(id);
+    }
     const slotLabels = expandPackageSlotLabels(
       pkgCtx.packageItems.map((item) => ({ label: item.label, quantity: item.quantity }))
     );

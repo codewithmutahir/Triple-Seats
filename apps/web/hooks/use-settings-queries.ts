@@ -41,6 +41,7 @@ export type PackageWriteBody = {
     maxGuests: number | null;
     pricePerHead: number;
   }[];
+  kitchenQtys: { guestBand: number; category: string; quantity: number }[];
 };
 
 function invalidateQuoteBuilders(qc: QueryClient) {
@@ -133,7 +134,8 @@ export function useCreatePackageMutation() {
           label: item.label,
           quantity: item.quantity,
           sortOrder: item.sortOrder
-        }))
+        })),
+        kitchenQtys: body.kitchenQtys
       };
       qc.setQueryData<SettingsPackage[]>(queryKeys.settings.packages(), (old = []) => [...old, temp]);
       return { snapshot, tempId };
@@ -190,7 +192,8 @@ export function useUpdatePackageMutation() {
                   minGuests: t.minGuests,
                   maxGuests: t.maxGuests,
                   pricePerHead: t.pricePerHead
-                }))
+                })),
+                kitchenQtys: body.kitchenQtys
               }
             : p
         )

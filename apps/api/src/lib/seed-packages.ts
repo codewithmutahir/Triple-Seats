@@ -1,5 +1,7 @@
 import { prisma } from "@tripeseats/database";
 
+import { buildDefaultKitchenQtys } from "./package-kitchen-qty-defaults";
+
 type TierSeed = {
   minGuests: number;
   maxGuests: number | null;
@@ -106,6 +108,9 @@ export async function seedPackagesForCaterer(catererId: string) {
             ...item,
             sortOrder: i
           }))
+        },
+        kitchenQtys: {
+          create: buildDefaultKitchenQtys(pkg.items.map((item) => item.label))
         }
       }
     });

@@ -123,5 +123,28 @@ export const quoteAnalytics = {
 
   createQuoteClicked(props: { eventId: string }) {
     track("create_quote_clicked", props);
+  },
+
+  opsBatchFailed(
+    props: Context & {
+      opCount: number;
+      saveLatencyMs: number;
+      recoverable: boolean;
+      message: string;
+      conflict?: boolean;
+    }
+  ) {
+    track("ops_batch_failed", props);
+  },
+
+  opsBatchSaved(
+    props: Context & {
+      opCount: number;
+      saveLatencyMs: number;
+      attempt?: number;
+      baseRevision?: number;
+    }
+  ) {
+    track("ops_batch_saved", props);
   }
 };

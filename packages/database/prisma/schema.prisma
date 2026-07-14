@@ -379,6 +379,7 @@ model Quote {
   depositPct  Float           @default(0.5)
   dueDate     DateTime?
   totalAmount Float           @default(0)
+  revision    Int             @default(0)
   packageSelections Json?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
@@ -419,6 +420,18 @@ model QuoteLineItem {
   @@map("quote_line_items")
 }
 
+model QuoteItemIdempotency {
+  id              String   @id @default(cuid())
+  quoteId         String
+  clientRequestId String
+  lineItemId      String
+  createdAt       DateTime @default(now())
+
+  @@unique([quoteId, clientRequestId])
+  @@index([quoteId])
+  @@map("quote_item_idempotency")
+}
+
 model CateringPackage {
   id          String                @id @default(cuid())
   catererId   String
@@ -430,6 +443,7 @@ model CateringPackage {
   caterer     Caterer               @relation(fields: [catererId], references: [id], onDelete: Cascade)
   tiers       PackagePriceTier[]
   items       PackageIncludedItem[]
+  kitchenQtys PackageKitchenQty[]
   lineItems   QuoteLineItem[]
 
   @@index([catererId])
@@ -459,6 +473,19 @@ model PackageIncludedItem {
 
   @@index([packageId])
   @@map("package_included_items")
+}
+
+model PackageKitchenQty {
+  id        String          @id @default(cuid())
+  packageId String
+  guestBand Int
+  category  String
+  quantity  Float           @default(0)
+  package   CateringPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, guestBand, category])
+  @@index([packageId])
+  @@map("package_kitchen_qtys")
 }
 
 model MenuItem {

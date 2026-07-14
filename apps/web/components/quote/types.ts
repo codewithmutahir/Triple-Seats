@@ -108,6 +108,7 @@ export type Quote = {
   depositPct: number;
   dueDate: string | null;
   totalAmount: number;
+  revision?: number;
   createdAt?: string;
   updatedAt?: string;
   packageSelections?: Record<string, Record<string, { id: string; name: string }[]>>;
