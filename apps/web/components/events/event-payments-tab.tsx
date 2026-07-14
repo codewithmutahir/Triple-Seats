@@ -1,7 +1,7 @@
 "use client";
 
 import { format } from "date-fns";
-import { Banknote, CreditCard, Loader2, Trash2 } from "lucide-react";
+import { Banknote, Copy, CreditCard, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -30,13 +30,15 @@ type EventPaymentsTabProps = {
 
 export function EventPaymentsTab({ eventId, eventStatus, onSuggestComplete }: EventPaymentsTabProps) {
   const { data, isLoading, isError, refetch } = useEventPaymentsQuery(eventId);
-  const { recordMutation, deleteMutation, canWritePayments } = useEventPaymentsMutations(eventId);
+  const { recordMutation, deleteMutation, createLinkMutation, canWritePayments } =
+    useEventPaymentsMutations(eventId);
 
   const [cashAmount, setCashAmount] = useState("");
   const [cashDate, setCashDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [cashNote, setCashNote] = useState("");
   const [cardAmount, setCardAmount] = useState("");
   const [cardNote, setCardNote] = useState("");
+  const [lastCheckoutUrl, setLastCheckoutUrl] = useState<string | null>(null);
 
   const paymentsEnabled =
     data?.paymentsEnabled ?? (eventStatus === "booked" || eventStatus === "completed");
@@ -78,13 +80,52 @@ export function EventPaymentsTab({ eventId, eventStatus, onSuggestComplete }: Ev
   }
 
   function handlePaymentLink() {
-    if (!cardAmount.trim()) {
+    const amount = Number.parseFloat(cardAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
       toast.error("Enter an amount for the payment link.");
       return;
     }
-    toast.message("Payment link feature coming soon.", {
-      description: "Use Clover integration (in progress). Record cash payments for now."
-    });
+    if (data?.cloverConfigured === false) {
+      toast.error("Clover is not configured on the server.");
+      return;
+    }
+
+    createLinkMutation.mutate(
+      {
+        amount,
+        note: cardNote.trim() || undefined,
+        sendEmail: true
+      },
+      {
+        onSuccess: (result) => {
+          setLastCheckoutUrl(result.checkoutUrl);
+          if (result.checkoutUrl) {
+            void navigator.clipboard.writeText(result.checkoutUrl).catch(() => undefined);
+          }
+          if (result.emailSent) {
+            toast.success("Payment link created and emailed to the guest.");
+          } else if (result.checkoutUrl) {
+            toast.success(
+              result.reused
+                ? "Existing link still valid — copied to clipboard."
+                : "Payment link created — copied to clipboard."
+            );
+          } else {
+            toast.success("Payment link created.");
+          }
+          setCardAmount("");
+        }
+      }
+    );
+  }
+
+  async function copyUrl(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied.");
+    } catch {
+      toast.error("Could not copy link.");
+    }
   }
 
   if (isLoading && !data) {
@@ -164,6 +205,7 @@ export function EventPaymentsTab({ eventId, eventStatus, onSuggestComplete }: Ev
                 <TableRow>
                   <TableHead>Date</TableHead>
                   <TableHead>Method</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Note</TableHead>
                   <TableHead>Added by</TableHead>
@@ -177,6 +219,19 @@ export function EventPaymentsTab({ eventId, eventStatus, onSuggestComplete }: Ev
                       {format(new Date(payment.paymentDate), "MMM d, yyyy")}
                     </TableCell>
                     <TableCell>{METHOD_LABELS[payment.method] ?? payment.method}</TableCell>
+                    <TableCell className="capitalize text-muted-foreground">
+                      {payment.status}
+                      {payment.checkoutUrl && payment.status === "pending" ? (
+                        <button
+                          type="button"
+                          className="ml-2 inline-flex items-center gap-1 text-xs text-[#1B2A4A] underline"
+                          onClick={() => void copyUrl(payment.checkoutUrl!)}
+                        >
+                          <Copy className="h-3 w-3" />
+                          Link
+                        </button>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="text-right font-medium">
                       {formatUsd(payment.amount)}
                     </TableCell>
@@ -280,7 +335,9 @@ export function EventPaymentsTab({ eventId, eventStatus, onSuggestComplete }: Ev
                   step="0.01"
                   value={cardAmount}
                   onChange={(e) => setCardAmount(e.target.value)}
-                  placeholder="0.00"
+                  placeholder={
+                    summary.balanceDue > 0 ? String(summary.balanceDue.toFixed(2)) : "0.00"
+                  }
                 />
               </div>
               <div>
@@ -292,11 +349,44 @@ export function EventPaymentsTab({ eventId, eventStatus, onSuggestComplete }: Ev
                   placeholder="Deposit payment"
                 />
               </div>
-              <Button type="button" variant="outline" className="w-full" onClick={handlePaymentLink}>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={createLinkMutation.isPending}
+                onClick={() => handlePaymentLink()}
+              >
+                {createLinkMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
                 Generate payment link
               </Button>
+              {lastCheckoutUrl ? (
+                <div className="rounded-md border bg-muted/40 p-3 text-xs break-all">
+                  <p className="mb-1 font-medium text-foreground">Latest link</p>
+                  <a
+                    href={lastCheckoutUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[#1B2A4A] underline"
+                  >
+                    {lastCheckoutUrl}
+                  </a>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="mt-2 h-7 px-2"
+                    onClick={() => void copyUrl(lastCheckoutUrl)}
+                  >
+                    <Copy className="mr-1 h-3 w-3" />
+                    Copy
+                  </Button>
+                </div>
+              ) : null}
               <p className="text-xs text-muted-foreground">
-                Link will be sent to the guest email. Payment via Clover (coming soon).
+                Creates a Clover Hosted Checkout link (~15 min expiry). Emails the guest when an
+                email is on file; link is also copied for you.
               </p>
             </CardContent>
           </Card>
