@@ -8,12 +8,13 @@ export const quoteInclude = {
   lineItems: {
     orderBy: { createdAt: "asc" as const },
     include: {
-      package: {
-        include: {
-          tiers: { orderBy: { minGuests: "asc" as const } },
-          items: { orderBy: { sortOrder: "asc" as const } }
-        }
-      }
+          package: {
+            include: {
+              tiers: { orderBy: { minGuests: "asc" as const } },
+              items: { orderBy: { sortOrder: "asc" as const } },
+              kitchenQtys: { orderBy: [{ guestBand: "asc" as const }, { category: "asc" as const }] }
+            }
+          }
     }
   },
   event: { include: { primaryGuest: true } }
@@ -30,7 +31,16 @@ type QuoteStatus = QuoteWithRelations["status"];
 type ItemCategory = QuoteLineItem["category"];
 type QuoteUnit = QuoteLineItem["unitType"];
 
-export function serializeLineItem(item: QuoteLineItem) {
+type PackageNested = NonNullable<QuoteLineItem["package"]>;
+/** Mutation paths may omit kitchenQtys; serialize defaults to []. */
+type PackageForSerialize = Omit<PackageNested, "kitchenQtys"> & {
+  kitchenQtys?: PackageNested["kitchenQtys"];
+};
+type LineItemForSerialize = Omit<QuoteLineItem, "package"> & {
+  package: PackageForSerialize | null;
+};
+
+export function serializeLineItem(item: LineItemForSerialize) {
   return {
     id: item.id,
     quoteId: item.quoteId,
@@ -61,6 +71,11 @@ export function serializeLineItem(item: QuoteLineItem) {
             label: i.label,
             quantity: i.quantity,
             sortOrder: i.sortOrder
+          })),
+          kitchenQtys: (item.package.kitchenQtys ?? []).map((row) => ({
+            guestBand: row.guestBand,
+            category: row.category,
+            quantity: row.quantity
           }))
         }
       : null
@@ -69,10 +84,11 @@ export function serializeLineItem(item: QuoteLineItem) {
 
 export type QuoteTotalsPatchSource = {
   id: string;
+  revision?: number;
   taxRate: number;
   depositPct: number;
   totalAmount: number;
-  lineItems: QuoteLineItem[];
+  lineItems: LineItemForSerialize[];
   guestCount: number;
 };
 
@@ -87,6 +103,7 @@ export function serializeQuoteTotalsPatch(quote: QuoteTotalsPatchSource) {
 
   return {
     id: quote.id,
+    revision: quote.revision ?? 0,
     totalAmount: quote.totalAmount,
     taxRate: quote.taxRate,
     depositPct: quote.depositPct,
@@ -117,6 +134,7 @@ export function serializeQuote(quote: QuoteWithRelations) {
     depositPct: quote.depositPct,
     dueDate: quote.dueDate?.toISOString() ?? null,
     totalAmount: quote.totalAmount,
+    revision: quote.revision ?? 0,
     packageSelections: normalizePackageSelections(quote.packageSelections),
     createdAt: quote.createdAt.toISOString(),
     updatedAt: quote.updatedAt.toISOString(),

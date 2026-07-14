@@ -43,6 +43,7 @@ type QuoteSectionProps = {
   customerType?: "b2b" | "b2c";
   readOnly?: boolean;
   catalogItems?: MenuItem[];
+  sectionHint?: string;
 };
 
 export function QuoteSection({
@@ -59,7 +60,8 @@ export function QuoteSection({
   onDelete,
   customerType = "b2c",
   readOnly = false,
-  catalogItems
+  catalogItems,
+  sectionHint
 }: QuoteSectionProps) {
   const Icon = SECTION_ICONS[category] ?? Package;
   const sectionSubtotal = items.reduce(
@@ -96,6 +98,9 @@ export function QuoteSection({
         </CollapsibleTrigger>
         <CollapsibleContent className="overflow-visible data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
           <CardContent className="space-y-3 overflow-visible border-t pt-4">
+            {sectionHint ? (
+              <p className="text-xs text-muted-foreground">{sectionHint}</p>
+            ) : null}
             {!readOnly && canAddItems ? (
               <AddItemForm
                 category={category}

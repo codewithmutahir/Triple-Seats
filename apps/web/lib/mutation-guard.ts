@@ -27,9 +27,19 @@ function userFacingMutationMessage(err: unknown, fallbackMessage: string): strin
   return fallbackMessage;
 }
 
+export function isQuoteOpsConflict(err: unknown): boolean {
+  if (err instanceof ApiError && err.status === 409) return true;
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: string }).name === "QuoteOpsConflictError"
+  );
+}
+
 /** Revert cache and toast only for unexpected failures — silent on 403 / permission abort. */
 export function handleMutationError(err: unknown, ctx: unknown, fallbackMessage: string) {
-  if (wasMutationAborted(ctx) || isForbiddenError(err)) return;
+  if (wasMutationAborted(ctx) || isForbiddenError(err) || isQuoteOpsConflict(err)) return;
   if (
     err &&
     typeof err === "object" &&

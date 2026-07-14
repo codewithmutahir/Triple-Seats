@@ -37,15 +37,29 @@ export function getPackageSlotsForSection(
   return slots.length > 0 ? slots : undefined;
 }
 
-/** When a package is selected, hide food categories covered by the package; keep extras. */
+/** When a package is selected, hide food categories covered by the package (B2B only). */
 export function shouldShowQuoteCategory(
   category: ItemCategory,
-  packageItems: PackageIncludedItem[] | undefined
+  packageItems: PackageIncludedItem[] | undefined,
+  customerType: "b2b" | "b2c" = "b2c"
 ): boolean {
+  if (customerType === "b2c") return true;
   if (!packageItems?.length) return true;
   if (category === "equipment" || category === "delivery" || category === "beverages" || category === "labor") {
     return true;
   }
   const slots = getPackageSlotsForSection(packageItems, category);
   return slots === undefined;
+}
+
+/** True when the selected package includes this food category (for B2C section hints). */
+export function isPackageCoveredCategory(
+  category: ItemCategory,
+  packageItems: PackageIncludedItem[] | undefined
+): boolean {
+  if (!packageItems?.length) return false;
+  if (category === "equipment" || category === "delivery" || category === "beverages" || category === "labor") {
+    return false;
+  }
+  return getPackageSlotsForSection(packageItems, category) !== undefined;
 }

@@ -38,6 +38,7 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
     path.endsWith("/pdf") ||
     path.endsWith("/send") ||
     path.endsWith("/kitchen-sheet") ||
+    path.endsWith("/labor-sheet") ||
     path.includes("/pdf/");
 
   const forwardHeaders = new Headers();
@@ -114,6 +115,25 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   if (contentTypeRes) responseHeaders.set("content-type", contentTypeRes);
 
   const disposition = res.headers.get("content-disposition");
+  const isPdf =
+    (contentTypeRes?.toLowerCase().includes("application/pdf") ?? false) ||
+    (disposition?.toLowerCase().includes(".pdf") ?? false);
+
+  // Buffer PDF bodies. Streaming `res.body` through NextResponse often arrives empty
+  // in the browser (Content-Length set, byteLength 0). Also skip forwarding
+  // Content-Disposition: attachment — download managers (e.g. IDM) intercept that
+  // on fetch() and steal the body; the client already names the file via <a download>.
+  if (isPdf) {
+    const buf = await res.arrayBuffer();
+    responseHeaders.set("content-length", String(buf.byteLength));
+    responseHeaders.set("cache-control", "no-store");
+    return new NextResponse(buf, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: responseHeaders
+    });
+  }
+
   if (disposition) responseHeaders.set("content-disposition", disposition);
 
   const contentLength = res.headers.get("content-length");

@@ -18,6 +18,7 @@
     "hostinger:archive:web": "powershell -ExecutionPolicy Bypass -File scripts/hostinger-web-archive.ps1",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
+    "test": "pnpm --filter api test && pnpm --filter web test",
     "db:generate": "pnpm --filter @tripeseats/database prisma generate",
     "db:migrate": "pnpm --filter @tripeseats/database prisma migrate dev",
     "db:migrate:deploy": "pnpm --filter @tripeseats/database prisma migrate deploy",

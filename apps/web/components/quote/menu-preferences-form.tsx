@@ -18,6 +18,7 @@ import {
 import { api } from "@/lib/api";
 import { baseSlotLabel, categoryForSlotLabel } from "@/lib/menu-preference-slots";
 import type { MenuPreferenceEntry, MenuPreferencesPayload } from "@/lib/menu-preference-types";
+import { quoteBuilderMutationKeys } from "@/lib/quote-builder-mutations";
 import { queryKeys } from "@/lib/query-keys";
 
 type MenuPreferencesFormProps = {
@@ -80,6 +81,7 @@ export function MenuPreferencesForm({
   }, [payload?.hasPackage, payload?.preferences, payload?.slotLabels, payload?.packageId]);
 
   const saveMutation = useMutation({
+    mutationKey: quoteBuilderMutationKeys.menuPreferences(eventId),
     mutationFn: (preferences: MenuPreferenceEntry[]) =>
       api.events.updateMenuPreferences(eventId, { preferences }),
     onSuccess: () => {

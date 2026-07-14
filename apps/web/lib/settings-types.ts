@@ -23,6 +23,12 @@ export type SettingsPackageItem = {
   sortOrder: number;
 };
 
+export type SettingsPackageKitchenQty = {
+  guestBand: number;
+  category: string;
+  quantity: number;
+};
+
 export type SettingsPackage = {
   id: string;
   name: string;
@@ -31,6 +37,7 @@ export type SettingsPackage = {
   minGuests: number;
   tiers: SettingsPackageTier[];
   items: SettingsPackageItem[];
+  kitchenQtys: SettingsPackageKitchenQty[];
 };
 
 export type SettingsItemCategory =
