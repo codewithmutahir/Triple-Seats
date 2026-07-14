@@ -90,7 +90,8 @@ export const queryKeys = {
     all: ["settings"] as const,
     profile: () => [...queryKeys.settings.all, "profile"] as const,
     packages: () => [...queryKeys.settings.all, "packages"] as const,
-    menuItems: () => [...queryKeys.settings.all, "menuItems"] as const
+    menuItems: () => [...queryKeys.settings.all, "menuItems"] as const,
+    clover: () => [...queryKeys.settings.all, "clover"] as const
   },
 
   team: {

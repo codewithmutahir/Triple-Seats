@@ -40,6 +40,23 @@ export type SettingsPackage = {
   kitchenQtys: SettingsPackageKitchenQty[];
 };
 
+export type SettingsCloverConnection = {
+  connected: boolean;
+  configured: boolean;
+  source: "caterer" | "env" | "none";
+  merchantId: string | null;
+  publicKey: string | null;
+  hasPrivateKey: boolean;
+  hasWebhookSecret: boolean;
+  privateKeyHint: string | null;
+  webhookSecretHint: string | null;
+  connectedAt: string | null;
+  webhookUrl: string;
+  successUrl: string;
+  failureUrl: string;
+  cancelUrl: string;
+};
+
 export type SettingsItemCategory =
   | "appetizer"
   | "veg_gravy"

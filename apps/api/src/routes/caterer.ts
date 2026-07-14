@@ -2,6 +2,8 @@ import { prisma } from "@tripeseats/database";
 import { Router, type Request, type Response } from "express";
 
 import { getAuthorizedSession } from "../lib/authorized-session";
+import { publicAppOrigin, resolveCloverConfigForCaterer } from "../lib/clover";
+import { decryptSecret, encryptSecret, maskSecretHint } from "../lib/secret-crypto";
 import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
 
@@ -152,6 +154,187 @@ router.patch("/", async (req: Request, res: Response) => {
     return res.json({ caterer: serializeCaterer(updated) });
   } catch (e) {
     return handleRouteError(res, e, "Caterer");
+  }
+});
+
+function cloverSetupUrls() {
+  const origin = publicAppOrigin();
+  return {
+    webhookUrl: `${origin}/api/webhooks/clover`,
+    successUrl: `${origin}/pay/success`,
+    failureUrl: `${origin}/pay/failure`,
+    cancelUrl: `${origin}/pay/cancel`
+  };
+}
+
+router.get("/clover", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "settings:read");
+    const row = await prisma.caterer.findUnique({
+      where: { id: caterer.id },
+      select: {
+        cloverMerchantId: true,
+        cloverPrivateKeyEnc: true,
+        cloverWebhookSecretEnc: true,
+        cloverPublicKey: true,
+        cloverConnectedAt: true
+      }
+    });
+    if (!row) {
+      return res.status(404).json({ error: "Caterer not found" });
+    }
+
+    const runtime = await resolveCloverConfigForCaterer(caterer.id);
+    const privateKey = decryptSecret(row.cloverPrivateKeyEnc);
+    const webhookSecret = decryptSecret(row.cloverWebhookSecretEnc);
+
+    return res.json({
+      clover: {
+        connected: Boolean(row.cloverMerchantId && row.cloverPrivateKeyEnc),
+        configured: runtime.configured,
+        source: runtime.source,
+        merchantId: row.cloverMerchantId,
+        publicKey: row.cloverPublicKey,
+        hasPrivateKey: Boolean(row.cloverPrivateKeyEnc),
+        hasWebhookSecret: Boolean(row.cloverWebhookSecretEnc),
+        privateKeyHint: maskSecretHint(privateKey),
+        webhookSecretHint: maskSecretHint(webhookSecret),
+        connectedAt: row.cloverConnectedAt?.toISOString() ?? null,
+        ...cloverSetupUrls()
+      }
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "CatererClover");
+  }
+});
+
+router.put("/clover", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    const merchantId =
+      typeof body.merchantId === "string" ? body.merchantId.trim() : undefined;
+    const privateKey =
+      typeof body.privateKey === "string" ? body.privateKey.trim() : undefined;
+    const webhookSecret =
+      typeof body.webhookSecret === "string" ? body.webhookSecret.trim() : undefined;
+    const publicKey =
+      typeof body.publicKey === "string" ? body.publicKey.trim() : undefined;
+
+    const existing = await prisma.caterer.findUnique({
+      where: { id: caterer.id },
+      select: {
+        cloverMerchantId: true,
+        cloverPrivateKeyEnc: true,
+        cloverWebhookSecretEnc: true,
+        cloverPublicKey: true
+      }
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Caterer not found" });
+    }
+
+    const nextMerchantId =
+      merchantId !== undefined ? merchantId || null : existing.cloverMerchantId;
+    const nextPrivateEnc =
+      privateKey !== undefined
+        ? encryptSecret(privateKey) ?? existing.cloverPrivateKeyEnc
+        : existing.cloverPrivateKeyEnc;
+    // Allow clearing webhook with empty string when explicitly sent
+    const nextWebhookEnc =
+      webhookSecret !== undefined
+        ? webhookSecret
+          ? encryptSecret(webhookSecret)
+          : null
+        : existing.cloverWebhookSecretEnc;
+    const nextPublicKey =
+      publicKey !== undefined ? publicKey || null : existing.cloverPublicKey;
+
+    if (!nextMerchantId || !nextPrivateEnc) {
+      return res.status(400).json({
+        error: "Merchant ID and Hosted Checkout private token are required."
+      });
+    }
+
+    // Unique merchant binding across caterers
+    const clash = await prisma.caterer.findFirst({
+      where: {
+        cloverMerchantId: nextMerchantId,
+        id: { not: caterer.id }
+      },
+      select: { id: true }
+    });
+    if (clash) {
+      return res.status(409).json({
+        error: "This Clover merchant ID is already connected to another account."
+      });
+    }
+
+    await prisma.caterer.update({
+      where: { id: caterer.id },
+      data: {
+        cloverMerchantId: nextMerchantId,
+        cloverPrivateKeyEnc: nextPrivateEnc,
+        cloverWebhookSecretEnc: nextWebhookEnc,
+        cloverPublicKey: nextPublicKey,
+        cloverConnectedAt: new Date()
+      }
+    });
+
+    const runtime = await resolveCloverConfigForCaterer(caterer.id);
+    return res.json({
+      clover: {
+        connected: true,
+        configured: runtime.configured,
+        source: runtime.source,
+        merchantId: nextMerchantId,
+        publicKey: nextPublicKey,
+        hasPrivateKey: true,
+        hasWebhookSecret: Boolean(nextWebhookEnc),
+        privateKeyHint: maskSecretHint(decryptSecret(nextPrivateEnc)),
+        webhookSecretHint: maskSecretHint(decryptSecret(nextWebhookEnc)),
+        connectedAt: new Date().toISOString(),
+        ...cloverSetupUrls()
+      }
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "CatererClover");
+  }
+});
+
+router.delete("/clover", async (req: Request, res: Response) => {
+  try {
+    const { caterer } = await getAuthorizedSession(req, "settings:write");
+    await prisma.caterer.update({
+      where: { id: caterer.id },
+      data: {
+        cloverMerchantId: null,
+        cloverPrivateKeyEnc: null,
+        cloverWebhookSecretEnc: null,
+        cloverPublicKey: null,
+        cloverConnectedAt: null
+      }
+    });
+    const runtime = await resolveCloverConfigForCaterer(caterer.id);
+    return res.json({
+      ok: true,
+      clover: {
+        connected: false,
+        configured: runtime.configured,
+        source: runtime.source,
+        merchantId: null,
+        publicKey: null,
+        hasPrivateKey: false,
+        hasWebhookSecret: false,
+        privateKeyHint: null,
+        webhookSecretHint: null,
+        connectedAt: null,
+        ...cloverSetupUrls()
+      }
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "CatererClover");
   }
 });
 

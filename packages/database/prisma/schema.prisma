@@ -130,31 +130,37 @@ enum CustomerType {
 }
 
 model Caterer {
-  id                String            @id @default(cuid())
-  userId            String?           @unique
-  name              String
-  slug              String?           @unique
-  email             String            @unique
-  phone             String?
-  timezone          String?           @default("UTC")
-  currencyCode      String            @default("USD")
-  websiteUrl        String?
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
-  guests            Guest[]
-  leads             Lead[]
-  events            Event[]
-  quotes            Quote[]
-  menuItems         MenuItem[]
-  cateringPackages  CateringPackage[]
-  tasks             Task[]
-  messages          Message[]
-  paymentReminders  PaymentReminder[]
-  payments          Payment[]
-  teamMembers       TeamMember[]
-  auditLogs         AuditLog[]
+  id                     String            @id @default(cuid())
+  userId                 String?           @unique
+  name                   String
+  slug                   String?           @unique
+  email                  String            @unique
+  phone                  String?
+  timezone               String?           @default("UTC")
+  currencyCode           String            @default("USD")
+  websiteUrl             String?
+  cloverMerchantId       String?
+  cloverPrivateKeyEnc    String?
+  cloverWebhookSecretEnc String?
+  cloverPublicKey        String?
+  cloverConnectedAt      DateTime?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  user                   User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guests                 Guest[]
+  leads                  Lead[]
+  events                 Event[]
+  quotes                 Quote[]
+  menuItems              MenuItem[]
+  cateringPackages       CateringPackage[]
+  tasks                  Task[]
+  messages               Message[]
+  paymentReminders       PaymentReminder[]
+  payments               Payment[]
+  teamMembers            TeamMember[]
+  auditLogs              AuditLog[]
 
+  @@index([cloverMerchantId])
   @@map("caterers")
 }
 

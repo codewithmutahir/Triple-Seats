@@ -10,6 +10,7 @@ import helmet from "helmet";
 
 import { auth } from "./lib/auth";
 import { ensureCatererSlugSchema } from "./lib/ensure-caterer-slug-schema";
+import { ensureCatererCloverSchema } from "./lib/ensure-caterer-clover-schema";
 import { ensureCateringPackagesSchema } from "./lib/ensure-catering-packages-schema";
 import { ensureQuotePackageSelectionsSchema } from "./lib/ensure-quote-package-selections";
 import { ensureMenuPreferencesSchema } from "./lib/ensure-menu-preferences-schema";
@@ -233,6 +234,7 @@ async function connectDbAndEnsureSchema() {
   try {
     await connectDB();
     await ensureCatererSlugSchema();
+    await ensureCatererCloverSchema();
     await ensureCateringPackagesSchema();
     await ensureEventServiceFieldsSchema();
     await ensureMenuPreferencesSchema();

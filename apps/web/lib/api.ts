@@ -414,6 +414,25 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(data)
       }).then((r) => r.caterer),
+    clover: () =>
+      apiFetch<{ clover: import("@/lib/settings-types").SettingsCloverConnection }>(
+        "/api/caterer/clover"
+      ).then((r) => r.clover),
+    updateClover: (body: {
+      merchantId: string;
+      privateKey?: string;
+      webhookSecret?: string;
+      publicKey?: string;
+    }) =>
+      apiFetch<{ clover: import("@/lib/settings-types").SettingsCloverConnection }>(
+        "/api/caterer/clover",
+        { method: "PUT", body: JSON.stringify(body) }
+      ).then((r) => r.clover),
+    disconnectClover: () =>
+      apiFetch<{
+        ok: boolean;
+        clover: import("@/lib/settings-types").SettingsCloverConnection;
+      }>("/api/caterer/clover", { method: "DELETE" }).then((r) => r.clover),
     packages: () => apiFetch<{ items: SettingsPackage[] }>("/api/packages").then((r) => r.items),
     createPackage: (body: Record<string, unknown>) =>
       apiFetch<{ package: SettingsPackage }>("/api/packages", {
