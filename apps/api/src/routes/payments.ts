@@ -3,7 +3,7 @@ import { Router, type Request, type Response } from "express";
 
 import { getLatestActiveQuote } from "../lib/event-quotes";
 import { getAuthorizedSession } from "../lib/authorized-session";
-import { createCloverHostedCheckout, getCloverConfig } from "../lib/clover";
+import { createCloverHostedCheckout, resolveCloverConfigForCaterer } from "../lib/clover";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { handleRouteError } from "../lib/route-errors";
 import { timer } from "../lib/perf";
@@ -194,7 +194,7 @@ router.get("/event/:eventId", async (req: Request, res: Response) => {
       eventId,
       eventStatus: event.status,
       paymentsEnabled: event.status === "booked" || event.status === "completed",
-      cloverConfigured: getCloverConfig().configured,
+      cloverConfigured: (await resolveCloverConfigForCaterer(caterer.id)).configured,
       ...summary
     });
   } catch (e) {
@@ -248,7 +248,7 @@ router.post("/", async (req: Request, res: Response) => {
       payment: serializePayment(payment, addedByName),
       eventStatus: event.status,
       paymentsEnabled: event.status === "booked" || event.status === "completed",
-      cloverConfigured: getCloverConfig().configured,
+      cloverConfigured: (await resolveCloverConfigForCaterer(caterer.id)).configured,
       ...summary
     });
   } catch (e) {
@@ -275,9 +275,11 @@ router.post("/links", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "eventId and a positive amount are required." });
     }
 
-    if (!getCloverConfig().configured) {
+    const clover = await resolveCloverConfigForCaterer(caterer.id);
+    if (!clover.configured) {
       return res.status(503).json({
-        error: "Clover is not configured. Set CLOVER_MERCHANT_ID and CLOVER_ECOMMERCE_PRIVATE_KEY."
+        error:
+          "Clover is not configured. Connect Clover in Settings → Payments, or set server env keys."
       });
     }
 
@@ -363,17 +365,20 @@ router.post("/links", async (req: Request, res: Response) => {
     const guestName =
       [guest?.firstName, guest?.lastName].filter(Boolean).join(" ").trim() || "Guest";
 
-    const session = await createCloverHostedCheckout({
-      amountDollars: amount,
-      lineName: event.title?.trim() || "Event payment",
-      lineNote: note || undefined,
-      customer: {
-        email: guest?.email ?? undefined,
-        firstName: guest?.firstName ?? undefined,
-        lastName: guest?.lastName ?? undefined,
-        phoneNumber: guest?.phone ?? undefined
-      }
-    });
+    const session = await createCloverHostedCheckout(
+      {
+        amountDollars: amount,
+        lineName: event.title?.trim() || "Event payment",
+        lineNote: note || undefined,
+        customer: {
+          email: guest?.email ?? undefined,
+          firstName: guest?.firstName ?? undefined,
+          lastName: guest?.lastName ?? undefined,
+          phoneNumber: guest?.phone ?? undefined
+        }
+      },
+      clover
+    );
 
     const payment = await prisma.payment.create({
       data: {
@@ -444,7 +449,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
     return res.json({
       ok: true,
       eventId: existing.eventId,
-      cloverConfigured: getCloverConfig().configured,
+      cloverConfigured: (await resolveCloverConfigForCaterer(caterer.id)).configured,
       ...summary
     });
   } catch (e) {

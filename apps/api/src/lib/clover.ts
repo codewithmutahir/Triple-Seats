@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { prisma } from "@tripeseats/database";
+
+import { decryptSecret } from "./secret-crypto";
+
 export type CloverCheckoutSession = {
   href: string;
   checkoutSessionId: string;
@@ -19,7 +23,16 @@ export type CreateCloverCheckoutInput = {
   };
 };
 
-export function getCloverConfig() {
+export type CloverRuntimeConfig = {
+  apiBaseUrl: string;
+  merchantId: string;
+  privateKey: string;
+  webhookSecret: string;
+  configured: boolean;
+  source: "caterer" | "env" | "none";
+};
+
+function envCloverConfig(): CloverRuntimeConfig {
   const apiBaseUrl = (process.env.CLOVER_API_BASE_URL ?? "https://api.clover.com").replace(
     /\/+$/,
     ""
@@ -27,14 +40,70 @@ export function getCloverConfig() {
   const merchantId = process.env.CLOVER_MERCHANT_ID?.trim() ?? "";
   const privateKey = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY?.trim() ?? "";
   const webhookSecret = process.env.CLOVER_WEBHOOK_SECRET?.trim() ?? "";
-
   return {
     apiBaseUrl,
     merchantId,
     privateKey,
     webhookSecret,
-    configured: Boolean(merchantId && privateKey)
+    configured: Boolean(merchantId && privateKey),
+    source: merchantId && privateKey ? "env" : "none"
   };
+}
+
+/** Legacy env-only config (fallback / tests). Prefer resolveCloverConfigForCaterer. */
+export function getCloverConfig(): CloverRuntimeConfig {
+  return envCloverConfig();
+}
+
+/** Resolve Clover credentials for a caterer; falls back to process env if unset. */
+export async function resolveCloverConfigForCaterer(
+  catererId: string
+): Promise<CloverRuntimeConfig> {
+  const env = envCloverConfig();
+  const row = await prisma.caterer.findUnique({
+    where: { id: catererId },
+    select: {
+      cloverMerchantId: true,
+      cloverPrivateKeyEnc: true,
+      cloverWebhookSecretEnc: true
+    }
+  });
+
+  const merchantId = row?.cloverMerchantId?.trim() || "";
+  const privateKey = decryptSecret(row?.cloverPrivateKeyEnc) || "";
+  const webhookSecret = decryptSecret(row?.cloverWebhookSecretEnc) || "";
+
+  if (merchantId && privateKey) {
+    return {
+      apiBaseUrl: env.apiBaseUrl,
+      merchantId,
+      privateKey,
+      webhookSecret: webhookSecret || env.webhookSecret,
+      configured: true,
+      source: "caterer"
+    };
+  }
+
+  return env;
+}
+
+/** Find caterer Clover webhook secret by Clover merchant id (Hosted Checkout payload). */
+export async function resolveWebhookSecretForMerchant(
+  merchantId: string | undefined
+): Promise<{ secret: string; catererId: string | null }> {
+  const env = envCloverConfig();
+  const mid = merchantId?.trim() || "";
+
+  if (mid) {
+    const row = await prisma.caterer.findFirst({
+      where: { cloverMerchantId: mid },
+      select: { id: true, cloverWebhookSecretEnc: true }
+    });
+    const secret = decryptSecret(row?.cloverWebhookSecretEnc);
+    if (secret) return { secret, catererId: row!.id };
+  }
+
+  return { secret: env.webhookSecret, catererId: null };
 }
 
 export function dollarsToCloverCents(amountDollars: number): number {
@@ -72,10 +141,11 @@ export function verifyCloverWebhookSignature(
 }
 
 export async function createCloverHostedCheckout(
-  input: CreateCloverCheckoutInput
+  input: CreateCloverCheckoutInput,
+  config?: CloverRuntimeConfig
 ): Promise<CloverCheckoutSession> {
-  const { apiBaseUrl, merchantId, privateKey, configured } = getCloverConfig();
-  if (!configured) {
+  const cfg = config ?? getCloverConfig();
+  if (!cfg.configured) {
     throw Object.assign(new Error("Clover is not configured."), { status: 503 });
   }
 
@@ -99,13 +169,13 @@ export async function createCloverHostedCheckout(
     }
   };
 
-  const res = await fetch(`${apiBaseUrl}/invoicingcheckoutservice/v1/checkouts`, {
+  const res = await fetch(`${cfg.apiBaseUrl}/invoicingcheckoutservice/v1/checkouts`, {
     method: "POST",
     headers: {
       accept: "application/json",
       "content-type": "application/json",
-      Authorization: `Bearer ${privateKey}`,
-      "X-Clover-Merchant-Id": merchantId
+      Authorization: `Bearer ${cfg.privateKey}`,
+      "X-Clover-Merchant-Id": cfg.merchantId
     },
     body: JSON.stringify(body)
   });
@@ -159,4 +229,12 @@ export function parseCloverWebhookPayload(raw: Buffer | string): CloverWebhookPa
   } catch {
     return null;
   }
+}
+
+export function publicAppOrigin(): string {
+  return (
+    process.env.WEB_ORIGIN?.trim().replace(/\/+$/, "") ||
+    process.env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "") ||
+    "http://localhost:3000"
+  );
 }

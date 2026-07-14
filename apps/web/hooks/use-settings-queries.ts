@@ -77,6 +77,57 @@ export function useSettingsMenuItemsQuery() {
   });
 }
 
+export function useSettingsCloverQuery() {
+  return useQuery({
+    queryKey: queryKeys.settings.clover(),
+    queryFn: api.settings.clover,
+    staleTime: 60_000
+  });
+}
+
+export function useUpdateCloverMutation() {
+  const qc = useQueryClient();
+  const canWrite = useSettingsWriteAccess();
+
+  return useMutation({
+    mutationFn: (body: {
+      merchantId: string;
+      privateKey?: string;
+      webhookSecret?: string;
+      publicKey?: string;
+    }) => {
+      if (!canWrite) return denyMutation();
+      return api.settings.updateClover(body);
+    },
+    onSuccess: (clover) => {
+      qc.setQueryData(queryKeys.settings.clover(), clover);
+      toast.success("Clover connected");
+    },
+    onError: (err) => {
+      handleMutationError(err, undefined, "Failed to save Clover settings");
+    }
+  });
+}
+
+export function useDisconnectCloverMutation() {
+  const qc = useQueryClient();
+  const canWrite = useSettingsWriteAccess();
+
+  return useMutation({
+    mutationFn: () => {
+      if (!canWrite) return denyMutation();
+      return api.settings.disconnectClover();
+    },
+    onSuccess: (clover) => {
+      qc.setQueryData(queryKeys.settings.clover(), clover);
+      toast.success("Clover disconnected");
+    },
+    onError: (err) => {
+      handleMutationError(err, undefined, "Failed to disconnect Clover");
+    }
+  });
+}
+
 export function useUpdateProfileMutation() {
   const qc = useQueryClient();
   const canWrite = useSettingsWriteAccess();

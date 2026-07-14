@@ -2,10 +2,11 @@ import { prisma } from "@tripeseats/database";
 import type { Request, Response } from "express";
 
 import {
-  getCloverConfig,
   parseCloverWebhookPayload,
+  resolveWebhookSecretForMerchant,
   verifyCloverWebhookSignature
 } from "../lib/clover";
+import { decryptSecret } from "../lib/secret-crypto";
 
 function header(req: Request, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -25,9 +26,31 @@ export async function handleCloverWebhook(req: Request, res: Response) {
       return res.status(200).json({ ok: true });
     }
 
-    const { webhookSecret } = getCloverConfig();
+    const payload = parseCloverWebhookPayload(rawBody);
     const signature =
-      header(req, "clover-signature") ?? header(req, "Clover-Signature") ?? header(req, "x-clover-signature");
+      header(req, "clover-signature") ??
+      header(req, "Clover-Signature") ??
+      header(req, "x-clover-signature");
+
+    const sessionId = typeof payload?.data === "string" ? payload.data.trim() : "";
+
+    // Prefer secret from payment's caterer, then merchantId map, then env.
+    let webhookSecret = "";
+    if (sessionId) {
+      const payment = await prisma.payment.findFirst({
+        where: { checkoutSessionId: sessionId },
+        select: {
+          caterer: {
+            select: { cloverWebhookSecretEnc: true, cloverMerchantId: true }
+          }
+        }
+      });
+      webhookSecret = decryptSecret(payment?.caterer.cloverWebhookSecretEnc) || "";
+    }
+    if (!webhookSecret) {
+      const resolved = await resolveWebhookSecretForMerchant(payload?.merchantId);
+      webhookSecret = resolved.secret;
+    }
 
     if (webhookSecret) {
       const valid = verifyCloverWebhookSignature(rawBody, signature, webhookSecret);
@@ -39,12 +62,10 @@ export async function handleCloverWebhook(req: Request, res: Response) {
       }
     }
 
-    const payload = parseCloverWebhookPayload(rawBody);
     if (!payload) {
       return res.status(200).json({ ok: true, ignored: true });
     }
 
-    const sessionId = typeof payload.data === "string" ? payload.data.trim() : "";
     const status = (payload.status ?? "").toUpperCase();
     const paymentId = typeof payload.id === "string" ? payload.id.trim() : "";
 
@@ -87,7 +108,12 @@ export async function handleCloverWebhook(req: Request, res: Response) {
       return res.status(200).json({ ok: true, status: "completed" });
     }
 
-    if (status === "DECLINED" || status === "FAILED" || status === "CANCELLED" || status === "CANCELED") {
+    if (
+      status === "DECLINED" ||
+      status === "FAILED" ||
+      status === "CANCELLED" ||
+      status === "CANCELED"
+    ) {
       await prisma.payment.update({
         where: { id: existing.id },
         data: {
@@ -106,8 +132,6 @@ export async function handleCloverWebhook(req: Request, res: Response) {
     if (process.env.NODE_ENV !== "production") {
       console.error("[clover-webhook] Error:", err);
     }
-    // Still 200 when possible so Clover does not disable the endpoint on transient DB blips.
-    // Verification probes must never get 5xx.
     return res.status(200).json({ ok: false });
   }
 }
