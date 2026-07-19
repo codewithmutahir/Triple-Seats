@@ -22,7 +22,7 @@ import { toast } from "sonner";
 
 import { AddItemPayload } from "@/components/quote/add-item-form";
 import { PackagesSection, packageSummaryLabel } from "@/components/quote/packages-section";
-import { MenuPreferencesCard } from "@/components/quote/menu-preferences-card";
+import { PackageSelectionModal } from "@/components/quote/package-selection-modal";
 import { QuoteSection } from "@/components/quote/quote-section";
 import {
   CATEGORY_LABELS,
@@ -34,6 +34,16 @@ import {
   type QuoteLineItem,
   type QuoteStatus
 } from "@/components/quote/types";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -55,12 +65,15 @@ import { formatEventDateWithTime } from "@/lib/event-datetime";
 import { isPackageCoveredCategory, shouldShowQuoteCategory } from "@/lib/package-sections";
 import { useQuoteBuilderMutations, useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { api } from "@/lib/api";
+import type { MenuPreferenceEntry } from "@/lib/menu-preference-types";
+import { queryKeys } from "@/lib/query-keys";
 import { buildExportPayloadFromBuilder, downloadPdfFromResponse } from "@/lib/quote-export";
 import { parseApiError } from "@/lib/user-facing-error";
 import { isForbiddenError } from "@/lib/api-error";
 import { quoteAnalytics } from "@/lib/quote-analytics";
 import { browserTimer } from "@/lib/perf";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 
 function statusBadgeVariant(status: QuoteStatus) {
   switch (status) {
@@ -77,6 +90,17 @@ function statusBadgeVariant(status: QuoteStatus) {
 
 function statusLabel(status: QuoteStatus) {
   return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function eventStatusBadgeVariant(
+  status: string
+): "lead" | "booked" | "completed" | "discussion" | "lost" | "outline" {
+  if (status === "lead") return "lead";
+  if (status === "booked") return "booked";
+  if (status === "completed") return "completed";
+  if (status === "discussion") return "discussion";
+  if (status === "lost") return "lost";
+  return "outline";
 }
 
 function formatEventDate(iso: string) {
@@ -97,6 +121,9 @@ type SettingsSaveStatus = "idle" | "saving" | "saved" | "error";
 
 type GlobalSaveStatus = "idle" | "saving" | "unsaved" | "error";
 
+/** Categories allowed as à-la-carte sections on B2B quotes. */
+const B2B_SECTION_CATEGORIES: ItemCategory[] = ["equipment", "delivery", "labor"];
+
 function unitTypeSummary(item: QuoteLineItem, guestCount: number): string {
   if (item.unitType === "tiered_per_head") {
     return `× ${guestCount} guests`;
@@ -116,6 +143,7 @@ function unitTypeSummary(item: QuoteLineItem, guestCount: number): string {
 function QuoteBuilderPage() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get("eventId");
+  const qc = useQueryClient();
 
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -155,6 +183,7 @@ function QuoteBuilderPage() {
   const menuItemsByCategory = (builderData?.menuItemsByCategory ?? {}) as Partial<
     Record<ItemCategory, MenuItem[]>
   >;
+  const menuPreferences = builderData?.menuPreferences ?? [];
   const packagesLoading = loading;
   const error = queryError?.message ?? null;
 
@@ -165,6 +194,13 @@ function QuoteBuilderPage() {
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
   const [settingsSaveStatus, setSettingsSaveStatus] = useState<SettingsSaveStatus>("idle");
   const [saveFailed, setSaveFailed] = useState(false);
+
+  const [packageModalOpen, setPackageModalOpen] = useState(false);
+  const [packageModalMode, setPackageModalMode] = useState<"add" | "edit">("add");
+  const [pendingPackageId, setPendingPackageId] = useState<string | null>(null);
+  const [pendingTierId, setPendingTierId] = useState<string | undefined>();
+  const [packageModalConfirming, setPackageModalConfirming] = useState(false);
+  const [removePackageConfirmOpen, setRemovePackageConfirmOpen] = useState(false);
 
   const [settingsState, setSettingsState] = useState<SettingsState>({
     taxRate: 0.0875,
@@ -217,7 +253,12 @@ function QuoteBuilderPage() {
       ? addPackageMutation.variables.packageId
       : null;
 
-  const customerType = quote?.event?.customerType ?? "b2c";
+  const customerType = (
+    quote?.event?.customerType ??
+    builderData?.event?.customerType ??
+    "b2c"
+  ).toLowerCase() as "b2b" | "b2c";
+  const isB2B = customerType === "b2b";
 
   const settingsDirty = useMemo(() => {
     if (!quote) return false;
@@ -231,7 +272,17 @@ function QuoteBuilderPage() {
     );
   }, [quote, settingsState, settingsDueDate]);
 
-  const displayLineItems = lineItems;
+  /** B2B: packages + equipment/delivery/labor only — hide orphaned food line items from UI + totals. */
+  const displayLineItems = useMemo(() => {
+    if (!isB2B) return lineItems;
+    return lineItems.filter(
+      (item) =>
+        item.unitType === "tiered_per_head" ||
+        item.category === "equipment" ||
+        item.category === "delivery" ||
+        item.category === "labor"
+    );
+  }, [lineItems, isB2B]);
 
   const totals = useMemo(
     () =>
@@ -486,36 +537,158 @@ function QuoteBuilderPage() {
       if (!quote) return;
       const pkg = packages.find((p) => p.id === packageId);
       if (!pkg) return;
-      const selectedTier = tierId ? pkg.tiers.find((tier) => tier.id === tierId) ?? null : null;
-      setSelectedPkgId(packageId);
-      selectPackageOptimistic(pkg, packages, selectedTier);
+      setPendingPackageId(packageId);
+      setPendingTierId(tierId);
+      setPackageModalMode("add");
+      setPackageModalOpen(true);
+    },
+    [quote, packages]
+  );
+
+  const openEditPackageSelections = useCallback(() => {
+    if (!selectedPkgId) return;
+    setPendingPackageId(selectedPkgId);
+    setPendingTierId(undefined);
+    setPackageModalMode("edit");
+    setPackageModalOpen(true);
+  }, [selectedPkgId]);
+
+  const modalPackage = useMemo(() => {
+    const id = pendingPackageId ?? selectedPkgId;
+    return id ? (packages.find((p) => p.id === id) ?? null) : null;
+  }, [pendingPackageId, selectedPkgId, packages]);
+
+  const menuPreviewItems = useMemo(
+    () =>
+      menuPreferences
+        .map((p) => p.selectedItem?.trim())
+        .filter((name): name is string => Boolean(name)),
+    [menuPreferences]
+  );
+
+  const handlePackageModalConfirm = useCallback(
+    async (preferences: MenuPreferenceEntry[]) => {
+      if (!quote || !eventId || !modalPackage) return;
+
+      const applyPrefsToCache = (prefs: MenuPreferenceEntry[]) => {
+        qc.setQueryData(queryKeys.quotes.builder(eventId), (old: typeof builderData) => {
+          if (!old) return old;
+          return {
+            ...old,
+            menuPreferences: prefs.map((p) => ({
+              ...p,
+              eventId,
+              packageId: modalPackage.id
+            }))
+          };
+        });
+        qc.setQueryData(queryKeys.events.menuPreferences(eventId), (old: unknown) => {
+          if (!old || typeof old !== "object") return old;
+          return {
+            ...(old as Record<string, unknown>),
+            preferences: prefs,
+            configuredCount: prefs.length
+          };
+        });
+      };
+
+      async function savePrefsWithRetry(attempts = 3): Promise<void> {
+        let lastError: unknown;
+        for (let i = 0; i < attempts; i++) {
+          try {
+            await api.events.updateMenuPreferences(eventId!, { preferences });
+            return;
+          } catch (err) {
+            lastError = err;
+            const msg = err instanceof Error ? err.message : String(err);
+            // Package op may still be committing — wait and retry
+            if (/no package/i.test(msg) && i < attempts - 1) {
+              await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+              continue;
+            }
+            throw err;
+          }
+        }
+        throw lastError;
+      }
+
+      // Edit: optimistic UI, background save with retry
+      if (packageModalMode === "edit") {
+        const previousPrefs = menuPreferences;
+        applyPrefsToCache(preferences);
+        setPackageModalOpen(false);
+        toast.success(`${modalPackage.name} menu selections saved`);
+
+        void savePrefsWithRetry().catch((err) => {
+          applyPrefsToCache(
+            previousPrefs.map((p) => ({
+              slotLabel: p.slotLabel,
+              selectedItem: p.selectedItem
+            }))
+          );
+          const msg = err instanceof Error ? err.message : "Failed to save menu selections";
+          // Ignore transient "no package" if user already removed it
+          if (/no package/i.test(msg)) return;
+          toast.error(msg);
+        });
+        return;
+      }
+
+      // Add package: optimistic package + prefs in cache, then commit package BEFORE prefs
+      setPackageModalConfirming(true);
+      const selectedTier = pendingTierId
+        ? (modalPackage.tiers.find((tier) => tier.id === pendingTierId) ?? null)
+        : null;
+
+      setSelectedPkgId(modalPackage.id);
+      selectPackageOptimistic(modalPackage, packages, selectedTier);
+      applyPrefsToCache(preferences);
+      setPackageModalOpen(false);
+      toast.success(`${modalPackage.name} added with menu selections`);
+
       quoteAnalytics.packageSelected({
         eventId,
         quoteId: quote.id,
-        packageId: pkg.id,
-        packageName: pkg.name,
+        packageId: modalPackage.id,
+        packageName: modalPackage.name,
         guestCount: liveGuestCount,
         tierPrice: selectedTier?.pricePerHead
       });
-      addPackageMutation.mutate(
-        { quoteId: quote.id, packageId, tierId },
-        {
-          onError: (err) => {
-            setSelectedPkgId(latestPackageIdRef.current);
-            const msg = err instanceof Error ? err.message : "Failed to add package.";
-            toast.error(msg);
-          }
+
+      try {
+        await addPackageMutation.mutateAsync({
+          quoteId: quote.id,
+          packageId: modalPackage.id,
+          tierId: pendingTierId
+        });
+        // A newer selection/removal may have superseded this add while we waited.
+        if (latestPackageIdRef.current !== modalPackage.id) {
+          return;
         }
-      );
+        await savePrefsWithRetry();
+        applyPrefsToCache(preferences);
+      } catch (err) {
+        setSelectedPkgId(latestPackageIdRef.current);
+        const msg = err instanceof Error ? err.message : "Failed — please try again";
+        toast.error(msg);
+      } finally {
+        setPackageModalConfirming(false);
+      }
     },
     [
       quote,
+      eventId,
+      modalPackage,
+      packageModalMode,
+      pendingTierId,
       packages,
-      addPackageMutation,
       selectPackageOptimistic,
-      latestPackageIdRef,
+      addPackageMutation,
       liveGuestCount,
-      eventId
+      qc,
+      builderData,
+      latestPackageIdRef,
+      menuPreferences
     ]
   );
 
@@ -540,16 +713,27 @@ function QuoteBuilderPage() {
     removePackageMutation.mutate(quote.id, {
       onError: () => {
         setSelectedPkgId(latestPackageIdRef.current);
+      },
+      onSuccess: () => {
+        if (eventId) {
+          qc.setQueryData(queryKeys.quotes.builder(eventId), (old: typeof builderData) => {
+            if (!old) return old;
+            return { ...old, menuPreferences: [] };
+          });
+        }
       }
     });
+    setRemovePackageConfirmOpen(false);
   }, [
     quote,
     eventId,
     selectedPkgId,
     selectedPackage,
-    removePackageMutation,
     removePackageOptimistic,
-    latestPackageIdRef
+    removePackageMutation,
+    latestPackageIdRef,
+    qc,
+    builderData
   ]);
 
   const updateGuestCount = useCallback(
@@ -696,20 +880,41 @@ function QuoteBuilderPage() {
       map.set(s.category, []);
     }
     map.set("delivery", []);
-    for (const item of lineItems) {
+    for (const item of displayLineItems) {
       if (item.unitType === "tiered_per_head") continue;
       const list = map.get(item.category) ?? [];
       list.push(item);
       map.set(item.category, list);
     }
     return map;
-  }, [lineItems]);
+  }, [displayLineItems]);
 
   const activeSummaryCategories = useMemo(() => {
-    return MENU_SECTIONS.map((s) => s.category).filter((cat) =>
-      lineItems.some((i) => i.category === cat)
+    return MENU_SECTIONS.map((s) => s.category).filter(
+      (cat) =>
+        shouldShowQuoteCategory(cat, packageIncludedItems, customerType) &&
+        displayLineItems.some((i) => i.category === cat && i.unitType !== "tiered_per_head")
     );
-  }, [lineItems]);
+  }, [displayLineItems, packageIncludedItems, customerType]);
+
+  const visibleSectionGroups = useMemo(() => {
+    // B2B: single Logistics/Staffing list — never food group headers
+    if (isB2B) {
+      return [
+        {
+          groupLabel: "Logistics & Staffing",
+          categories: B2B_SECTION_CATEGORIES
+        }
+      ];
+    }
+
+    return MENU_SECTION_GROUPS.map((group) => ({
+      ...group,
+      categories: group.categories.filter((category) =>
+        shouldShowQuoteCategory(category, packageIncludedItems, customerType)
+      )
+    })).filter((group) => group.categories.length > 0);
+  }, [isB2B, packageIncludedItems, customerType]);
 
   const summaryPanel = quote ? (
     <>
@@ -940,9 +1145,21 @@ function QuoteBuilderPage() {
             · {location}
           </p>
         </div>
-        <Badge variant={statusBadgeVariant(quote.status)} className="w-fit capitalize">
-          {statusLabel(quote.status)}
-        </Badge>
+        <div className="flex w-fit flex-col items-end gap-1.5 sm:items-end">
+          {(quote.event?.status ?? builderData?.event?.status) ? (
+            <Badge
+              variant={eventStatusBadgeVariant(
+                (quote.event?.status ?? builderData?.event?.status) as string
+              )}
+              className="w-fit capitalize"
+            >
+              {(quote.event?.status ?? builderData?.event?.status) as string}
+            </Badge>
+          ) : null}
+          <Badge variant={statusBadgeVariant(quote.status)} className="w-fit capitalize">
+            Quote: {statusLabel(quote.status)}
+          </Badge>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-5">
@@ -956,28 +1173,70 @@ function QuoteBuilderPage() {
             savingPackageId={savingPackageId}
             loading={packagesLoading}
             guestCountUpdating={isGuestCountMutating}
+            menuPreviewItems={menuPreviewItems}
             onGuestCountPreview={handleGuestCountPreview}
             onGuestCountCommit={updateGuestCount}
             onAdd={addPackageToQuote}
             onPackageTierSelect={selectPackageTier}
-            onRemove={removePackageFromQuote}
+            onEditSelections={openEditPackageSelections}
+            onRemove={() => setRemovePackageConfirmOpen(true)}
             readOnly={!canWriteQuotes}
           />
 
-          {eventId && selectedPkgId ? (
-            <MenuPreferencesCard eventId={eventId} readOnly={!canWriteQuotes} />
+          {isB2B ? (
+            <div className="rounded-lg border border-dashed border-[#1B2A4A]/30 bg-[#1B2A4A]/[0.03] px-4 py-3 text-sm text-muted-foreground">
+              {selectedPkgId || packageLineItem ? (
+                <p>
+                  <span className="font-medium text-foreground">B2B quote:</span> food is covered by
+                  the package. Use <span className="font-medium text-foreground">Edit Selections</span>{" "}
+                  to change dishes, then add Equipment, Delivery, or Labor below if needed.
+                </p>
+              ) : (
+                <p>
+                  <span className="font-medium text-foreground">B2B quote:</span> choose a package
+                  above. Menu dishes are selected in the package modal — food sections are hidden on
+                  purpose.
+                </p>
+              )}
+            </div>
           ) : null}
 
-          {MENU_SECTION_GROUPS.map((group) => (
+          <PackageSelectionModal
+            open={packageModalOpen}
+            onOpenChange={setPackageModalOpen}
+            mode={packageModalMode}
+            pkg={modalPackage}
+            menuItemsByCategory={menuItemsByCategory}
+            existingPreferences={menuPreferences}
+            confirming={packageModalConfirming}
+            onConfirm={(prefs) => void handlePackageModalConfirm(prefs)}
+          />
+
+          <AlertDialog open={removePackageConfirmOpen} onOpenChange={setRemovePackageConfirmOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove package?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes the package from the quote. Menu selections stay until you add another
+                  package.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={removePackageFromQuote}>Remove Package</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {visibleSectionGroups.map((group) => (
             <div key={group.groupLabel}>
               <h3 className="border-b px-2 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {group.groupLabel}
               </h3>
               <div className="space-y-4 pt-4">
                 {group.categories.map((category) => {
-                  if (
-                    !shouldShowQuoteCategory(category, packageIncludedItems, customerType)
-                  ) {
+                  // Belt-and-suspenders: never render food sections on B2B
+                  if (isB2B && !B2B_SECTION_CATEGORIES.includes(category)) {
                     return null;
                   }
 
@@ -1313,6 +1572,15 @@ function QuoteBuilderPage() {
                   if (!canProceed) return;
 
                   await api.quotes.send(quote.id, buildExportPayload());
+                  if (eventId) {
+                    qc.setQueryData(queryKeys.quotes.builder(eventId), (old: typeof builderData) => {
+                      if (!old?.quote) return old;
+                      return {
+                        ...old,
+                        quote: { ...old.quote, status: "sent" as const }
+                      };
+                    });
+                  }
                   const guestEmail = quote.event?.primaryGuest?.email ?? "guest";
                   toast.success(`Quote sent to ${guestEmail}!`);
                   quoteAnalytics.sent({

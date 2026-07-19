@@ -149,7 +149,7 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
     const { caterer } = await getAuthorizedSession(req, "quotes:read");
     perf.step("session");
 
-    const [event, quoteRow, packagesRaw, menuItemsRaw] = await Promise.all([
+    const [event, quoteRow, packagesRaw, menuItemsRaw, menuPreferencesRaw] = await Promise.all([
       prisma.event.findFirst({
         where: { id: eventId, catererId: caterer.id },
         select: {
@@ -157,6 +157,7 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
           title: true,
           eventType: true,
           customerType: true,
+          status: true,
           eventDate: true,
           startTime: true,
           endTime: true,
@@ -222,6 +223,17 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
           defaultUnit: true,
           usageCount: true,
           isDefault: true
+        }
+      }),
+      prisma.menuPreference.findMany({
+        where: { eventId },
+        orderBy: { slotLabel: "asc" },
+        select: {
+          id: true,
+          eventId: true,
+          packageId: true,
+          slotLabel: true,
+          selectedItem: true
         }
       })
     ]);
@@ -347,11 +359,19 @@ router.get("/builder/:eventId", async (req: Request, res: Response) => {
       } as QuoteWithRelations),
       packages: packages.map((p) => serializeBuilderPackage(p, customerType)),
       menuItemsByCategory,
+      menuPreferences: menuPreferencesRaw.map((p) => ({
+        id: p.id,
+        eventId: p.eventId,
+        packageId: p.packageId,
+        slotLabel: p.slotLabel,
+        selectedItem: p.selectedItem
+      })),
       event: {
         id: event.id,
         title: event.title,
         eventType: event.eventType,
         customerType: event.customerType,
+        status: event.status,
         eventDate: event.eventDate.toISOString(),
         startTime: event.startTime?.toISOString() ?? null,
         endTime: event.endTime?.toISOString() ?? null,
@@ -1205,7 +1225,8 @@ async function processSendJob(quoteId: string, caterer: SessionCaterer) {
       throw new Error("Generated PDF was empty.");
     }
 
-    const html = buildQuoteEmailHtml(quoteData, caterer);
+    const menuPreferences = await loadMenuPreferencesForEvent(quoteData.eventId);
+    const html = buildQuoteEmailHtml(quoteData, caterer, menuPreferences);
 
     const { error: sendError } = await resend.emails.send({
       from: resendFromEmail(),

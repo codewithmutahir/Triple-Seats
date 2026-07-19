@@ -179,6 +179,23 @@ function extractKitchenNotes(raw: string | null | undefined): string {
   return withoutActivity.trim();
 }
 
+/** Skip orphaned $0 food lines; keep equipment/delivery/labor. */
+function filterKitchenAdditionalItems(
+  lineItems: QuoteWithRelations["lineItems"]
+): QuoteWithRelations["lineItems"] {
+  return lineItems.filter((item) => {
+    const price = Number(item.unitPrice);
+    if (price === 0) {
+      return (
+        item.category === "equipment" ||
+        item.category === "delivery" ||
+        item.category === "labor"
+      );
+    }
+    return true;
+  });
+}
+
 function formatServiceLabel(quote: QuoteWithRelations): string {
   const event = quote.event;
   if (!event) return "—";
@@ -196,7 +213,33 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
   const packageItems = packageItem?.package?.items ?? [];
   const kitchenMatrix = packageItem?.package?.kitchenQtys ?? [];
   const sortedPrefs = sortMenuPreferences(menuPreferences, packageItems);
-  const extraItems = quote.lineItems.filter((item) => item.unitType !== "tiered_per_head");
+  const prefGroups = (() => {
+    const groups: { label: string; items: { name: string; portion: string }[] }[] = [];
+    const indexByLabel = new Map<string, number>();
+    for (const pref of sortedPrefs) {
+      if (!pref.selectedItem?.trim()) continue;
+      const label = baseSlotLabel(pref.slotLabel);
+      const trays = lookupKitchenQty(kitchenMatrix, label, guestCount);
+      const portion =
+        trays != null
+          ? formatKitchenTrayLabel(trays)
+          : kitchenPortionLabel(guestCount, "per_head", 1);
+      const existingIdx = indexByLabel.get(label);
+      if (existingIdx != null) {
+        groups[existingIdx]!.items.push({ name: pref.selectedItem.trim(), portion });
+      } else {
+        indexByLabel.set(label, groups.length);
+        groups.push({
+          label,
+          items: [{ name: pref.selectedItem.trim(), portion }]
+        });
+      }
+    }
+    return groups;
+  })();
+  const extraItems = filterKitchenAdditionalItems(
+    quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
+  );
   const itemsByCategory = groupLineItemsByCategory(extraItems);
   const deliveryItems = extraItems.filter((item) => item.category === "delivery");
   const laborItems = extraItems.filter((item) => item.category === "labor");
@@ -225,21 +268,28 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
   );
 
   const preferenceRows =
-    sortedPrefs.length > 0
-      ? sortedPrefs.map((pref) => {
-          const category = baseSlotLabel(pref.slotLabel);
-          const trays = lookupKitchenQty(kitchenMatrix, category, guestCount);
-          const portion =
-            trays != null
-              ? formatKitchenTrayLabel(trays)
-              : kitchenPortionLabel(guestCount, "per_head", 1);
-          return React.createElement(
+    prefGroups.length > 0
+      ? prefGroups.flatMap((group) => [
+          React.createElement(
             View,
-            { key: pref.id, style: styles.prefRow },
-            React.createElement(Text, null, `${category}: ${pref.selectedItem}`),
-            React.createElement(Text, null, portion)
-          );
-        })
+            { key: `pref-cat-${group.label}`, style: styles.categoryHeader },
+            React.createElement(
+              Text,
+              null,
+              group.items.length > 1
+                ? `${group.label.toUpperCase()} (×${group.items.length})`
+                : group.label.toUpperCase()
+            )
+          ),
+          ...group.items.map((item, idx) =>
+            React.createElement(
+              View,
+              { key: `pref-${group.label}-${idx}`, style: styles.prefRow },
+              React.createElement(Text, null, `• ${item.name}`),
+              React.createElement(Text, null, item.portion)
+            )
+          )
+        ])
       : [
           React.createElement(
             Text,
@@ -247,6 +297,11 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
             "No menu preferences saved yet."
           )
         ];
+
+  const packageMenuTitle =
+    packageItem?.name != null
+      ? `${packageItem.name.toUpperCase()} — SELECTED MENU`
+      : "Menu Preferences";
 
   const additionalRows = categoriesWithItems(nonDeliveryItems).flatMap((cat) => {
     const items = nonDeliveryItems.get(cat) ?? [];
@@ -371,7 +426,7 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
         ? React.createElement(Text, { style: styles.sectionTitle }, "Packages Selected")
         : null,
       ...packageBlocks,
-      React.createElement(Text, { style: styles.sectionTitle }, "Menu Preferences"),
+      React.createElement(Text, { style: styles.sectionTitle }, packageMenuTitle),
       ...preferenceRows,
       additionalRows.length > 0
         ? React.createElement(Text, { style: styles.sectionTitle }, "Additional Items")

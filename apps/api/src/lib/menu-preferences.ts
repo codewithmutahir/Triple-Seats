@@ -28,6 +28,7 @@ const PACKAGE_LABEL_TO_CATEGORY: Record<string, MenuItemCategory> = {
   BBQ: "bbq",
   Dessert: "dessert",
   Naan: "breads",
+  Bread: "breads",
   Salad: "side_items",
   Raita: "side_items",
   "Mirchi Ka Salan": "side_items",
@@ -59,21 +60,10 @@ function categoryForPackageLabel(label: string): MenuItemCategory | null {
   return PACKAGE_LABEL_TO_CATEGORY[label] ?? null;
 }
 
-async function defaultMenuItemName(
-  catererId: string,
-  category: MenuItemCategory
-): Promise<string | null> {
-  const item = await prisma.menuItem.findFirst({
-    where: { catererId, category },
-    orderBy: [{ usageCount: "desc" }, { name: "asc" }],
-    select: { name: true }
-  });
-  return item?.name ?? null;
-}
-
 /**
  * After package select/change: remove prefs for removed slots, seed new slots with defaults.
- * ON CONFLICT (eventId, slotLabel) DO NOTHING — preserves caterer choices on overlapping slots.
+ * skipDuplicates preserves caterer choices on overlapping slots.
+ * Batched to avoid N+1 round-trips to remote Postgres.
  */
 export async function syncMenuPreferencesForPackage(
   eventId: string,
@@ -91,27 +81,47 @@ export async function syncMenuPreferencesForPackage(
     }
   });
 
-  for (const slotLabel of newSlots) {
-    const baseLabel = baseSlotLabel(slotLabel);
-    const category = categoryForPackageLabel(baseLabel);
-    if (!category) continue;
+  if (newSlots.length === 0) return;
 
-    const selectedItem = await defaultMenuItemName(catererId, category);
-    if (!selectedItem) continue;
+  const categoriesNeeded = [
+    ...new Set(
+      newSlots
+        .map((slot) => categoryForPackageLabel(baseSlotLabel(slot)))
+        .filter((c): c is MenuItemCategory => Boolean(c))
+    )
+  ];
 
-    await prisma.menuPreference.upsert({
-      where: {
-        eventId_slotLabel: { eventId, slotLabel }
-      },
-      create: {
-        eventId,
-        packageId,
-        slotLabel,
-        selectedItem
-      },
-      update: {}
-    });
+  if (categoriesNeeded.length === 0) return;
+
+  const catalog = await prisma.menuItem.findMany({
+    where: { catererId, category: { in: categoriesNeeded } },
+    orderBy: [{ usageCount: "desc" }, { name: "asc" }],
+    select: { category: true, name: true }
+  });
+
+  const defaultByCategory = new Map<string, string>();
+  for (const item of catalog) {
+    if (!defaultByCategory.has(item.category)) {
+      defaultByCategory.set(item.category, item.name);
+    }
   }
+
+  const rows: { eventId: string; packageId: string; slotLabel: string; selectedItem: string }[] =
+    [];
+  for (const slotLabel of newSlots) {
+    const category = categoryForPackageLabel(baseSlotLabel(slotLabel));
+    if (!category) continue;
+    const selectedItem = defaultByCategory.get(category);
+    if (!selectedItem) continue;
+    rows.push({ eventId, packageId, slotLabel, selectedItem });
+  }
+
+  if (rows.length === 0) return;
+
+  await prisma.menuPreference.createMany({
+    data: rows,
+    skipDuplicates: true
+  });
 }
 
 export type MenuPreferenceRow = {
@@ -158,30 +168,43 @@ export function parseMenuPreferencesPatch(body: unknown):
   return result;
 }
 
+/**
+ * Replace preferences in 2 DB round-trips instead of N sequential upserts
+ * (~7s → ~0.5s on remote Supabase).
+ */
 export async function saveMenuPreferences(
   eventId: string,
   packageId: string,
   preferences: { slotLabel: string; selectedItem: string }[]
 ): Promise<MenuPreferenceRow[]> {
-  await prisma.$transaction(
-    preferences.map((pref) =>
-      prisma.menuPreference.upsert({
-        where: {
-          eventId_slotLabel: { eventId, slotLabel: pref.slotLabel }
-        },
-        create: {
-          eventId,
-          packageId,
-          slotLabel: pref.slotLabel,
-          selectedItem: pref.selectedItem
-        },
-        update: {
-          packageId,
-          selectedItem: pref.selectedItem
-        }
-      })
-    )
-  );
+  if (preferences.length === 0) {
+    return loadMenuPreferencesForEvent(eventId);
+  }
 
-  return loadMenuPreferencesForEvent(eventId);
+  const slotLabels = preferences.map((p) => p.slotLabel);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.menuPreference.deleteMany({
+      where: { eventId, slotLabel: { in: slotLabels } }
+    });
+    await tx.menuPreference.createMany({
+      data: preferences.map((pref) => ({
+        eventId,
+        packageId,
+        slotLabel: pref.slotLabel,
+        selectedItem: pref.selectedItem
+      }))
+    });
+  });
+
+  // Avoid a third SELECT — caller only needs slotLabel + selectedItem
+  return preferences.map((pref) => ({
+    id: "",
+    eventId,
+    packageId,
+    slotLabel: pref.slotLabel,
+    selectedItem: pref.selectedItem,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  }));
 }

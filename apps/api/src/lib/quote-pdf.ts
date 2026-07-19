@@ -19,8 +19,10 @@ import {
   categoriesWithItems,
   formatPdfDate,
   formatPdfEventTime,
+  formatPackageSelectedMenuSummary,
   getCategoryDisplayName,
   groupLineItemsByCategory,
+  groupMenuPreferencesForDisplay,
   guestDisplayName,
   eventLocationDisplay,
   packageIncludeSummary,
@@ -35,9 +37,11 @@ import {
   lineItemTotal
 } from "./quote-totals";
 import type { QuoteWithRelations } from "./quote-serialize";
+import { loadMenuPreferencesForEvent, type MenuPreferenceRow } from "./menu-preferences";
 
 type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 type PdfLineItem = QuoteWithRelations["lineItems"][number];
+type PdfMenuPreference = Pick<MenuPreferenceRow, "slotLabel" | "selectedItem">;
 
 const UNIT_LABELS: Record<string, string> = {
   per_head: "Per Head",
@@ -217,6 +221,38 @@ function deduplicateLineItems(lineItems: PdfLineItem[]): PdfLineItem[] {
   return Array.from(seen.values());
 }
 
+/**
+ * Drop orphaned $0 food lines left after package removal.
+ * Equipment / delivery / labor may legitimately be $0.
+ * B2B quotes only allow package + equipment/delivery/labor as additional lines.
+ */
+function filterValidPdfAdditionalItems(
+  lineItems: PdfLineItem[],
+  customerType: "b2b" | "b2c" = "b2c"
+): PdfLineItem[] {
+  const alwaysShow = new Set(["equipment", "delivery", "labor"]);
+  return lineItems.filter((item) => {
+    if (item.unitType === "tiered_per_head") return true;
+    if (customerType === "b2b" && !alwaysShow.has(item.category)) return false;
+    const price = Number(item.unitPrice);
+    if (price === 0) {
+      return alwaysShow.has(item.category);
+    }
+    return true;
+  });
+}
+
+function packageMenuLines(
+  prefs: PdfMenuPreference[],
+  packageItems: { label: string; quantity: number }[] | null | undefined
+): string[] {
+  const groups = groupMenuPreferencesForDisplay(prefs, packageItems);
+  if (groups.length === 0) return [];
+  return groups.map(({ label, items }) =>
+    items.length > 1 ? `• ${label}: ${items.join(", ")}` : `• ${label}: ${items[0]}`
+  );
+}
+
 function qtyDisplay(item: PdfLineItem, guestCount: number): string {
   const unitType =
     item.category === "equipment" && item.unitType === "per_head" ? "per_piece" : item.unitType;
@@ -335,13 +371,18 @@ function buildTermsSection(): React.ReactElement {
 }
 
 /** Customer-facing quote PDF — used by both download and email attachment. */
-export function buildCustomerQuotePdfDocument(quote: QuoteWithRelations): React.ReactElement {
+export function buildCustomerQuotePdfDocument(
+  quote: QuoteWithRelations,
+  menuPreferences: PdfMenuPreference[] = []
+): React.ReactElement {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
   const serviceType = resolveServiceType(quote);
   const isTrayFormat = serviceType === "order_by_tray";
   const packageLines = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
-  const uniqueLineItems = deduplicateLineItems(
-    quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
+  const customerType = quote.event?.customerType ?? "b2c";
+  const uniqueLineItems = filterValidPdfAdditionalItems(
+    deduplicateLineItems(quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")),
+    customerType
   );
   const lineItemsForPdf = [...packageLines, ...uniqueLineItems];
   const totals = calculateQuoteTotals(
@@ -353,7 +394,6 @@ export function buildCustomerQuotePdfDocument(quote: QuoteWithRelations): React.
   const g = quote.event?.primaryGuest;
   const itemsByCategory = groupLineItemsByCategory(uniqueLineItems);
   const packages = resolvePackageLineItems(quote);
-  const customerType = quote.event?.customerType ?? "b2c";
   const lineItemRows = isTrayFormat
     ? buildTrayLineItemRows(itemsByCategory, guestCount)
     : buildFullServiceLineItemRows(itemsByCategory, guestCount);
@@ -368,6 +408,8 @@ export function buildCustomerQuotePdfDocument(quote: QuoteWithRelations): React.
           getActiveTier(tiers, guestCount, customerType)
         : getActiveTier(tiers, guestCount, customerType);
     const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
+    const menuLines = packageMenuLines(menuPreferences, item.package?.items ?? []);
+    const includesFallback = packageIncludeSummary(item.package?.items ?? []);
 
     return [
       React.createElement(
@@ -379,11 +421,28 @@ export function buildCustomerQuotePdfDocument(quote: QuoteWithRelations): React.
           { style: styles.packageMeta },
           `${packageTierLabel(item)} · ${formatUsd(pricePerHead)}/person × ${guestCount} guests`
         ),
-        React.createElement(
-          Text,
-          { style: styles.packageMeta },
-          `Includes: ${packageIncludeSummary(item.package?.items ?? [])}`
-        ),
+        menuLines.length > 0
+          ? React.createElement(
+              View,
+              { key: `pkg-menu-${item.id}`, style: { marginTop: 4, marginBottom: 4 } },
+              React.createElement(
+                Text,
+                { style: { ...styles.packageMeta, fontFamily: "Helvetica-Bold", marginBottom: 2 } },
+                "Selected Menu:"
+              ),
+              ...menuLines.map((line, idx) =>
+                React.createElement(
+                  Text,
+                  { key: `menu-line-${item.id}-${idx}`, style: styles.packageMeta },
+                  line
+                )
+              )
+            )
+          : React.createElement(
+              Text,
+              { style: styles.packageMeta },
+              `Includes: ${includesFallback}`
+            ),
         React.createElement(
           Text,
           { style: { fontSize: 9, fontFamily: "Helvetica-Bold", textAlign: "right" } },
@@ -552,7 +611,10 @@ export function buildCustomerQuotePdfDocument(quote: QuoteWithRelations): React.
 
 export async function generateCustomerQuotePdfBuffer(quote: QuoteWithRelations): Promise<Buffer> {
   try {
-    const buffer = await renderToBuffer(buildCustomerQuotePdfDocument(quote));
+    const menuPreferences = quote.eventId
+      ? await loadMenuPreferencesForEvent(quote.eventId)
+      : [];
+    const buffer = await renderToBuffer(buildCustomerQuotePdfDocument(quote, menuPreferences));
     return Buffer.from(buffer);
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
@@ -574,13 +636,19 @@ export async function generateQuotePdfBuffer(quote: QuoteWithRelations): Promise
   return generateCustomerQuotePdfBuffer(quote);
 }
 
-export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer): string {
+export function buildQuoteEmailHtml(
+  quote: QuoteWithRelations,
+  caterer: Caterer,
+  menuPreferences: PdfMenuPreference[] = []
+): string {
   const guestCount = quote.event?.guestCountEstimate ?? 0;
   const serviceType = resolveServiceType(quote);
   const isTrayFormat = serviceType === "order_by_tray";
   const packageLines = quote.lineItems.filter((item) => item.unitType === "tiered_per_head");
-  const uniqueLineItems = deduplicateLineItems(
-    quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
+  const customerType = quote.event?.customerType ?? "b2c";
+  const uniqueLineItems = filterValidPdfAdditionalItems(
+    deduplicateLineItems(quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")),
+    customerType
   );
   const totals = calculateQuoteTotals(
     [...packageLines, ...uniqueLineItems],
@@ -595,7 +663,6 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
   const location = eventLocationDisplay(quote);
   const itemsByCategory = groupLineItemsByCategory(uniqueLineItems);
   const packages = resolvePackageLineItems(quote);
-  const customerType = quote.event?.customerType ?? "b2c";
 
   const packageHtml =
     packages.length > 0
@@ -608,13 +675,18 @@ export function buildQuoteEmailHtml(quote: QuoteWithRelations, caterer: Caterer)
                 ? tiers.find((t) => t.pricePerHead === item.appliedTier) ??
                   getActiveTier(tiers, guestCount, customerType)
                 : getActiveTier(tiers, guestCount, customerType);
-            const includes = packageIncludeSummary(item.package?.items ?? []);
+            const selectedSummary = formatPackageSelectedMenuSummary(
+              menuPreferences,
+              item.package?.items ?? []
+            );
+            const includes =
+              selectedSummary ?? packageIncludeSummary(item.package?.items ?? []);
             const pricePerHead = activeTier?.pricePerHead ?? item.unitPrice;
             return `<tr>
               <td colspan="2" style="padding:8px;border-bottom:1px solid #eee;">
                 <strong>${escapeHtml(item.name)}</strong><br/>
                 ${escapeHtml(packageTierLabel(item))} · ${escapeHtml(formatUsd(pricePerHead))}/person × ${guestCount} guests<br/>
-                Includes: ${escapeHtml(includes)}<br/>
+                ${selectedSummary ? "Selected Menu: " : "Includes: "}${escapeHtml(includes)}<br/>
                 <div style="text-align:right;font-weight:bold;margin-top:4px;">${escapeHtml(formatUsd(lineItemTotal(item, guestCount)))}</div>
               </td>
             </tr>`;

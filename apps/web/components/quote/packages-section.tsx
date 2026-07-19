@@ -11,9 +11,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  formatTierLabel,
   formatTierRange,
   formatUsd,
   findTierByPricePerHead,
+  getActiveTier,
   lineItemTotal,
   tiersEqual,
   tiersForCustomerType
@@ -29,10 +31,12 @@ type PackagesSectionProps = {
   savingPackageId?: string | null;
   loading?: boolean;
   guestCountUpdating?: boolean;
+  menuPreviewItems?: string[];
   onGuestCountPreview?: (guestCount: number) => void;
   onGuestCountCommit: (guestCount: number) => void;
   onAdd: (packageId: string, tierId?: string) => void;
   onPackageTierSelect?: (packageId: string, tier: PackagePriceTier) => void;
+  onEditSelections?: () => void;
   onRemove: () => void;
   readOnly?: boolean;
 };
@@ -207,10 +211,12 @@ export function PackagesSection({
   savingPackageId = null,
   loading,
   guestCountUpdating = false,
+  menuPreviewItems = [],
   onGuestCountPreview,
   onGuestCountCommit,
   onAdd,
   onPackageTierSelect,
+  onEditSelections,
   onRemove,
   readOnly = false
 }: PackagesSectionProps) {
@@ -228,16 +234,39 @@ export function PackagesSection({
     ? (packages.find((p) => p.id === selectedPackageId) ?? null)
     : null;
 
+  // Prefer tier that matches current guest count — not price lookup, which
+  // maps $0 onto the first $0 band even when guests are outside that range.
   const selectedPackageTier =
     selectedPackage && packageLineItem?.packageId === selectedPackage.id
-      ? (findTierByPricePerHead(
+      ? (getActiveTier(
           selectedPackage.tiers,
-          packageLineItem.appliedTier ?? packageLineItem.unitPrice,
+          previewGuestCount || guestCount,
           customerType
         ) as PackagePriceTier | null)
       : null;
 
-  const previewPackageLineItem = packageLineItem ?? null;
+  const previewPackageLineItem = (() => {
+    if (!packageLineItem) return null;
+    if (!selectedPackageTier) return packageLineItem;
+    if (
+      packageLineItem.appliedTier === selectedPackageTier.pricePerHead &&
+      packageLineItem.unitPrice === selectedPackageTier.pricePerHead
+    ) {
+      return packageLineItem;
+    }
+    return {
+      ...packageLineItem,
+      unitPrice: selectedPackageTier.pricePerHead,
+      appliedTier: selectedPackageTier.pricePerHead,
+      appliedTierLabel: formatTierLabel(selectedPackageTier),
+      notes: formatTierLabel(selectedPackageTier)
+    };
+  })();
+
+  const tierMismatch =
+    Boolean(selectedPackageId && packageLineItem) &&
+    (previewGuestCount || guestCount) > 0 &&
+    !selectedPackageTier;
 
   // Reflect cached guestCount when input is not focused.
   useEffect(() => {
@@ -372,6 +401,11 @@ export function PackagesSection({
                   Selected tier: {formatUsd(selectedPackageTier.pricePerHead)}/person (
                   {formatTierRange(selectedPackageTier)} guests)
                 </p>
+              ) : tierMismatch ? (
+                <p className="text-xs text-amber-700">
+                  No package tier matches this guest count. Update package pricing in Settings, or
+                  change the guest count.
+                </p>
               ) : previewGuestCount > 0 ? (
                 <p className="text-xs text-muted-foreground">
                   {previewGuestCount} guests — per-head line items use this count.
@@ -385,66 +419,86 @@ export function PackagesSection({
               <p className="text-sm text-muted-foreground">Loading packages…</p>
             ) : packages.length === 0 ? (
               <p className="text-sm text-muted-foreground">No packages configured yet.</p>
+            ) : packageLineItem || selectedPackageId ? (
+              <div className="rounded-lg border border-[#1B2A4A]/20 border-l-4 border-l-[#1B2A4A] bg-[#1B2A4A]/[0.04] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-2 font-semibold text-[#1B2A4A]">
+                      <Package className="h-4 w-4 shrink-0" />
+                      {(previewPackageLineItem ?? selectedPackage)?.name ?? "Package"} Selected
+                    </p>
+                    {previewPackageLineItem ? (
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {previewPackageLineItem.appliedTierLabel ??
+                          previewPackageLineItem.notes ??
+                          `${formatUsd(previewPackageLineItem.unitPrice)}/person`}{" "}
+                        × {previewGuestCount} guests
+                      </p>
+                    ) : null}
+                    {menuPreviewItems.length > 0 ? (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        <span className="font-medium text-foreground">Menu: </span>
+                        {menuPreviewItems.length <= 6
+                          ? menuPreviewItems.join(", ")
+                          : `${menuPreviewItems.slice(0, 6).join(", ")}…and ${menuPreviewItems.length - 6} more`}
+                      </p>
+                    ) : previewPackageLineItem?.package?.items?.length ? (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Includes: {formatIncludedItems(previewPackageLineItem.package.items)}
+                      </p>
+                    ) : (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Click Edit Selections to choose menu dishes for the kitchen sheet.
+                      </p>
+                    )}
+                  </div>
+                  {previewPackageLineItem ? (
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatUsd(lineItemTotal(previewPackageLineItem, previewGuestCount))}
+                    </p>
+                  ) : null}
+                </div>
+                {!readOnly ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {onEditSelections ? (
+                      <Button type="button" variant="outline" size="sm" onClick={onEditSelections}>
+                        Edit Selections
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-destructive text-destructive hover:bg-destructive/10"
+                      onClick={onRemove}
+                    >
+                      Remove Package
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-3">
                 {packages.map((pkg) => {
                   const selectedTier = resolveTierForPackage(pkg);
                   return (
-                  <PackageCard
-                    key={pkg.id}
-                    pkg={pkg}
-                    customerType={customerType}
-                    isSelected={selectedPackageId === pkg.id}
-                    isSaving={savingPackageId === pkg.id}
-                    tierUnavailable={tiersForCustomerType(pkg.tiers, customerType).length === 0}
-                    selectedTier={selectedTier}
-                    onSelectTier={(tier) => handleSelectTier(pkg.id, tier)}
-                    onAdd={() => onAdd(pkg.id, selectedTier?.id)}
-                    onRemove={onRemove}
-                    readOnly={readOnly}
-                  />
+                    <PackageCard
+                      key={pkg.id}
+                      pkg={pkg}
+                      customerType={customerType}
+                      isSelected={false}
+                      isSaving={savingPackageId === pkg.id}
+                      tierUnavailable={tiersForCustomerType(pkg.tiers, customerType).length === 0}
+                      selectedTier={selectedTier}
+                      onSelectTier={(tier) => handleSelectTier(pkg.id, tier)}
+                      onAdd={() => onAdd(pkg.id, selectedTier?.id)}
+                      onRemove={onRemove}
+                      readOnly={readOnly}
+                    />
                   );
                 })}
               </div>
             )}
-
-            {previewPackageLineItem ? (
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="flex items-center gap-2 font-medium">
-                      <Package className="h-4 w-4" />
-                      {previewPackageLineItem.name}
-                    </p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {previewPackageLineItem.appliedTierLabel ??
-                        previewPackageLineItem.notes ??
-                        `${formatUsd(previewPackageLineItem.unitPrice)}/person`}{" "}
-                      × {previewGuestCount} guests
-                    </p>
-                    {previewPackageLineItem.package?.items?.length ? (
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        Includes: {formatIncludedItems(previewPackageLineItem.package.items)}
-                      </p>
-                    ) : null}
-                  </div>
-                  <p className="text-lg font-semibold tabular-nums">
-                    {formatUsd(lineItemTotal(previewPackageLineItem, previewGuestCount))}
-                  </p>
-                </div>
-                {!readOnly ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="mt-3 border-destructive text-destructive hover:bg-destructive/10"
-                  onClick={onRemove}
-                >
-                  Remove package
-                </Button>
-                ) : null}
-              </div>
-            ) : null}
           </CardContent>
         </CollapsibleContent>
       </Card>

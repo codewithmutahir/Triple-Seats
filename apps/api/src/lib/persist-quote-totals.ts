@@ -3,6 +3,13 @@ import { prisma } from "@tripeseats/database";
 
 import { calculateQuoteTotals, formatTierLabel, getActiveTier } from "./quote-totals";
 
+/**
+ * Recalculate quote totals and rematch package line items to the tier
+ * that fits the current guest count + customer type.
+ *
+ * Previously only filled appliedTier when null — so a locked $0 / wrong-band
+ * tier stayed forever after guest count changed (e.g. 200–250 @ $0 with 500 guests).
+ */
 export async function persistQuoteTotals(quoteId: string) {
   const quote = await prisma.quote.findUnique({
     where: { id: quoteId },
@@ -16,6 +23,7 @@ export async function persistQuoteTotals(quoteId: string) {
           id: true,
           unitType: true,
           appliedTier: true,
+          appliedTierLabel: true,
           packageId: true,
           unitPrice: true,
           quantity: true,
@@ -33,10 +41,10 @@ export async function persistQuoteTotals(quoteId: string) {
   if (!quote) return null;
 
   const guestCount = quote.event?.guestCountEstimate ?? 0;
-  const customerType = quote.event?.customerType ?? "b2c";
+  const customerType = (quote.event?.customerType ?? "b2c") as "b2b" | "b2c";
 
-  const tieredNeedingPackage = quote.lineItems.filter(
-    (item) => item.unitType === "tiered_per_head" && item.appliedTier == null && item.packageId
+  const packageLines = quote.lineItems.filter(
+    (item) => item.unitType === "tiered_per_head" && item.packageId
   );
 
   const packageMap = new Map<
@@ -50,9 +58,9 @@ export async function persistQuoteTotals(quoteId: string) {
     >[number]
   >();
 
-  if (tieredNeedingPackage.length > 0) {
+  if (packageLines.length > 0) {
     const packageIds = [
-      ...new Set(tieredNeedingPackage.map((item) => item.packageId).filter(Boolean))
+      ...new Set(packageLines.map((item) => item.packageId).filter(Boolean))
     ] as string[];
 
     const packages = await prisma.cateringPackage.findMany({
@@ -67,7 +75,7 @@ export async function persistQuoteTotals(quoteId: string) {
 
   const lineItemUpdates: Prisma.PrismaPromise<unknown>[] = [];
   const lineItemsForTotals = quote.lineItems.map((item) => {
-    if (item.unitType !== "tiered_per_head" || item.appliedTier != null || !item.packageId) {
+    if (item.unitType !== "tiered_per_head" || !item.packageId) {
       return item;
     }
 
@@ -77,17 +85,32 @@ export async function persistQuoteTotals(quoteId: string) {
     const activeTier = getActiveTier(pkg.tiers, guestCount, customerType);
     if (!activeTier) return item;
 
-    lineItemUpdates.push(
-      prisma.quoteLineItem.update({
-        where: { id: item.id },
-        data: {
-          unitPrice: activeTier.pricePerHead,
-          notes: formatTierLabel(activeTier)
-        }
-      })
-    );
+    const price = activeTier.pricePerHead;
+    const label = formatTierLabel(activeTier);
+    const needsUpdate =
+      item.unitPrice !== price ||
+      item.appliedTier !== price ||
+      item.appliedTierLabel !== label;
 
-    return { ...item, unitPrice: activeTier.pricePerHead };
+    if (needsUpdate) {
+      lineItemUpdates.push(
+        prisma.quoteLineItem.update({
+          where: { id: item.id },
+          data: {
+            unitPrice: price,
+            appliedTier: price,
+            appliedTierLabel: label,
+            notes: label
+          }
+        })
+      );
+    }
+
+    return {
+      ...item,
+      unitPrice: price,
+      appliedTier: price
+    };
   });
 
   const { grandTotal } = calculateQuoteTotals(
@@ -126,7 +149,8 @@ export async function persistQuoteTotals(quoteId: string) {
       },
       event: {
         select: {
-          guestCountEstimate: true
+          guestCountEstimate: true,
+          customerType: true
         }
       }
     }

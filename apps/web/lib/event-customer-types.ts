@@ -83,6 +83,7 @@ export const PACKAGE_ITEM_SECTIONS: Record<string, ItemCategory> = {
   Grill: "bbq",
   Dessert: "dessert",
   Naan: "breads",
+  Bread: "breads",
   Salad: "side_items",
   Raita: "side_items",
   "Mirchi Ka Salan": "side_items",

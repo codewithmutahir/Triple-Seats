@@ -147,6 +147,7 @@ export function serializeQuote(quote: QuoteWithRelations) {
           eventType: quote.event.eventType,
           eventTypeLabel: eventTypeTitle(quote.event.eventType),
           customerType: quote.event.customerType,
+          status: quote.event.status,
           eventDate: quote.event.eventDate.toISOString(),
           startTime: quote.event.startTime?.toISOString() ?? null,
           endTime: quote.event.endTime?.toISOString() ?? null,

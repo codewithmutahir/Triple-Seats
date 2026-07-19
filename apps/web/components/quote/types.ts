@@ -86,6 +86,8 @@ export type QuoteEvent = {
   eventType?: string;
   eventTypeLabel?: string;
   customerType?: "b2b" | "b2c";
+  /** Event pipeline status (lead / discussion / booked / …) */
+  status?: string;
   eventDate: string;
   startTime?: string | null;
   endTime?: string | null;
