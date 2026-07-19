@@ -137,10 +137,12 @@ export class QuoteOpsQueue {
 
   async enqueueAndWait(quoteId: string, op: QuoteOp): Promise<ApplyQuoteOpsResponse> {
     this.quoteId = quoteId;
-    this.enqueue(op);
-    this.scheduleFlush();
+    // Register waiter BEFORE enqueue so a flush that starts between the two
+    // still pairs this waiter with the op (batch capture takes both together).
     return new Promise<ApplyQuoteOpsResponse>((resolve, reject) => {
       this.waiters.push({ resolve, reject });
+      this.enqueue(op);
+      this.scheduleFlush();
     });
   }
 
@@ -195,7 +197,11 @@ export class QuoteOpsQueue {
       return null;
     }
 
+    // Capture ops + waiters together. Waiters registered after this splice
+    // belong to a later batch and must NOT resolve with this result — that
+    // race was wiping optimistic packages / firing prefs too early.
     const batch = this.ops.splice(0);
+    const batchWaiters = this.waiters.splice(0);
     const quoteId = this.quoteId;
     const startedAt = performance.now();
     this.emit();
@@ -203,7 +209,7 @@ export class QuoteOpsQueue {
     this.inFlight = this.sendBatch(quoteId, batch, startedAt)
       .then((result) => {
         this.setLastError(null);
-        this.resolveWaiters(result);
+        this.resolveWaiters(batchWaiters, result);
         return result;
       })
       .catch((error: unknown) => {
@@ -222,7 +228,10 @@ export class QuoteOpsQueue {
             message: err.message,
             conflict: true
           });
-          this.rejectWaiters(err);
+          // Conflict invalidates the quote — reject this batch and any waiters
+          // that arrived while the request was in flight.
+          this.rejectWaiters(batchWaiters, err);
+          this.rejectWaiters(this.waiters.splice(0), err);
           this.notifyConflict(err);
           throw err;
         }
@@ -238,7 +247,7 @@ export class QuoteOpsQueue {
           recoverable: err.recoverable,
           message: err.message
         });
-        this.rejectWaiters(err);
+        this.rejectWaiters(batchWaiters, err);
         throw err;
       })
       .finally(() => {
@@ -270,15 +279,13 @@ export class QuoteOpsQueue {
     }
   }
 
-  private resolveWaiters(result: ApplyQuoteOpsResponse) {
-    const waiters = this.waiters.splice(0);
+  private resolveWaiters(waiters: FlushWaiter[], result: ApplyQuoteOpsResponse) {
     for (const waiter of waiters) {
       waiter.resolve(result);
     }
   }
 
-  private rejectWaiters(error: Error) {
-    const waiters = this.waiters.splice(0);
+  private rejectWaiters(waiters: FlushWaiter[], error: Error) {
     for (const waiter of waiters) {
       waiter.reject(error);
     }

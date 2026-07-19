@@ -8,11 +8,27 @@ import {
   type MenuItem,
   type Quote
 } from "@/components/quote/types";
+import type { MenuPreferenceEntry } from "@/lib/menu-preference-types";
+
+export type QuoteBuilderMenuPreference = MenuPreferenceEntry & {
+  id?: string;
+  eventId?: string;
+  packageId?: string;
+};
 
 export type QuoteBuilderPayload = {
   quote: Quote;
   packages: CateringPackage[];
   menuItemsByCategory: Partial<Record<ItemCategory, MenuItem[]>>;
+  menuPreferences?: QuoteBuilderMenuPreference[];
+  event?: {
+    id: string;
+    customerType?: "b2b" | "b2c" | string;
+    status?: string;
+    title?: string;
+    eventType?: string;
+    guestCountEstimate?: number;
+  };
 };
 
 async function fetchQuoteBuilderLegacy(eventId: string) {
@@ -64,7 +80,8 @@ async function fetchQuoteBuilderLegacy(eventId: string) {
     data: {
       quote,
       packages: packagesRes.data.items,
-      menuItemsByCategory
+      menuItemsByCategory,
+      menuPreferences: []
     }
   };
 }

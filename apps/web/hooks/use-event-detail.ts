@@ -23,6 +23,7 @@ export function useEventDetailMutations(eventId: string | null) {
   const { can } = usePermissions();
   const canWrite = can("events:write");
   const detailKey = queryKeys.events.detail(eventId ?? "");
+  const builderKey = eventId ? queryKeys.quotes.builder(eventId) : null;
   const statusSeqRef = useRef(0);
   const customerTypeSeqRef = useRef(0);
 
@@ -32,6 +33,36 @@ export function useEventDetailMutations(eventId: string | null) {
       void qc.invalidateQueries({ queryKey: queryKeys.dashboard.all });
     }, 0);
   };
+
+  /** Keep Quote Builder in sync when Event Detail fields change (avoids stale badges until hard reload). */
+  const syncQuoteBuilder = useCallback(() => {
+    if (!builderKey) return;
+    void qc.invalidateQueries({ queryKey: builderKey });
+  }, [qc, builderKey]);
+
+  const patchQuoteBuilderEvent = useCallback(
+    (patch: Record<string, unknown>) => {
+      if (!builderKey) return;
+      qc.setQueryData(builderKey, (old: unknown) => {
+        if (!old || typeof old !== "object") return old;
+        const data = old as {
+          event?: Record<string, unknown>;
+          quote?: { event?: Record<string, unknown> };
+        };
+        return {
+          ...data,
+          event: data.event ? { ...data.event, ...patch } : data.event,
+          quote: data.quote
+            ? {
+                ...data.quote,
+                event: data.quote.event ? { ...data.quote.event, ...patch } : data.quote.event
+              }
+            : data.quote
+        };
+      });
+    },
+    [qc, builderKey]
+  );
 
   const patchCache = (updater: (old: EventDetailPayload) => EventDetailPayload) => {
     if (!canWrite || !eventId) return;
@@ -67,16 +98,22 @@ export function useEventDetailMutations(eventId: string | null) {
                 }
               ]
       }));
+      patchQuoteBuilderEvent({ status });
       return { prev, opId };
     },
     onError: (err, _status, ctx) => {
       if (!ctx || ctx.opId !== statusSeqRef.current) return;
-      if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
+      if (ctx.prev) {
+        qc.setQueryData(detailKey, ctx.prev);
+        patchQuoteBuilderEvent({ status: ctx.prev.status });
+      }
       handleMutationError(err, ctx, "Failed to update status");
     },
     onSuccess: (event, _status, ctx) => {
       if (!ctx || ctx.opId !== statusSeqRef.current) return;
       qc.setQueryData(detailKey, event);
+      patchQuoteBuilderEvent({ status: event.status });
+      syncQuoteBuilder();
       invalidateListsLater();
     }
   });
@@ -117,13 +154,37 @@ export function useEventDetailMutations(eventId: string | null) {
             }
           : old.primaryGuest
       }));
+      if (typeof data.guestCount === "number") {
+        patchQuoteBuilderEvent({ guestCountEstimate: data.guestCount });
+      }
       return { prev };
     },
     onError: (err, _data, ctx) => {
-      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+      if (ctx?.prev) {
+        qc.setQueryData(detailKey, ctx.prev);
+        patchQuoteBuilderEvent({ guestCountEstimate: ctx.prev.guestCountEstimate });
+      }
       handleMutationError(err, ctx, "Failed to update guest");
     },
-    onSuccess: (event) => qc.setQueryData(detailKey, event)
+    onSuccess: (event) => {
+      qc.setQueryData(detailKey, event);
+      patchQuoteBuilderEvent({
+        guestCountEstimate: event.guestCountEstimate,
+        guestName: event.primaryGuest
+          ? [event.primaryGuest.firstName, event.primaryGuest.lastName].filter(Boolean).join(" ")
+          : null,
+        primaryGuest: event.primaryGuest
+          ? {
+              id: event.primaryGuest.id,
+              firstName: event.primaryGuest.firstName,
+              lastName: event.primaryGuest.lastName,
+              email: event.primaryGuest.email,
+              phone: event.primaryGuest.phone
+            }
+          : null
+      });
+      syncQuoteBuilder();
+    }
   });
 
   const updateMutation = useMutation({
@@ -144,14 +205,33 @@ export function useEventDetailMutations(eventId: string | null) {
           ? { customerType: data.customerType as EventDetailPayload["customerType"] }
           : {})
       }));
+      if (typeof data.customerType === "string" || typeof data.eventType === "string") {
+        patchQuoteBuilderEvent({
+          ...(typeof data.customerType === "string" ? { customerType: data.customerType } : {}),
+          ...(typeof data.eventType === "string" ? { eventType: data.eventType } : {})
+        });
+      }
       return { prev };
     },
     onSuccess: (event) => {
       qc.setQueryData(detailKey, event);
+      patchQuoteBuilderEvent({
+        customerType: event.customerType,
+        eventType: event.eventType,
+        title: event.title
+      });
+      syncQuoteBuilder();
       invalidateListsLater();
     },
     onError: (err, _data, ctx) => {
-      if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
+      if (ctx?.prev) {
+        qc.setQueryData(detailKey, ctx.prev);
+        patchQuoteBuilderEvent({
+          customerType: ctx.prev.customerType,
+          eventType: ctx.prev.eventType,
+          title: ctx.prev.title
+        });
+      }
       handleMutationError(err, ctx, "Failed to update event");
     }
   });
@@ -165,18 +245,24 @@ export function useEventDetailMutations(eventId: string | null) {
       await qc.cancelQueries({ queryKey: detailKey });
       const prev = qc.getQueryData<EventDetailPayload>(detailKey);
       patchCache((old) => ({ ...old, customerType }));
+      patchQuoteBuilderEvent({ customerType });
       return { prev, opId };
     },
     onError: (err, _customerType, ctx) => {
       if (!ctx || ctx.opId !== customerTypeSeqRef.current) return;
-      if (ctx.prev) qc.setQueryData(detailKey, ctx.prev);
+      if (ctx.prev) {
+        qc.setQueryData(detailKey, ctx.prev);
+        patchQuoteBuilderEvent({ customerType: ctx.prev.customerType });
+      }
       handleMutationError(err, ctx, "Failed to update customer type");
     },
     onSuccess: (res, _customerType, ctx) => {
       if (!ctx || ctx.opId !== customerTypeSeqRef.current) return;
       if (res.event) {
         qc.setQueryData(detailKey, res.event);
+        patchQuoteBuilderEvent({ customerType: res.event.customerType });
       }
+      syncQuoteBuilder();
       invalidateListsLater();
     }
   });
@@ -201,7 +287,10 @@ export function useEventDetailMutations(eventId: string | null) {
       if (ctx?.prev) qc.setQueryData(detailKey, ctx.prev);
       handleMutationError(err, ctx, "Failed to update event time");
     },
-    onSuccess: (event) => qc.setQueryData(detailKey, event)
+    onSuccess: (event) => {
+      qc.setQueryData(detailKey, event);
+      syncQuoteBuilder();
+    }
   });
 
   return {

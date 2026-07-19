@@ -25,7 +25,12 @@ import {
   subscribeQuoteOpsQueue
 } from "@/lib/quote-ops-queue";
 import { queryKeys } from "@/lib/query-keys";
-import { formatTierLabel, findTierById, getActiveTier, tiersForCustomerType } from "@/lib/quote-totals";
+import {
+  formatTierLabel,
+  findTierById,
+  getActiveTier,
+  tiersForCustomerType
+} from "@/lib/quote-totals";
 
 export function useQuoteBuilderQuery(eventId: string | null) {
   return useQuery({
@@ -35,7 +40,7 @@ export function useQuoteBuilderQuery(eventId: string | null) {
     staleTime: 2 * 60 * 1000
   });
 }
-0.
+
 type BuilderData = QuoteBuilderPayload;
 
 function publishQuoteRevision(quoteId: string, revision: number) {
@@ -46,13 +51,30 @@ function publishQuoteRevision(quoteId: string, revision: number) {
 
 function mergeOpsBatchResult(old: BuilderData, result: ApplyQuoteOpsResponse): BuilderData {
   publishQuoteRevision(result.quote.id, result.revision);
+
+  const serverItems = result.quote.lineItems;
+  const serverHasPackage = serverItems.some((item) => item.unitType === "tiered_per_head");
+  const optimisticPackages = old.quote.lineItems.filter(
+    (item) => item.unitType === "tiered_per_head" && item.id.startsWith("temp_pkg_")
+  );
+
+  // If a guest-count (or other) batch returns before add_package commits,
+  // keep the optimistic package line so the summary doesn't flicker empty.
+  const lineItems =
+    !serverHasPackage && optimisticPackages.length > 0
+      ? [
+          ...serverItems.filter((item) => item.unitType !== "tiered_per_head"),
+          ...optimisticPackages
+        ]
+      : serverItems;
+
   return {
     ...old,
     quote: {
       ...old.quote,
       ...result.quote,
       revision: result.revision,
-      lineItems: result.quote.lineItems,
+      lineItems,
       totalAmount: result.quote.totalAmount,
       taxRate: result.quote.taxRate,
       depositPct: result.quote.depositPct,
@@ -722,19 +744,68 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }
       if (!prev?.quote) return { prev, guestCount };
 
+      const customerType = prev.quote.event?.customerType ?? "b2c";
+
       patchBuilder((old) => ({
         ...old,
         quote: {
           ...old.quote,
           event: old.quote.event
             ? { ...old.quote.event, guestCountEstimate: guestCount }
-            : old.quote.event
+            : old.quote.event,
+          lineItems: old.quote.lineItems.map((item) => {
+            if (item.unitType !== "tiered_per_head" || !item.packageId) return item;
+            const pkg =
+              old.packages.find((p) => p.id === item.packageId) ?? item.package ?? null;
+            if (!pkg?.tiers?.length) return item;
+            const tier = getActiveTier(pkg.tiers, guestCount, customerType);
+            if (!tier) return item;
+            return {
+              ...item,
+              unitPrice: tier.pricePerHead,
+              appliedTier: tier.pricePerHead,
+              appliedTierLabel: formatTierLabel(tier),
+              notes: formatTierLabel(tier)
+            };
+          })
         }
       }));
       return { prev, guestCount };
     },
-    onSuccess: (result) => {
-      patchBuilder((old) => mergeOpsBatchResult(old, result));
+    onSuccess: (result, { guestCount }) => {
+      patchBuilder((old) => {
+        const merged = mergeOpsBatchResult(old, result);
+        const latest = latestGuestCountRef.current;
+        // A slower earlier guest-count batch must not overwrite a newer value.
+        if (latest != null && guestCount !== latest) {
+          const customerType = (old.quote.event?.customerType ?? "b2c") as "b2b" | "b2c";
+          return {
+            ...merged,
+            quote: {
+              ...merged.quote,
+              event: merged.quote.event
+                ? { ...merged.quote.event, guestCountEstimate: latest }
+                : merged.quote.event,
+              lineItems: merged.quote.lineItems.map((item) => {
+                if (item.unitType !== "tiered_per_head" || !item.packageId) return item;
+                const pkg =
+                  old.packages.find((p) => p.id === item.packageId) ?? item.package ?? null;
+                if (!pkg?.tiers?.length) return item;
+                const tier = getActiveTier(pkg.tiers, latest, customerType);
+                if (!tier) return item;
+                return {
+                  ...item,
+                  unitPrice: tier.pricePerHead,
+                  appliedTier: tier.pricePerHead,
+                  appliedTierLabel: formatTierLabel(tier),
+                  notes: formatTierLabel(tier)
+                };
+              })
+            }
+          };
+        }
+        return merged;
+      });
     },
     onError: (err, { guestCount }, ctx) => {
       if (isQuoteOpsConflict(err)) return;

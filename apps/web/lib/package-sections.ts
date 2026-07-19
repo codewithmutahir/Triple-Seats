@@ -37,19 +37,22 @@ export function getPackageSlotsForSection(
   return slots.length > 0 ? slots : undefined;
 }
 
-/** When a package is selected, hide food categories covered by the package (B2B only). */
+/** Categories always available on the quote builder for both B2B and B2C. */
+const ALWAYS_SHOW: ItemCategory[] = ["equipment", "delivery", "labor"];
+
+/**
+ * B2B: packages + equipment/delivery/labor only — no food à-la-carte sections.
+ * B2C: show everything (package-covered categories may still show extras).
+ */
 export function shouldShowQuoteCategory(
   category: ItemCategory,
-  packageItems: PackageIncludedItem[] | undefined,
-  customerType: "b2b" | "b2c" = "b2c"
+  _packageItems: PackageIncludedItem[] | undefined,
+  customerType: "b2b" | "b2c" | string = "b2c"
 ): boolean {
-  if (customerType === "b2c") return true;
-  if (!packageItems?.length) return true;
-  if (category === "equipment" || category === "delivery" || category === "beverages" || category === "labor") {
-    return true;
-  }
-  const slots = getPackageSlotsForSection(packageItems, category);
-  return slots === undefined;
+  if (ALWAYS_SHOW.includes(category)) return true;
+  // Normalize — never show food/à-la-carte sections for B2B
+  if (String(customerType).toLowerCase() === "b2b") return false;
+  return true;
 }
 
 /** True when the selected package includes this food category (for B2C section hints). */

@@ -92,6 +92,52 @@ export function packageIncludeSummary(
     .join(", ");
 }
 
+/** Group menu preferences by base slot label for PDF/kitchen display. */
+export function groupMenuPreferencesForDisplay(
+  preferences: { slotLabel: string; selectedItem: string }[],
+  packageItems?: { label: string; quantity: number }[] | null
+): { label: string; items: string[] }[] {
+  if (!preferences.length) return [];
+
+  const order = packageItems?.map((p) => p.label) ?? [];
+  const groups = new Map<string, string[]>();
+
+  for (const pref of preferences) {
+    if (!pref.selectedItem?.trim()) continue;
+    const match = pref.slotLabel.match(/^(.+?) Slot \d+$/);
+    const label = match?.[1] ?? pref.slotLabel;
+    const list = groups.get(label) ?? [];
+    list.push(pref.selectedItem.trim());
+    groups.set(label, list);
+  }
+
+  const ordered: { label: string; items: string[] }[] = [];
+  for (const label of order) {
+    const items = groups.get(label);
+    if (items?.length) {
+      ordered.push({ label, items });
+      groups.delete(label);
+    }
+  }
+  for (const [label, items] of groups) {
+    ordered.push({ label, items });
+  }
+  return ordered;
+}
+
+export function formatPackageSelectedMenuSummary(
+  preferences: { slotLabel: string; selectedItem: string }[],
+  packageItems?: { label: string; quantity: number }[] | null
+): string | null {
+  const groups = groupMenuPreferencesForDisplay(preferences, packageItems);
+  if (!groups.length) return null;
+  return groups
+    .map(({ label, items }) =>
+      items.length > 1 ? `${label} ×${items.length} (${items.join(", ")})` : `${label} (${items[0]})`
+    )
+    .join(", ");
+}
+
 export function kitchenPortionLabel(
   guestCount: number,
   unitType: string,

@@ -231,7 +231,7 @@ export const api = {
   },
 
   quotes: {
-    builder: async (eventId: string): Promise<QuoteBuilderPayload & { event?: QuoteBuilderPayload["quote"]["event"] }> => {
+    builder: async (eventId: string): Promise<QuoteBuilderPayload> => {
       const res = await fetchQuoteBuilder(eventId);
       if (!res.ok || !res.data.quote) throw new Error(res.ok ? "Could not load quote." : res.message);
       return res.data;

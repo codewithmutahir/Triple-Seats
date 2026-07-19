@@ -38,7 +38,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { MenuPreferencesCard } from "@/components/quote/menu-preferences-card";
 import { EventDiscussionsTab } from "@/components/events/event-discussions-tab";
 import { EventDocumentsTab } from "@/components/events/event-documents-tab";
 import { EventHistoryTab } from "@/components/events/event-history-tab";
@@ -929,14 +928,7 @@ function EventDetailInner() {
             </CardContent>
           </Card>
 
-          {eventId ? (
-            <MenuPreferencesCard
-              eventId={eventId}
-              variant="full"
-              readOnly
-              quoteBuilderLink={`/dashboard/quotes?eventId=${encodeURIComponent(eventId)}`}
-            />
-          ) : null}
+          {/* Menu preferences live in Quote Builder package modal only */}
         </div>
 
         {/* Right column */}
