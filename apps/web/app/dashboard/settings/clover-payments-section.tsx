@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Copy, CreditCard, Loader2, Unplug } from "lucide-react";
+import { CheckCircle2, Copy, CreditCard, ExternalLink, Loader2, Unplug } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ export function CloverPaymentsSection() {
   const [privateKey, setPrivateKey] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [publicKey, setPublicKey] = useState("");
+  const [showManual, setShowManual] = useState(false);
 
   useEffect(() => {
     if (!data) return;
@@ -33,6 +34,7 @@ export function CloverPaymentsSection() {
     setPublicKey(data.publicKey ?? "");
     setPrivateKey("");
     setWebhookSecret("");
+    if (!data.oauthAvailable && !data.connected) setShowManual(true);
   }, [data]);
 
   async function copyText(label: string, value: string) {
@@ -87,15 +89,16 @@ export function CloverPaymentsSection() {
             Connect Clover
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Each catering business connects its own Clover Hosted Checkout tokens. Card payments then
-            settle to that merchant.
+            Connect your Clover merchant so payment links settle to your account. Prefer OAuth when
+            available; manual Hosted Checkout tokens still work.
           </p>
         </div>
         {data?.connected ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800">
             <CheckCircle2 className="h-3.5 w-3.5" />
             Connected
-            {data.source === "env" ? " (server fallback also active)" : ""}
+            {data.oauthConnected ? " (OAuth)" : ""}
+            {data.source === "env" ? " · server fallback also active" : ""}
           </span>
         ) : data?.configured && data.source === "env" ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900">
@@ -107,6 +110,32 @@ export function CloverPaymentsSection() {
           </span>
         )}
       </div>
+
+      {canWrite && data?.oauthAvailable ? (
+        <div className="flex flex-wrap gap-2">
+          <Button asChild>
+            <a href="/api/clover/oauth/start">
+              <ExternalLink className="mr-2 h-4 w-4" />
+              {data.connected ? "Reconnect with Clover" : "Connect with Clover"}
+            </a>
+          </Button>
+          {data.connected ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={disconnectMutation.isPending}
+              onClick={() => {
+                if (window.confirm("Disconnect Clover from this account?")) {
+                  disconnectMutation.mutate();
+                }
+              }}
+            >
+              <Unplug className="mr-2 h-4 w-4" />
+              Disconnect
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {data ? (
         <div className="space-y-3 rounded-lg border bg-muted/30 p-4 text-sm">
@@ -136,98 +165,112 @@ export function CloverPaymentsSection() {
         </div>
       ) : null}
 
-      <form onSubmit={handleSave} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="clover-mid">Merchant ID (MID)</Label>
-          <Input
-            id="clover-mid"
-            value={merchantId}
-            onChange={(e) => setMerchantId(e.target.value)}
-            placeholder="e.g. N2G6S7A6CT041"
-            disabled={!canWrite}
-            autoComplete="off"
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="clover-private">
-            Ecommerce private token (Hosted Checkout)
-            {data?.hasPrivateKey ? (
-              <span className="ml-2 font-normal text-muted-foreground">
-                saved {data.privateKeyHint}
-              </span>
-            ) : null}
-          </Label>
-          <Input
-            id="clover-private"
-            type="password"
-            value={privateKey}
-            onChange={(e) => setPrivateKey(e.target.value)}
-            placeholder={data?.hasPrivateKey ? "Leave blank to keep current" : "Private token"}
-            disabled={!canWrite}
-            autoComplete="new-password"
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="clover-webhook">
-            Webhook signing secret
-            {data?.hasWebhookSecret ? (
-              <span className="ml-2 font-normal text-muted-foreground">
-                saved {data.webhookSecretHint}
-              </span>
-            ) : null}
-          </Label>
-          <Input
-            id="clover-webhook"
-            type="password"
-            value={webhookSecret}
-            onChange={(e) => setWebhookSecret(e.target.value)}
-            placeholder={
-              data?.hasWebhookSecret ? "Leave blank to keep current" : "hcp_… from Generate"
-            }
-            disabled={!canWrite}
-            autoComplete="new-password"
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="clover-public">Public token (optional)</Label>
-          <Input
-            id="clover-public"
-            value={publicKey}
-            onChange={(e) => setPublicKey(e.target.value)}
-            placeholder="Only needed for iframe later"
-            disabled={!canWrite}
-            autoComplete="off"
-          />
-        </div>
+      <div>
+        <button
+          type="button"
+          className="text-sm text-muted-foreground underline underline-offset-2"
+          onClick={() => setShowManual((v) => !v)}
+        >
+          {showManual ? "Hide manual token setup" : "Use manual Hosted Checkout tokens instead"}
+        </button>
+      </div>
 
-        {canWrite ? (
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={updateMutation.isPending}>
-              {updateMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Save Clover connection
-            </Button>
-            {data?.connected ? (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={disconnectMutation.isPending}
-                onClick={() => {
-                  if (window.confirm("Disconnect Clover from this account?")) {
-                    disconnectMutation.mutate();
-                  }
-                }}
-              >
-                <Unplug className="mr-2 h-4 w-4" />
-                Disconnect
-              </Button>
-            ) : null}
+      {showManual ? (
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="clover-mid">Merchant ID (MID)</Label>
+            <Input
+              id="clover-mid"
+              value={merchantId}
+              onChange={(e) => setMerchantId(e.target.value)}
+              placeholder="e.g. N2G6S7A6CT041"
+              disabled={!canWrite}
+              autoComplete="off"
+            />
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">You need settings write access to change this.</p>
-        )}
-      </form>
+          <div className="space-y-2">
+            <Label htmlFor="clover-private">
+              Ecommerce private token (Hosted Checkout)
+              {data?.hasPrivateKey ? (
+                <span className="ml-2 font-normal text-muted-foreground">
+                  saved {data.privateKeyHint}
+                </span>
+              ) : null}
+            </Label>
+            <Input
+              id="clover-private"
+              type="password"
+              value={privateKey}
+              onChange={(e) => setPrivateKey(e.target.value)}
+              placeholder={data?.hasPrivateKey ? "Leave blank to keep current" : "Private token"}
+              disabled={!canWrite}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="clover-webhook">
+              Webhook signing secret
+              {data?.hasWebhookSecret ? (
+                <span className="ml-2 font-normal text-muted-foreground">
+                  saved {data.webhookSecretHint}
+                </span>
+              ) : null}
+            </Label>
+            <Input
+              id="clover-webhook"
+              type="password"
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              placeholder={
+                data?.hasWebhookSecret ? "Leave blank to keep current" : "hcp_… from Generate"
+              }
+              disabled={!canWrite}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="clover-public">Public token (optional)</Label>
+            <Input
+              id="clover-public"
+              value={publicKey}
+              onChange={(e) => setPublicKey(e.target.value)}
+              placeholder="Only needed for iframe later"
+              disabled={!canWrite}
+              autoComplete="off"
+            />
+          </div>
+
+          {canWrite ? (
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Save Clover connection
+              </Button>
+              {data?.connected && !data.oauthAvailable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={disconnectMutation.isPending}
+                  onClick={() => {
+                    if (window.confirm("Disconnect Clover from this account?")) {
+                      disconnectMutation.mutate();
+                    }
+                  }}
+                >
+                  <Unplug className="mr-2 h-4 w-4" />
+                  Disconnect
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              You need settings write access to change this.
+            </p>
+          )}
+        </form>
+      ) : null}
     </div>
   );
 }

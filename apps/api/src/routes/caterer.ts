@@ -177,7 +177,8 @@ router.get("/clover", async (req: Request, res: Response) => {
         cloverPrivateKeyEnc: true,
         cloverWebhookSecretEnc: true,
         cloverPublicKey: true,
-        cloverConnectedAt: true
+        cloverConnectedAt: true,
+        cloverRefreshTokenEnc: true
       }
     });
     if (!row) {
@@ -187,12 +188,17 @@ router.get("/clover", async (req: Request, res: Response) => {
     const runtime = await resolveCloverConfigForCaterer(caterer.id);
     const privateKey = decryptSecret(row.cloverPrivateKeyEnc);
     const webhookSecret = decryptSecret(row.cloverWebhookSecretEnc);
+    const oauthConnected = Boolean(row.cloverRefreshTokenEnc);
 
     return res.json({
       clover: {
         connected: Boolean(row.cloverMerchantId && row.cloverPrivateKeyEnc),
         configured: runtime.configured,
         source: runtime.source,
+        oauthConnected,
+        oauthAvailable: Boolean(
+          process.env.CLOVER_APP_ID?.trim() && process.env.CLOVER_APP_SECRET?.trim()
+        ),
         merchantId: row.cloverMerchantId,
         publicKey: row.cloverPublicKey,
         hasPrivateKey: Boolean(row.cloverPrivateKeyEnc),
@@ -278,7 +284,10 @@ router.put("/clover", async (req: Request, res: Response) => {
         cloverPrivateKeyEnc: nextPrivateEnc,
         cloverWebhookSecretEnc: nextWebhookEnc,
         cloverPublicKey: nextPublicKey,
-        cloverConnectedAt: new Date()
+        cloverConnectedAt: new Date(),
+        // Manual keys replace OAuth session
+        cloverRefreshTokenEnc: null,
+        cloverAccessTokenExpiresAt: null
       }
     });
 
@@ -288,6 +297,10 @@ router.put("/clover", async (req: Request, res: Response) => {
         connected: true,
         configured: runtime.configured,
         source: runtime.source,
+        oauthConnected: false,
+        oauthAvailable: Boolean(
+          process.env.CLOVER_APP_ID?.trim() && process.env.CLOVER_APP_SECRET?.trim()
+        ),
         merchantId: nextMerchantId,
         publicKey: nextPublicKey,
         hasPrivateKey: true,
@@ -313,7 +326,9 @@ router.delete("/clover", async (req: Request, res: Response) => {
         cloverPrivateKeyEnc: null,
         cloverWebhookSecretEnc: null,
         cloverPublicKey: null,
-        cloverConnectedAt: null
+        cloverConnectedAt: null,
+        cloverRefreshTokenEnc: null,
+        cloverAccessTokenExpiresAt: null
       }
     });
     const runtime = await resolveCloverConfigForCaterer(caterer.id);
@@ -323,6 +338,10 @@ router.delete("/clover", async (req: Request, res: Response) => {
         connected: false,
         configured: runtime.configured,
         source: runtime.source,
+        oauthConnected: false,
+        oauthAvailable: Boolean(
+          process.env.CLOVER_APP_ID?.trim() && process.env.CLOVER_APP_SECRET?.trim()
+        ),
         merchantId: null,
         publicKey: null,
         hasPrivateKey: false,

@@ -114,6 +114,10 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   const contentTypeRes = res.headers.get("content-type");
   if (contentTypeRes) responseHeaders.set("content-type", contentTypeRes);
 
+  // Express OAuth (and similar) 302s — without Location the browser shows "Found. Redirecting…"
+  const location = res.headers.get("location");
+  if (location) responseHeaders.set("location", location);
+
   const disposition = res.headers.get("content-disposition");
   const isPdf =
     (contentTypeRes?.toLowerCase().includes("application/pdf") ?? false) ||
