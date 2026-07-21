@@ -2,7 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { prisma } from "@tripeseats/database";
 
-import { decryptSecret } from "./secret-crypto";
+import { refreshCloverOAuthToken } from "./clover-oauth";
+import { decryptSecret, encryptSecret } from "./secret-crypto";
 
 export type CloverCheckoutSession = {
   href: string;
@@ -65,13 +66,45 @@ export async function resolveCloverConfigForCaterer(
     select: {
       cloverMerchantId: true,
       cloverPrivateKeyEnc: true,
-      cloverWebhookSecretEnc: true
+      cloverWebhookSecretEnc: true,
+      cloverRefreshTokenEnc: true,
+      cloverAccessTokenExpiresAt: true
     }
   });
 
   const merchantId = row?.cloverMerchantId?.trim() || "";
-  const privateKey = decryptSecret(row?.cloverPrivateKeyEnc) || "";
+  let privateKey = decryptSecret(row?.cloverPrivateKeyEnc) || "";
   const webhookSecret = decryptSecret(row?.cloverWebhookSecretEnc) || "";
+  const refreshToken = decryptSecret(row?.cloverRefreshTokenEnc) || "";
+
+  // OAuth access tokens expire (~30m). Refresh when within 2 minutes of expiry.
+  if (merchantId && refreshToken) {
+    const expiresAt = row?.cloverAccessTokenExpiresAt?.getTime() ?? 0;
+    const needsRefresh = !privateKey || !expiresAt || Date.now() > expiresAt - 2 * 60 * 1000;
+    if (needsRefresh) {
+      try {
+        const tokens = await refreshCloverOAuthToken(refreshToken);
+        const accessEnc = encryptSecret(tokens.accessToken);
+        const refreshEnc = encryptSecret(tokens.refreshToken);
+        if (accessEnc && refreshEnc) {
+          await prisma.caterer.update({
+            where: { id: catererId },
+            data: {
+              cloverPrivateKeyEnc: accessEnc,
+              cloverRefreshTokenEnc: refreshEnc,
+              cloverAccessTokenExpiresAt: tokens.accessTokenExpiresAt
+            }
+          });
+          privateKey = tokens.accessToken;
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[clover] OAuth token refresh failed:", err);
+        }
+        // Fall through — may still work if access token not expired yet
+      }
+    }
+  }
 
   if (merchantId && privateKey) {
     return {

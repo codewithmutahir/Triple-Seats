@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Building2, CreditCard, Loader2, Package, Users, UtensilsCrossed } from "lucide-react";
+import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,6 +18,22 @@ export type CatererProfile = import("@/lib/settings-types").SettingsProfile;
 
 const VALID_TABS = ["profile", "packages", "menu", "team", "payments"] as const;
 type SettingsTab = (typeof VALID_TABS)[number];
+
+const OAUTH_TOAST: Record<string, { type: "success" | "error"; message: string }> = {
+  connected: { type: "success", message: "Clover connected via OAuth" },
+  oauth_denied: { type: "error", message: "Clover authorization was denied" },
+  oauth_failed: { type: "error", message: "Clover OAuth failed — try again" },
+  oauth_invalid_state: { type: "error", message: "OAuth session expired — try Connect again" },
+  oauth_missing_code: { type: "error", message: "Clover did not return an auth code" },
+  oauth_missing_merchant: { type: "error", message: "Clover did not return a merchant ID" },
+  oauth_merchant_taken: {
+    type: "error",
+    message: "That Clover merchant is already linked to another account"
+  },
+  oauth_not_configured: { type: "error", message: "Clover OAuth app credentials are not set" },
+  oauth_login_required: { type: "error", message: "Log in to Tripleseats, then Connect Clover again" },
+  oauth_encrypt_failed: { type: "error", message: "Could not store Clover tokens securely" }
+};
 
 function parseTab(raw: string | null): SettingsTab {
   if (raw && VALID_TABS.includes(raw as SettingsTab)) {
@@ -34,6 +51,16 @@ function SettingsPageInner() {
   const { data: profile, isLoading: loading, isFetching: refreshing, error: queryError } =
     useSettingsProfileQuery();
   const error = queryError?.message ?? null;
+
+  useEffect(() => {
+    const flag = searchParams.get("clover");
+    if (!flag) return;
+    const cfg = OAUTH_TOAST[flag];
+    if (cfg?.type === "success") toast.success(cfg.message);
+    else if (cfg?.type === "error") toast.error(cfg.message);
+    // Drop query noise but keep payments tab
+    router.replace(`/dashboard/settings?tab=payments`);
+  }, [searchParams, router]);
 
   const handleTabSwitch = useCallback(
     (tab: string) => {

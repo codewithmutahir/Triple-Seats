@@ -38,6 +38,7 @@ import { menuItemsRouter } from "./routes/menu-items";
 import { packagesRouter } from "./routes/packages";
 import { paymentsRouter } from "./routes/payments";
 import { handleCloverWebhook } from "./routes/clover-webhooks";
+import { cloverOAuthRouter } from "./routes/clover-oauth";
 import { quotesRouter } from "./routes/quotes";
 import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
@@ -190,6 +191,7 @@ function createApp() {
 
   app.use("/api", generalLimiter);
   app.use("/api/caterer", catererRouter);
+  app.use("/api/clover", cloverOAuthRouter);
   app.use("/api/caterers", caterersRouter);
   app.use("/api/dashboard", dashboardRouter);
   app.use("/api/bookings", bookingsRouter);

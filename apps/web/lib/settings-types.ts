@@ -44,6 +44,8 @@ export type SettingsCloverConnection = {
   connected: boolean;
   configured: boolean;
   source: "caterer" | "env" | "none";
+  oauthConnected: boolean;
+  oauthAvailable: boolean;
   merchantId: string | null;
   publicKey: string | null;
   hasPrivateKey: boolean;
