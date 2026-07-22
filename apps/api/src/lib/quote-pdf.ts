@@ -611,9 +611,9 @@ export function buildCustomerQuotePdfDocument(
 
 export async function generateCustomerQuotePdfBuffer(quote: QuoteWithRelations): Promise<Buffer> {
   try {
-    const menuPreferences = quote.eventId
-      ? await loadMenuPreferencesForEvent(quote.eventId)
-      : [];
+    const hasPackage = quote.lineItems.some((item) => item.unitType === "tiered_per_head");
+    const menuPreferences =
+      hasPackage && quote.eventId ? await loadMenuPreferencesForEvent(quote.eventId) : [];
     const buffer = await renderToBuffer(buildCustomerQuotePdfDocument(quote, menuPreferences));
     return Buffer.from(buffer);
   } catch (err) {

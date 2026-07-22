@@ -37,9 +37,14 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    const error = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    const error = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      message?: string;
+      revision?: number;
+      code?: string;
+    };
     const message = error.error ?? error.message ?? parseApiError(error, res.status, res.statusText);
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, error as Record<string, unknown>);
   }
 
   if (res.status === 204) {

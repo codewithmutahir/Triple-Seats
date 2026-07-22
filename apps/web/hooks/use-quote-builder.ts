@@ -49,24 +49,59 @@ function publishQuoteRevision(quoteId: string, revision: number) {
   localStorage.setItem(key, String(revision));
 }
 
-function mergeOpsBatchResult(old: BuilderData, result: ApplyQuoteOpsResponse): BuilderData {
+function mergeOpsBatchResult(
+  old: BuilderData,
+  result: ApplyQuoteOpsResponse,
+  options?: { excludeItemIds?: ReadonlySet<string> }
+): BuilderData {
   publishQuoteRevision(result.quote.id, result.revision);
 
-  const serverItems = result.quote.lineItems;
+  const excludeItemIds = options?.excludeItemIds ?? new Set<string>();
+  const oldIds = new Set(old.quote.lineItems.map((item) => item.id));
+  const serverItems = result.quote.lineItems.filter((item) => !excludeItemIds.has(item.id));
   const serverHasPackage = serverItems.some((item) => item.unitType === "tiered_per_head");
   const optimisticPackages = old.quote.lineItems.filter(
     (item) => item.unitType === "tiered_per_head" && item.id.startsWith("temp_pkg_")
   );
+  const optimisticTemps = old.quote.lineItems.filter(
+    (item) => item.id.startsWith("temp_") && !item.id.startsWith("temp_pkg_")
+  );
 
-  // If a guest-count (or other) batch returns before add_package commits,
-  // keep the optimistic package line so the summary doesn't flicker empty.
-  const lineItems =
-    !serverHasPackage && optimisticPackages.length > 0
-      ? [
-          ...serverItems.filter((item) => item.unitType !== "tiered_per_head"),
-          ...optimisticPackages
-        ]
-      : serverItems;
+  // Keep server rows the UI still has. Drop rows the user already removed
+  // optimistically (not in oldIds) so a slower batch cannot resurrect them.
+  // Brand-new server rows are kept only when a matching temp is still present
+  // (add in flight) or they are package lines needed after temp_pkg remap.
+  const keptServer = serverItems.filter((item) => {
+    if (excludeItemIds.has(item.id)) return false;
+    if (oldIds.has(item.id)) return true;
+    if (item.unitType === "tiered_per_head") {
+      return optimisticPackages.length === 0;
+    }
+    return optimisticTemps.some(
+      (temp) =>
+        temp.category === item.category &&
+        temp.name === item.name &&
+        temp.unitType === item.unitType
+    );
+  });
+
+  const pendingTemps = optimisticTemps.filter((temp) => {
+    // Drop temp once a matching server row exists (caller may still remap id).
+    return !keptServer.some(
+      (item) =>
+        item.category === temp.category &&
+        item.name === temp.name &&
+        item.unitType === temp.unitType
+    );
+  });
+
+  let lineItems = [...keptServer, ...pendingTemps];
+  if (!serverHasPackage && optimisticPackages.length > 0) {
+    lineItems = [
+      ...lineItems.filter((item) => item.unitType !== "tiered_per_head"),
+      ...optimisticPackages
+    ];
+  }
 
   return {
     ...old,
@@ -199,6 +234,14 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     qc.setQueryData<BuilderData>(builderKey, (old: BuilderData | undefined) => (old ? updater(old) : old));
   };
 
+  const mergeBuilderOpsResult = (old: BuilderData, result: ApplyQuoteOpsResponse): BuilderData =>
+    mergeOpsBatchResult(old, result, {
+      excludeItemIds: eventId ? getQuoteOpsQueue(eventId).getPendingRemoveIds() : undefined
+    });
+
+  const isSilentMutationError = (err: unknown) =>
+    Boolean(err && typeof err === "object" && "silent" in err && (err as { silent?: boolean }).silent);
+
   const selectPackageOptimistic = (
     pkg: CateringPackage,
     packages: CateringPackage[],
@@ -246,6 +289,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       if (!old?.quote) return old;
       return {
         ...old,
+        menuPreferences: [],
         quote: {
           ...old.quote,
           lineItems: old.quote.lineItems.filter((item) => item.unitType !== "tiered_per_head")
@@ -306,10 +350,46 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
       return { tempItem, itemKey };
     },
-    onSuccess: (result, _vars, ctx) => {
+    onSuccess: (result, vars, ctx) => {
       if (!ctx?.tempItem) return;
+
+      const queue = eventId ? getQuoteOpsQueue(eventId) : null;
+      if (queue?.isCancelledClientRequest(ctx.tempItem.id)) {
+        patchBuilder((old) => mergeBuilderOpsResult(old, result));
+        const serverMatch =
+          resolveCreatedLineItem(result.quote.lineItems, result.quote.lineItems, {
+            category: ctx.tempItem.category,
+            name: ctx.tempItem.name,
+            quantity: ctx.tempItem.quantity,
+            unitPrice: ctx.tempItem.unitPrice,
+            unitType: ctx.tempItem.unitType,
+            menuItemId: ctx.tempItem.menuItemId ?? undefined
+          }) ??
+          result.quote.lineItems.find(
+            (item) =>
+              item.category === ctx.tempItem.category &&
+              item.name === ctx.tempItem.name &&
+              item.unitType === ctx.tempItem.unitType
+          );
+        if (serverMatch) {
+          queue.tombstoneItem(serverMatch.id);
+          void queue.enqueueAndWait(vars.quoteId, {
+            type: "remove_item",
+            itemId: serverMatch.id
+          });
+          patchBuilder((old) => ({
+            ...old,
+            quote: {
+              ...old.quote,
+              lineItems: old.quote.lineItems.filter((item) => item.id !== serverMatch.id)
+            }
+          }));
+        }
+        return;
+      }
+
       patchBuilder((old) => {
-        const merged = mergeOpsBatchResult(old, result);
+        const merged = mergeBuilderOpsResult(old, result);
         const resolved = resolveCreatedLineItem(result.quote.lineItems, merged.quote.lineItems, {
           category: ctx.tempItem.category,
           name: ctx.tempItem.name,
@@ -347,15 +427,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       });
     },
     onError: (err, _vars, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
-      if (
-        err &&
-        typeof err === "object" &&
-        "silent" in err &&
-        (err as { silent?: boolean }).silent
-      ) {
-        return;
-      }
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx?.tempItem) return;
       patchBuilder((old) => {
@@ -389,6 +461,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onMutate: async ({ itemId }) => {
       if (!canWrite) return denyMutation();
+      if (eventId) getQuoteOpsQueue(eventId).tombstoneItem(itemId);
       const prev = qc.getQueryData<BuilderData>(builderKey);
       const removed = prev?.quote.lineItems.find((item) => item.id === itemId);
       if (removed) {
@@ -408,18 +481,23 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }));
       return { removed };
     },
-    onSuccess: (_result, vars, ctx) => {
+    onSuccess: (result, vars, ctx) => {
       if (!ctx) return;
-      patchBuilder((old) => ({
-        ...old,
-        quote: {
-          ...old.quote,
-          lineItems: old.quote.lineItems.filter((item) => item.id !== vars.itemId)
-        }
-      }));
+      // Must merge revision + server totals — skipping this left baseRevision stale
+      // and caused 409 conflicts / dropped ops on rapid removes.
+      patchBuilder((old) => {
+        const merged = mergeBuilderOpsResult(old, result);
+        return {
+          ...merged,
+          quote: {
+            ...merged.quote,
+            lineItems: merged.quote.lineItems.filter((item) => item.id !== vars.itemId)
+          }
+        };
+      });
     },
     onError: (err, vars, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx?.removed) return;
       patchBuilder((old) => {
@@ -486,12 +564,12 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     onSuccess: (result, vars, ctx) => {
       if (!ctx) return;
       patchBuilder((old) => {
-        const merged = mergeOpsBatchResult(old, result);
+        const merged = mergeBuilderOpsResult(old, result);
         return mergeQuoteLineItem(merged, vars.quoteId, vars.itemId, result.quote);
       });
     },
     onError: (err, vars, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx?.previousItem) return;
       patchBuilder((old) => ({
@@ -660,7 +738,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
 
       patchBuilder((old) => {
-        const merged = mergeOpsBatchResult(old, result);
+        const merged = mergeBuilderOpsResult(old, result);
         return {
           ...merged,
           quote: {
@@ -675,7 +753,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       }
     },
     onError: (err, { packageId }, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (packageId !== latestPackageIdRef.current || packageRemovedRef.current) return;
@@ -702,13 +780,16 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onSuccess: (result, _vars, ctx) => {
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
-      patchBuilder((old) => mergeOpsBatchResult(old, result));
+      patchBuilder((old) => ({
+        ...mergeBuilderOpsResult(old, result),
+        menuPreferences: []
+      }));
       if (eventId) {
         void qc.invalidateQueries({ queryKey: queryKeys.events.menuPreferences(eventId) });
       }
     },
     onError: (err, _vars, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (!ctx || ctx.opId !== packageOpSeqRef.current) return;
       if (!packageRemovedRef.current || latestPackageIdRef.current !== null) return;
@@ -774,7 +855,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     },
     onSuccess: (result, { guestCount }) => {
       patchBuilder((old) => {
-        const merged = mergeOpsBatchResult(old, result);
+        const merged = mergeBuilderOpsResult(old, result);
         const latest = latestGuestCountRef.current;
         // A slower earlier guest-count batch must not overwrite a newer value.
         if (latest != null && guestCount !== latest) {
@@ -808,7 +889,7 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       });
     },
     onError: (err, { guestCount }, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (guestCount !== latestGuestCountRef.current) return;
       if (ctx?.prev) qc.setQueryData(builderKey, ctx.prev);
@@ -862,10 +943,10 @@ export function useQuoteBuilderMutations(eventId: string | null) {
       return { prev };
     },
     onSuccess: (result) => {
-      patchBuilder((old) => mergeOpsBatchResult(old, result));
+      patchBuilder((old) => mergeBuilderOpsResult(old, result));
     },
     onError: (err, _vars, ctx) => {
-      if (isQuoteOpsConflict(err)) return;
+      if (isSilentMutationError(err) || isQuoteOpsConflict(err)) return;
       if (shouldKeepOptimisticLineItems(eventId)) return;
       if (ctx?.prev) qc.setQueryData(builderKey, ctx.prev);
       handleMutationError(err, ctx, "Failed to update package tier");
@@ -925,15 +1006,17 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     const quoteId = qc.getQueryData<BuilderData>(builderKey)?.quote.id;
     if (!quoteId) return;
 
-    patchBuilder((old) => ({
-      ...old,
-      quote: {
-        ...old.quote,
-        lineItems: old.quote.lineItems.filter((item) => item.id !== itemId)
-      }
-    }));
-
-    if (itemId.startsWith("temp_")) return;
+    if (itemId.startsWith("temp_")) {
+      if (eventId) getQuoteOpsQueue(eventId).cancelPendingAdd(itemId);
+      patchBuilder((old) => ({
+        ...old,
+        quote: {
+          ...old.quote,
+          lineItems: old.quote.lineItems.filter((item) => item.id !== itemId)
+        }
+      }));
+      return;
+    }
 
     removeItemMutation.mutate({ quoteId, itemId });
   };
@@ -989,7 +1072,20 @@ export function useQuoteBuilderMutations(eventId: string | null) {
     queue.setRevisionProvider(
       () => qc.getQueryData<BuilderData>(builderKey)?.quote.revision ?? 0
     );
-    return () => queue.setRevisionProvider(null);
+    queue.setRevisionSync((revision) => {
+      qc.setQueryData<BuilderData>(builderKey, (old) => {
+        if (!old?.quote) return old;
+        publishQuoteRevision(old.quote.id, revision);
+        return {
+          ...old,
+          quote: { ...old.quote, revision }
+        };
+      });
+    });
+    return () => {
+      queue.setRevisionProvider(null);
+      queue.setRevisionSync(null);
+    };
   }, [eventId, qc, builderKey]);
 
   useEffect(() => {

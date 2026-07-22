@@ -5,7 +5,8 @@ import type { QuoteOp } from "@/lib/quote-ops-types";
  * - guest count: keep only the latest
  * - package add/remove: clear package + tier ops, then append
  * - package tier: keep only the latest
- * - update_item: merge patches for the same itemId
+ * - update_item: merge patches for the same itemId; drop if item already removed
+ * - remove_item: dedupe; drop pending updates for that item
  */
 export function coalesceQuoteOps(ops: QuoteOp[], next: QuoteOp): QuoteOp[] {
   let nextOps = [...ops];
@@ -27,7 +28,23 @@ export function coalesceQuoteOps(ops: QuoteOp[], next: QuoteOp): QuoteOp[] {
     nextOps = nextOps.filter((existing) => existing.type !== "set_package_tier");
   }
 
+  if (next.type === "remove_item") {
+    nextOps = nextOps.filter(
+      (existing) =>
+        !(existing.type === "remove_item" && existing.itemId === next.itemId) &&
+        !(existing.type === "update_item" && existing.itemId === next.itemId)
+    );
+    nextOps.push(next);
+    return nextOps;
+  }
+
   if (next.type === "update_item") {
+    const alreadyRemoved = nextOps.some(
+      (existing) => existing.type === "remove_item" && existing.itemId === next.itemId
+    );
+    if (alreadyRemoved) {
+      return nextOps;
+    }
     for (let i = nextOps.length - 1; i >= 0; i -= 1) {
       const existing = nextOps[i];
       if (existing?.type === "update_item" && existing.itemId === next.itemId) {

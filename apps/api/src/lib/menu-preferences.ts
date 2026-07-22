@@ -81,6 +81,15 @@ export async function syncMenuPreferencesForPackage(
     }
   });
 
+  // Keep dish choices on overlapping slots, but bind them to the active package
+  // so kitchen-sheet filters never mix packages.
+  if (newSlots.length > 0) {
+    await prisma.menuPreference.updateMany({
+      where: { eventId, slotLabel: { in: newSlots } },
+      data: { packageId }
+    });
+  }
+
   if (newSlots.length === 0) return;
 
   const categoriesNeeded = [
@@ -141,6 +150,23 @@ export async function loadMenuPreferencesForEvent(
     where: { eventId },
     orderBy: { slotLabel: "asc" }
   });
+}
+
+/** Clear all kitchen-sheet menu selections for an event (e.g. package removed). */
+export async function clearMenuPreferencesForEvent(eventId: string): Promise<void> {
+  await prisma.menuPreference.deleteMany({ where: { eventId } });
+}
+
+/**
+ * Prefs used on the kitchen sheet must match the active package.
+ * Leftover rows from a prior package selection are ignored.
+ */
+export function filterMenuPreferencesForPackage(
+  preferences: MenuPreferenceRow[],
+  packageId: string | null | undefined
+): MenuPreferenceRow[] {
+  if (!packageId) return [];
+  return preferences.filter((pref) => pref.packageId === packageId);
 }
 
 export function parseMenuPreferencesPatch(body: unknown):
