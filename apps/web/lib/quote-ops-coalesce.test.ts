@@ -86,4 +86,30 @@ describe("coalesceQuoteOps", () => {
       { type: "set_guest_count", guestCount: 20 }
     ]);
   });
+
+  it("dedupes remove_item and drops updates for removed ids", () => {
+    let ops: QuoteOp[] = [];
+    ops = coalesceQuoteOps(ops, {
+      type: "update_item",
+      itemId: "a",
+      patch: { quantity: 2 }
+    });
+    ops = coalesceQuoteOps(ops, { type: "remove_item", itemId: "a" });
+    ops = coalesceQuoteOps(ops, { type: "remove_item", itemId: "a" });
+    ops = coalesceQuoteOps(ops, {
+      type: "update_item",
+      itemId: "a",
+      patch: { quantity: 5 }
+    });
+    ops = coalesceQuoteOps(ops, {
+      type: "update_item",
+      itemId: "b",
+      patch: { quantity: 1 }
+    });
+
+    expect(ops).toEqual([
+      { type: "remove_item", itemId: "a" },
+      { type: "update_item", itemId: "b", patch: { quantity: 1 } }
+    ]);
+  });
 });

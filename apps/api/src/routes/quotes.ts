@@ -1084,7 +1084,14 @@ router.post("/:id/kitchen-sheet", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Quote not found." });
     }
 
-    const menuPreferences = await loadMenuPreferencesForEvent(quoteForSheet.eventId);
+    // Prefs are event-scoped leftovers after package remove; only load them
+    // when the quote still has a package line. PDF builder also filters by slots.
+    const hasPackage = quoteForSheet.lineItems.some(
+      (item) => item.unitType === "tiered_per_head"
+    );
+    const menuPreferences = hasPackage
+      ? await loadMenuPreferencesForEvent(quoteForSheet.eventId)
+      : [];
     const { generateKitchenSheetPdfBuffer } = await loadKitchenSheetPdf();
     const buffer = await generateKitchenSheetPdfBuffer({
       quote: quoteForSheet,

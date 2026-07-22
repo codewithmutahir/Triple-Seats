@@ -4,6 +4,7 @@ import { format } from "date-fns";
 import { ChefHat, ClipboardList, FileText, Loader2, Send, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEventPaymentsQuery } from "@/hooks/use-payments-query";
 import { useQuoteBuilderQuery } from "@/hooks/use-quote-builder";
 import { api } from "@/lib/api";
+import { drainQuoteBuilderMutations } from "@/lib/quote-builder-mutations";
 import { buildExportPayloadFromBuilder, downloadPdfFromResponse } from "@/lib/quote-export";
 import { formatUsd } from "@/lib/quote-totals";
 import { parseApiError } from "@/lib/user-facing-error";
@@ -23,6 +25,7 @@ type EventDocumentsTabProps = {
 type DocumentKind = "quote" | "kitchen" | "labor";
 
 export function EventDocumentsTab({ eventId }: EventDocumentsTabProps) {
+  const qc = useQueryClient();
   const { data: paymentsData } = useEventPaymentsQuery(eventId);
   const { data: builderData, isLoading } = useQuoteBuilderQuery(eventId);
   const quote = builderData?.quote;
@@ -46,6 +49,13 @@ export function EventDocumentsTab({ eventId }: EventDocumentsTabProps) {
       kind === "quote" ? setPdfLoading : kind === "kitchen" ? setKitchenLoading : setLaborLoading;
     setLoading(true);
     try {
+      // Drain pending quote ops so PDFs never read a stale DB snapshot.
+      try {
+        await drainQuoteBuilderMutations(qc, eventId);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Still saving changes — please try again.");
+        return;
+      }
       const res =
         kind === "quote"
           ? await api.quotes.pdf(quoteId, payload)
@@ -96,6 +106,7 @@ export function EventDocumentsTab({ eventId }: EventDocumentsTabProps) {
 
     setSendLoading(true);
     try {
+      await drainQuoteBuilderMutations(qc, eventId);
       await api.quotes.send(quoteId, payload);
       toast.success("Quote send started — email will go out shortly.");
     } catch (err) {

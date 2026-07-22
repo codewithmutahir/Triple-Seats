@@ -48,7 +48,14 @@ function isRetryableFlushError(err: unknown): boolean {
 function toUserError(err: unknown): QuoteOpsSaveError {
   if (err instanceof QuoteOpsSaveError) return err;
   if (err instanceof ApiError && err.status === 409) {
-    return new QuoteOpsConflictError(err.message || "Quote was updated elsewhere.");
+    const revision =
+      typeof err.data?.revision === "number" && Number.isFinite(err.data.revision)
+        ? err.data.revision
+        : null;
+    return new QuoteOpsConflictError(
+      err.message || "Quote was updated elsewhere.",
+      revision
+    );
   }
   if (err instanceof ApiError) {
     return new QuoteOpsSaveError(err.message, false);
@@ -73,6 +80,11 @@ export class QuoteOpsQueue {
   private quoteId: string | null = null;
   private lastError: QuoteOpsSaveError | null = null;
   private getBaseRevision: (() => number) | null = null;
+  private syncRevision: ((revision: number) => void) | null = null;
+  /** Temp add clientRequestIds the user removed before the add flushed. */
+  private cancelledClientRequestIds = new Set<string>();
+  /** Real item ids removed optimistically; excluded from merge until server confirms. */
+  private tombstoneItemIds = new Set<string>();
 
   constructor(readonly eventId: string) {}
 
@@ -92,8 +104,47 @@ export class QuoteOpsQueue {
     this.getBaseRevision = provider;
   }
 
+  setRevisionSync(sync: ((revision: number) => void) | null) {
+    this.syncRevision = sync;
+  }
+
   getPendingCount(): number {
     return this.ops.length + (this.inFlight ? 1 : 0);
+  }
+
+  getPendingRemoveIds(): Set<string> {
+    const ids = new Set(this.tombstoneItemIds);
+    for (const op of this.ops) {
+      if (op.type === "remove_item") ids.add(op.itemId);
+    }
+    return ids;
+  }
+
+  isCancelledClientRequest(clientRequestId: string): boolean {
+    return this.cancelledClientRequestIds.has(clientRequestId);
+  }
+
+  /**
+   * Mark a pending add_item as cancelled (user removed the optimistic temp row).
+   * The op stays queued so its waiter is still flushed; sendBatch filters it out.
+   * If already in flight, onSuccess must check isCancelledClientRequest.
+   */
+  cancelPendingAdd(clientRequestId: string) {
+    this.cancelledClientRequestIds.add(clientRequestId);
+    this.emit();
+  }
+
+  tombstoneItem(itemId: string) {
+    if (!itemId || itemId.startsWith("temp_")) return;
+    this.tombstoneItemIds.add(itemId);
+  }
+
+  clearConfirmedTombstones(serverItemIds: ReadonlySet<string>) {
+    for (const id of [...this.tombstoneItemIds]) {
+      if (!serverItemIds.has(id)) {
+        this.tombstoneItemIds.delete(id);
+      }
+    }
   }
 
   hasFailed(): boolean {
@@ -122,6 +173,9 @@ export class QuoteOpsQueue {
   }
 
   private enqueue(op: QuoteOp): boolean {
+    if (op.type === "remove_item") {
+      this.tombstoneItem(op.itemId);
+    }
     this.ops = coalesceQuoteOps(this.ops, op);
     this.setLastError(null);
     this.emit();
@@ -156,7 +210,8 @@ export class QuoteOpsQueue {
     quoteId: string,
     batch: QuoteOp[],
     startedAt: number,
-    attempt = 0
+    attempt = 0,
+    conflictRetried = false
   ): Promise<ApplyQuoteOpsResponse> {
     const baseRevision = this.getBaseRevision?.();
     try {
@@ -173,11 +228,22 @@ export class QuoteOpsQueue {
         attempt: attempt + 1,
         baseRevision
       });
+      this.clearConfirmedTombstones(new Set(result.quote.lineItems.map((item) => item.id)));
       return result;
     } catch (err) {
+      if (isRevisionConflictError(err) && !conflictRetried) {
+        const conflict = toUserError(err);
+        const serverRevision =
+          conflict instanceof QuoteOpsConflictError ? conflict.serverRevision : null;
+        if (serverRevision != null) {
+          this.syncRevision?.(serverRevision);
+          // Self-inflicted stale revision (e.g. remove skipped merge) — retry once.
+          return this.sendBatch(quoteId, batch, startedAt, attempt, true);
+        }
+      }
       if (attempt < MAX_FLUSH_RETRIES - 1 && isRetryableFlushError(err)) {
         await sleep(2 ** attempt * 200);
-        return this.sendBatch(quoteId, batch, startedAt, attempt + 1);
+        return this.sendBatch(quoteId, batch, startedAt, attempt + 1, conflictRetried);
       }
       throw err;
     }
@@ -200,11 +266,30 @@ export class QuoteOpsQueue {
     // Capture ops + waiters together. Waiters registered after this splice
     // belong to a later batch and must NOT resolve with this result — that
     // race was wiping optimistic packages / firing prefs too early.
-    const batch = this.ops.splice(0);
+    const rawBatch = this.ops.splice(0);
     const batchWaiters = this.waiters.splice(0);
+    const batch = rawBatch.filter((op) => {
+      if (op.type === "add_item" && this.cancelledClientRequestIds.has(op.clientRequestId)) {
+        return false;
+      }
+      return true;
+    });
     const quoteId = this.quoteId;
     const startedAt = performance.now();
     this.emit();
+
+    if (batch.length === 0) {
+      // All ops were cancelled (e.g. temp add then remove). Resolve waiters with
+      // a synthetic no-op by applying an empty guest-count echo — instead, reject
+      // silently so mutations don't treat this as success with stale line items.
+      const emptyError = Object.assign(new Error("Quote op cancelled"), { silent: true });
+      this.rejectWaiters(batchWaiters, emptyError);
+      this.emit();
+      if (this.ops.length > 0) {
+        this.scheduleFlush();
+      }
+      return null;
+    }
 
     this.inFlight = this.sendBatch(quoteId, batch, startedAt)
       .then((result) => {
@@ -217,8 +302,10 @@ export class QuoteOpsQueue {
         const saveLatencyMs = Math.round(performance.now() - startedAt);
 
         if (err instanceof QuoteOpsConflictError) {
-          this.ops = [];
-          this.setLastError(null);
+          // Keep the failed batch + any ops queued while in flight so the user
+          // can retry after reload. Do not wipe later pending work.
+          this.ops.unshift(...batch);
+          this.setLastError(err);
           quoteAnalytics.opsBatchFailed({
             eventId: this.eventId,
             quoteId,
@@ -228,10 +315,7 @@ export class QuoteOpsQueue {
             message: err.message,
             conflict: true
           });
-          // Conflict invalidates the quote — reject this batch and any waiters
-          // that arrived while the request was in flight.
           this.rejectWaiters(batchWaiters, err);
-          this.rejectWaiters(this.waiters.splice(0), err);
           this.notifyConflict(err);
           throw err;
         }

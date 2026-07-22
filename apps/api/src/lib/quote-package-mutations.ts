@@ -3,7 +3,10 @@ import { prisma } from "@tripeseats/database";
 
 import { calculateQuoteTotals, formatTierLabel, getActiveTier, tiersForCustomerType } from "./quote-totals";
 import { quoteInclude } from "./quote-serialize";
-import { syncMenuPreferencesForPackage } from "./menu-preferences";
+import {
+  clearMenuPreferencesForEvent,
+  syncMenuPreferencesForPackage
+} from "./menu-preferences";
 import { persistQuoteTotals } from "./persist-quote-totals";
 
 export async function loadQuoteForCaterer(quoteId: string, catererId: string) {
@@ -109,6 +112,12 @@ export async function removePackageFromQuote(
   await prisma.quoteLineItem.deleteMany({
     where: { quoteId, unitType: "tiered_per_head" }
   });
+
+  // Kitchen sheet reads menu_preferences by eventId — clear so removed package
+  // dishes cannot appear on the next PDF after the package is gone.
+  if (quote.eventId) {
+    await clearMenuPreferencesForEvent(quote.eventId);
+  }
 
   if (!options?.deferTotals) {
     await persistQuoteTotals(quoteId);

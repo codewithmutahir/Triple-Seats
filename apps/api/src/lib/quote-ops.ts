@@ -255,8 +255,10 @@ async function applyUpdateItemOp(quoteId: string, op: Extract<QuoteOp, { type: "
   const existing = await prisma.quoteLineItem.findFirst({
     where: { id: op.itemId, quoteId }
   });
+  // Idempotent: item may already be removed in an earlier op in this batch
+  // (or by a concurrent optimistic remove). Do not fail the whole batch.
   if (!existing) {
-    throw new QuoteOpError("Line item not found.", 404);
+    return;
   }
 
   const body = op.patch;

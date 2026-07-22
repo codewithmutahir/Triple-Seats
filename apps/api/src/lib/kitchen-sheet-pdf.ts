@@ -212,7 +212,16 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
   const packageItem = packages[0];
   const packageItems = packageItem?.package?.items ?? [];
   const kitchenMatrix = packageItem?.package?.kitchenQtys ?? [];
-  const sortedPrefs = sortMenuPreferences(menuPreferences, packageItems);
+  // Only render package menu prefs when a package is on the quote. Leftover
+  // event prefs after package removal must never appear on the kitchen sheet.
+  // Match by current package slots (not packageId) — overlapping slots can keep
+  // a prior packageId when skipDuplicates preserves caterer dish choices.
+  const activeSlotSet = new Set(expandPackageSlotLabels(packageItems));
+  const activePrefs =
+    packageItem != null && activeSlotSet.size > 0
+      ? menuPreferences.filter((pref) => activeSlotSet.has(pref.slotLabel))
+      : [];
+  const sortedPrefs = sortMenuPreferences(activePrefs, packageItems);
   const prefGroups = (() => {
     const groups: { label: string; items: { name: string; portion: string }[] }[] = [];
     const indexByLabel = new Map<string, number>();
@@ -268,40 +277,40 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
   );
 
   const preferenceRows =
-    prefGroups.length > 0
-      ? prefGroups.flatMap((group) => [
-          React.createElement(
-            View,
-            { key: `pref-cat-${group.label}`, style: styles.categoryHeader },
-            React.createElement(
-              Text,
-              null,
-              group.items.length > 1
-                ? `${group.label.toUpperCase()} (×${group.items.length})`
-                : group.label.toUpperCase()
-            )
-          ),
-          ...group.items.map((item, idx) =>
+    packageItem == null
+      ? []
+      : prefGroups.length > 0
+        ? prefGroups.flatMap((group) => [
             React.createElement(
               View,
-              { key: `pref-${group.label}-${idx}`, style: styles.prefRow },
-              React.createElement(Text, null, `• ${item.name}`),
-              React.createElement(Text, null, item.portion)
+              { key: `pref-cat-${group.label}`, style: styles.categoryHeader },
+              React.createElement(
+                Text,
+                null,
+                group.items.length > 1
+                  ? `${group.label.toUpperCase()} (×${group.items.length})`
+                  : group.label.toUpperCase()
+              )
+            ),
+            ...group.items.map((item, idx) =>
+              React.createElement(
+                View,
+                { key: `pref-${group.label}-${idx}`, style: styles.prefRow },
+                React.createElement(Text, null, `• ${item.name}`),
+                React.createElement(Text, null, item.portion)
+              )
             )
-          )
-        ])
-      : [
-          React.createElement(
-            Text,
-            { key: "prefs-empty", style: styles.blockMeta },
-            "No menu preferences saved yet."
-          )
-        ];
+          ])
+        : [
+            React.createElement(
+              Text,
+              { key: "prefs-empty", style: styles.blockMeta },
+              "No menu preferences saved yet."
+            )
+          ];
 
   const packageMenuTitle =
-    packageItem?.name != null
-      ? `${packageItem.name.toUpperCase()} — SELECTED MENU`
-      : "Menu Preferences";
+    packageItem?.name != null ? `${packageItem.name.toUpperCase()} — SELECTED MENU` : null;
 
   const additionalRows = categoriesWithItems(nonDeliveryItems).flatMap((cat) => {
     const items = nonDeliveryItems.get(cat) ?? [];
@@ -426,7 +435,9 @@ export function buildKitchenSheetPdfDocument(input: KitchenSheetInput): React.Re
         ? React.createElement(Text, { style: styles.sectionTitle }, "Packages Selected")
         : null,
       ...packageBlocks,
-      React.createElement(Text, { style: styles.sectionTitle }, packageMenuTitle),
+      packageMenuTitle
+        ? React.createElement(Text, { style: styles.sectionTitle }, packageMenuTitle)
+        : null,
       ...preferenceRows,
       additionalRows.length > 0
         ? React.createElement(Text, { style: styles.sectionTitle }, "Additional Items")
