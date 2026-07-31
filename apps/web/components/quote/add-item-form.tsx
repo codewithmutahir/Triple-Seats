@@ -23,6 +23,7 @@ import {
 } from "@/lib/menu-item-search";
 import { equipmentUnitFromCatalog } from "@/lib/quote-line-items";
 import { formatUsd } from "@/lib/quote-totals";
+import { motion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { parseApiError } from "@/lib/user-facing-error";
 
@@ -459,7 +460,10 @@ export function AddItemForm({
             <button
               key={item.id}
               type="button"
-              className="rounded-full border bg-background px-3 py-1 text-xs transition-colors hover:bg-muted"
+              className={cn(
+                "rounded-full border bg-background px-3 py-1 text-xs hover:bg-muted",
+                motion.pressable
+              )}
               onClick={() => handleQuickAdd(item)}
             >
               {item.name}

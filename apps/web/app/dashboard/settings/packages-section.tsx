@@ -51,6 +51,7 @@ import {
   uniqueKitchenCategories,
   type KitchenQtyFormRow
 } from "@/lib/package-kitchen-qty";
+import { motion } from "@/lib/motion";
 import { formatUsd } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 
@@ -695,8 +696,9 @@ function PackageCard({
               ) : null}
               <ChevronDown
                 className={cn(
-                  "h-4 w-4 text-muted-foreground transition-transform",
-                  expanded && "rotate-180"
+                  motion.chevron,
+                  "text-muted-foreground",
+                  expanded && motion.chevronOpen
                 )}
               />
             </div>

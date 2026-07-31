@@ -13,7 +13,9 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
+import { motion } from "@/lib/motion";
 import { formatUsd, lineItemTotal } from "@/lib/quote-totals";
+import { cn } from "@/lib/utils";
 
 type LineItemRowProps = {
   item: QuoteLineItem;
@@ -76,10 +78,15 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, re
 
   const showQtyInput = !readOnly && (isEquipment || editingField === "quantity");
   const showPriceInput = !readOnly && (isEquipment || editingField === "unitPrice");
+  const isOptimistic = item.id.startsWith("temp_");
+  const rowClass = cn(
+    "rounded-md border bg-muted/20 px-3 py-2 text-sm",
+    isOptimistic && motion.listEnter
+  );
 
   if (readOnly) {
     return (
-      <li className="rounded-md border bg-muted/20 px-3 py-2 text-sm">
+      <li className={rowClass}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="font-medium">{item.name}</span>
           <span className="tabular-nums font-medium">{formatUsd(total)}</span>
@@ -90,7 +97,7 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, re
   }
 
   return (
-    <li className="rounded-md border bg-muted/20 px-3 py-2 text-sm">
+    <li className={rowClass}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-[100px] flex-1 font-medium">{item.name}</span>
 
@@ -117,7 +124,7 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, re
           ) : (
             <button
               type="button"
-              className="rounded px-1 hover:bg-muted"
+              className={cn("rounded px-1 hover:bg-muted", motion.interactive)}
               onClick={() => setEditingField("quantity")}
             >
               {item.quantity}
@@ -174,7 +181,7 @@ export function LineItemRow({ item, guestCount, category, onUpdate, onDelete, re
         ) : (
           <button
             type="button"
-            className="rounded px-1 hover:bg-muted"
+            className={cn("rounded px-1 hover:bg-muted", motion.interactive)}
             onClick={() => setEditingField("unitPrice")}
           >
             {formatUsd(item.unitPrice)}

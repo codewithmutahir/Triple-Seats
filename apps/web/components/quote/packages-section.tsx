@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { motion } from "@/lib/motion";
 import {
   formatTierLabel,
   formatTierRange,
@@ -125,7 +126,7 @@ function PackageCard({
           <CollapsibleTrigger asChild>
             <Button variant="ghost" size="sm" className="h-8 w-full justify-between px-2">
               View tiers
-              <ChevronDown className={cn("h-4 w-4 transition-transform", tiersOpen && "rotate-180")} />
+              <ChevronDown className={cn(motion.chevron, tiersOpen && motion.chevronOpen)} />
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="pt-2">
@@ -163,7 +164,7 @@ function PackageCard({
           <CollapsibleTrigger asChild>
             <Button variant="ghost" size="sm" className="h-8 w-full justify-between px-2">
               Included items
-              <ChevronDown className={cn("h-4 w-4 transition-transform", itemsOpen && "rotate-180")} />
+              <ChevronDown className={cn(motion.chevron, itemsOpen && motion.chevronOpen)} />
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="pt-1">
@@ -361,12 +362,10 @@ export function PackagesSection({
                 </Badge>
               ) : null}
             </div>
-            <ChevronDown
-              className={cn("h-4 w-4 transition-transform duration-200", sectionOpen && "rotate-180")}
-            />
+            <ChevronDown className={cn(motion.chevron, sectionOpen && motion.chevronOpen)} />
           </button>
         </CollapsibleTrigger>
-        <CollapsibleContent className="overflow-visible data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
+        <CollapsibleContent className="data-[state=open]:overflow-visible">
           <CardContent className="space-y-4 border-t pt-4">
             <p className="text-sm text-muted-foreground">
               Guest count sets per-head totals. Choose a package tier separately.

@@ -1,7 +1,7 @@
 "use client";
 
 import { format } from "date-fns";
-import { CheckSquare, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { CheckSquare, ChevronDown, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -414,11 +414,12 @@ export default function TasksPage() {
               <div className="flex items-center justify-between gap-2">
                 <CollapsibleTrigger asChild>
                   <Button type="button" variant="ghost" size="sm" className="gap-1 px-0">
-                    {completedOpen ? (
-                      <ChevronDown className="h-4 w-4" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4" />
-                    )}
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+                        !completedOpen && "-rotate-90"
+                      )}
+                    />
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Completed on this page ({completedTasks.length})
                     </span>
