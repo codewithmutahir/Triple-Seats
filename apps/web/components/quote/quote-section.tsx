@@ -9,6 +9,7 @@ import type { ItemCategory, MenuItem, QuoteLineItem } from "@/components/quote/t
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { motion } from "@/lib/motion";
 import { formatUsd, lineItemTotal } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 
@@ -69,7 +70,12 @@ export function QuoteSection({
     0
   );
   const isB2B = customerType === "b2b";
-  const canAddItems = !isB2B || category === "equipment" || category === "delivery";
+  // B2B hides food à-la-carte adds; equipment / delivery / labor stay editable.
+  const canAddItems =
+    !isB2B ||
+    category === "equipment" ||
+    category === "delivery" ||
+    category === "labor";
 
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
@@ -77,7 +83,10 @@ export function QuoteSection({
         <CollapsibleTrigger asChild>
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-2 p-4 text-left hover:bg-muted/40"
+            className={cn(
+              "flex w-full items-center justify-between gap-2 p-4 text-left hover:bg-muted/40",
+              motion.interactive
+            )}
           >
             <div className="flex flex-wrap items-center gap-2">
               <Icon className="h-5 w-5 text-primary" />
@@ -90,14 +99,12 @@ export function QuoteSection({
               {items.length > 0 ? (
                 <span className="text-sm font-medium tabular-nums">{formatUsd(sectionSubtotal)}</span>
               ) : null}
-              <ChevronDown
-                className={cn("h-4 w-4 transition-transform duration-200", isOpen && "rotate-180")}
-              />
+              <ChevronDown className={cn(motion.chevron, isOpen && motion.chevronOpen)} />
             </div>
           </button>
         </CollapsibleTrigger>
-        <CollapsibleContent className="overflow-visible data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
-          <CardContent className="space-y-3 overflow-visible border-t pt-4">
+        <CollapsibleContent className="data-[state=open]:overflow-visible">
+          <CardContent className="space-y-3 border-t pt-4">
             {sectionHint ? (
               <p className="text-xs text-muted-foreground">{sectionHint}</p>
             ) : null}

@@ -1011,7 +1011,10 @@ function QuoteBuilderPage() {
               >
                 <span>Quote total: {formatUsd(totals.grandTotal)}</span>
                 <ChevronUp
-                  className={cn("h-4 w-4 transition-transform", mobileSummaryOpen && "rotate-180")}
+                  className={cn(
+                    "h-4 w-4 shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+                    mobileSummaryOpen && "rotate-180"
+                  )}
                 />
               </button>
             </CollapsibleTrigger>

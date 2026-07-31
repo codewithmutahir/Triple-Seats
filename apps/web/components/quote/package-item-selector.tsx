@@ -8,6 +8,7 @@ import type { UiPackageSelectionEntry } from "@/lib/package-selections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { motion } from "@/lib/motion";
 import { formatUsd } from "@/lib/quote-totals";
 import { cn } from "@/lib/utils";
 
@@ -115,12 +116,7 @@ export function PackageItemSelector({
                 {currentCount}/{allowedCount} selected
               </Badge>
             </div>
-            <ChevronDown
-              className={cn(
-                "h-4 w-4 transition-transform duration-200",
-                isOpen && "rotate-180"
-              )}
-            />
+            <ChevronDown className={cn(motion.chevron, isOpen && motion.chevronOpen)} />
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>

@@ -180,7 +180,7 @@ function NavLink({
       onClick={onNavigate}
       onMouseEnter={() => prefetchRoute(qc, href)}
       className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-white/90 transition-colors hover:bg-white/10",
+        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-white/90 transition-[colors,background-color] duration-150 ease-out hover:bg-white/10",
         active && "bg-white/15 text-white"
       )}
     >
@@ -234,13 +234,13 @@ function MobileBottomNav() {
               href={href}
               onMouseEnter={() => prefetchRoute(qc, href)}
               className={cn(
-                "flex min-w-[3.25rem] flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-medium text-white/80",
+                "flex min-w-[3.25rem] flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-medium text-white/80 transition-colors duration-150 ease-out",
                 active && "text-white"
               )}
             >
               <span
                 className={cn(
-                  "flex h-9 w-9 items-center justify-center rounded-full transition-colors",
+                  "flex h-9 w-9 items-center justify-center rounded-full transition-colors duration-150 ease-out",
                   active ? "bg-white/15" : "bg-transparent"
                 )}
               >
