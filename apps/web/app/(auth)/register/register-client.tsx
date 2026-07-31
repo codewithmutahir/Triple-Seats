@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { SiteFooter } from "@/components/site-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -96,9 +97,9 @@ export function RegisterClient() {
             ))}
           </ul>
         </div>
-        <p className="relative z-10 mt-10 text-xs text-white/50 lg:mt-0">
-          © {new Date().getFullYear()} Tripeseats. All rights reserved.
-        </p>
+        <div className="relative z-10 mt-10 text-xs lg:mt-0">
+          <SiteFooter variant="dark" />
+        </div>
       </aside>
 
       <section className="flex w-full flex-col bg-white lg:col-span-3">

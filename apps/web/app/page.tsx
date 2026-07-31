@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
+import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { getServerAuthSession } from "@/lib/server-auth-session";
@@ -44,9 +45,7 @@ export default async function HomePage() {
         </div>
       </main>
 
-      <footer className="mx-auto w-full max-w-5xl px-6 py-8 text-sm text-white/50">
-        © {new Date().getFullYear()} Tripeseats
-      </footer>
+      <SiteFooter variant="dark" className="mx-auto max-w-5xl px-6 py-8" />
     </div>
   );
 }
