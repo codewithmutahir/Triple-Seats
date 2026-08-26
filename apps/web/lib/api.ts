@@ -419,6 +419,22 @@ export const api = {
       apiFetch<void>(`/api/vendor-calendar/entries/${encodeURIComponent(id)}`, {
         method: "DELETE"
       }),
+    duplicate: (
+      id: string,
+      body?: { startAt?: string; endAt?: string }
+    ) =>
+      apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarEntry>(
+        `/api/vendor-calendar/entries/${encodeURIComponent(id)}/duplicate`,
+        { method: "POST", body: JSON.stringify(body ?? {}) }
+      ),
+    copyToMyCalendar: (
+      id: string,
+      body?: { startAt?: string; endAt?: string }
+    ) =>
+      apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarEntry>(
+        `/api/vendor-calendar/entries/${encodeURIComponent(id)}/copy-to-my-calendar`,
+        { method: "POST", body: JSON.stringify(body ?? {}) }
+      ),
     directory: (q?: string) => {
       const qs = q ? `?q=${encodeURIComponent(q)}` : "";
       return apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarDirectory>(

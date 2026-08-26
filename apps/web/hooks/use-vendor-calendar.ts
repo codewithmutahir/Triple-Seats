@@ -6,6 +6,18 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { VendorCalendarEntry, VendorCalendarEntryInput } from "@/lib/vendor-calendar-types";
+import { showAsColor } from "@/lib/vendor-calendar-types";
+
+function defaultRecurrenceFields(body: VendorCalendarEntryInput) {
+  return {
+    recurrenceFreq: body.recurrenceFreq ?? "none",
+    recurrenceInterval: body.recurrenceInterval ?? 1,
+    recurrenceDaysOfWeek: body.recurrenceDaysOfWeek ?? null,
+    recurrenceEndAt: body.recurrenceEndAt ?? null,
+    recurrenceCount: body.recurrenceCount ?? null,
+    reminderMinutesBefore: body.reminderMinutesBefore ?? null
+  } as const;
+}
 
 export function useVendorCalendarDirectory() {
   return useQuery({
@@ -44,8 +56,12 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
       await qc.cancelQueries({ queryKey: key });
       const snapshot = qc.getQueryData<{ items: VendorCalendarEntry[] }>(key);
       const tempId = `temp_${Date.now()}`;
+      const showAs = body.showAs ?? "busy";
       const optimistic: VendorCalendarEntry = {
         id: tempId,
+        occurrenceId: tempId,
+        seriesId: tempId,
+        isRecurrenceInstance: false,
         catererId: "temp",
         ownerUserId,
         title: body.title,
@@ -54,16 +70,10 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
         startAt: body.startAt,
         endAt: body.endAt,
         allDay: body.allDay ?? false,
-        showAs: body.showAs ?? "busy",
+        showAs,
         isPrivate: body.isPrivate ?? false,
-        color:
-          body.showAs === "free"
-            ? "#10B981"
-            : body.showAs === "tentative"
-              ? "#F59E0B"
-              : body.showAs === "oof"
-                ? "#6B7280"
-                : "#1B2A4A",
+        ...defaultRecurrenceFields(body),
+        color: showAsColor(showAs),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -78,7 +88,11 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
       qc.setQueryData(key, (old: { items: VendorCalendarEntry[] } | undefined) => {
         if (!old) return { items: [server] };
         return {
-          items: old.items.map((item) => (item.id === ctx?.tempId ? { ...item, id: server.id } : item))
+          items: old.items.map((item) =>
+            item.id === ctx?.tempId
+              ? { ...server, occurrenceId: server.occurrenceId ?? server.id }
+              : item
+          )
         };
       });
     },
@@ -98,12 +112,26 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
         if (!old) return old;
         return {
           items: old.items.map((item) =>
-            item.id === id
+            item.seriesId === id
               ? {
                   ...item,
                   ...body,
                   notes: body.notes !== undefined ? body.notes : item.notes,
                   location: body.location !== undefined ? body.location : item.location,
+                  recurrenceFreq: body.recurrenceFreq ?? item.recurrenceFreq,
+                  recurrenceInterval: body.recurrenceInterval ?? item.recurrenceInterval,
+                  recurrenceDaysOfWeek:
+                    body.recurrenceDaysOfWeek !== undefined
+                      ? body.recurrenceDaysOfWeek
+                      : item.recurrenceDaysOfWeek,
+                  recurrenceEndAt:
+                    body.recurrenceEndAt !== undefined ? body.recurrenceEndAt : item.recurrenceEndAt,
+                  recurrenceCount:
+                    body.recurrenceCount !== undefined ? body.recurrenceCount : item.recurrenceCount,
+                  reminderMinutesBefore:
+                    body.reminderMinutesBefore !== undefined
+                      ? body.reminderMinutesBefore
+                      : item.reminderMinutesBefore,
                   updatedAt: new Date().toISOString()
                 }
               : item
@@ -113,10 +141,13 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
       return { snapshot };
     },
     onSuccess: (server) => {
+      void qc.invalidateQueries({ queryKey: key });
       qc.setQueryData(key, (old: { items: VendorCalendarEntry[] } | undefined) => {
         if (!old) return { items: [server] };
         return {
-          items: old.items.map((item) => (item.id === server.id ? { ...item, id: server.id } : item))
+          items: old.items.map((item) =>
+            item.seriesId === server.id ? { ...item, id: server.id } : item
+          )
         };
       });
     },
@@ -133,7 +164,7 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
       const snapshot = qc.getQueryData<{ items: VendorCalendarEntry[] }>(key);
       qc.setQueryData(key, (old: { items: VendorCalendarEntry[] } | undefined) => {
         if (!old) return old;
-        return { items: old.items.filter((item) => item.id !== id) };
+        return { items: old.items.filter((item) => item.seriesId !== id) };
       });
       return { snapshot };
     },
@@ -143,7 +174,27 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
     }
   });
 
-  return { create, update, remove };
+  const duplicate = useMutation({
+    mutationFn: ({ id, body }: { id: string; body?: { startAt?: string; endAt?: string } }) =>
+      api.vendorCalendar.duplicate(id, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: key });
+      toast.success("Entry duplicated");
+    },
+    onError: () => toast.error("Could not duplicate entry")
+  });
+
+  const copyToMyCalendar = useMutation({
+    mutationFn: ({ id, body }: { id: string; body?: { startAt?: string; endAt?: string } }) =>
+      api.vendorCalendar.copyToMyCalendar(id, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.directory() });
+      toast.success("Copied to your calendar");
+    },
+    onError: () => toast.error("Could not copy entry")
+  });
+
+  return { create, update, remove, duplicate, copyToMyCalendar };
 }
 
 export function useVendorCalendarGrants(enabled: boolean) {

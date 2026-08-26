@@ -61,7 +61,7 @@ export default function VendorCalendarClient() {
     enabled: Boolean(ownerUserId)
   });
 
-  const { create, update, remove } = useVendorCalendarMutations(
+  const { create, update, remove, duplicate, copyToMyCalendar } = useVendorCalendarMutations(
     ownerUserId,
     range.start,
     range.end
@@ -140,8 +140,10 @@ export default function VendorCalendarClient() {
   const handleMove = useCallback(
     (entryId: string, start: Date, end: Date, allDay: boolean) => {
       if (!canEdit) return;
+      const entry = entries.find((e) => e.seriesId === entryId || e.id === entryId);
+      if (entry?.isRecurrenceInstance) return;
       update.mutate({
-        id: entryId,
+        id: entry?.seriesId ?? entryId,
         body: {
           startAt: start.toISOString(),
           endAt: end.toISOString(),
@@ -149,7 +151,7 @@ export default function VendorCalendarClient() {
         }
       });
     },
-    [canEdit, update]
+    [canEdit, update, entries]
   );
 
   if (dirLoading && !directory) {
@@ -274,7 +276,7 @@ export default function VendorCalendarClient() {
         onSave={(body) => {
           if (editing?.id) {
             update.mutate(
-              { id: editing.id, body },
+              { id: editing.seriesId ?? editing.id, body },
               { onSuccess: () => setDialogOpen(false) }
             );
           } else {
@@ -284,10 +286,40 @@ export default function VendorCalendarClient() {
         onDelete={
           editing?.id
             ? () => {
-                remove.mutate(editing.id, { onSuccess: () => setDialogOpen(false) });
+                remove.mutate(editing.seriesId ?? editing.id, {
+                  onSuccess: () => setDialogOpen(false)
+                });
               }
             : undefined
         }
+        onDuplicate={
+          editing?.id && canEdit
+            ? () => {
+                duplicate.mutate(
+                  {
+                    id: editing.seriesId ?? editing.id,
+                    body: { startAt: editing.startAt, endAt: editing.endAt }
+                  },
+                  { onSuccess: () => setDialogOpen(false) }
+                );
+              }
+            : undefined
+        }
+        onCopyToMyCalendar={
+          editing?.id && canWrite && !isOwnCalendar
+            ? () => {
+                copyToMyCalendar.mutate(
+                  {
+                    id: editing.seriesId ?? editing.id,
+                    body: { startAt: editing.startAt, endAt: editing.endAt }
+                  },
+                  { onSuccess: () => setDialogOpen(false) }
+                );
+              }
+            : undefined
+        }
+        duplicatePending={duplicate.isPending}
+        copyPending={copyToMyCalendar.isPending}
       />
 
       {isSuperAdmin ? (
