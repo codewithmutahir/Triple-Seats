@@ -4,5 +4,6 @@ export type {
   TeamRole,
   InviteStatus,
   CalendarShowAs,
-  CalendarShareScope
+  CalendarShareScope,
+  VendorRecurrenceFreq
 } from "@prisma/client";

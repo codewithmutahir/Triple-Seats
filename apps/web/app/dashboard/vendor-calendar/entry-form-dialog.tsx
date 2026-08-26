@@ -23,10 +23,15 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  RECURRENCE_FREQ_OPTIONS,
+  REMINDER_OPTIONS,
   SHOW_AS_OPTIONS,
+  WEEKDAY_OPTIONS,
   type CalendarShowAs,
   type VendorCalendarEntry,
-  type VendorCalendarEntryInput
+  type VendorCalendarEntryInput,
+  type VendorRecurrenceFreq,
+  type WeekdayCode
 } from "@/lib/vendor-calendar-types";
 import { SaveIndicator } from "@/components/save-indicator";
 
@@ -73,6 +78,10 @@ type EntryFormDialogProps = {
   isError: boolean;
   onSave: (body: VendorCalendarEntryInput) => void;
   onDelete?: () => void;
+  onDuplicate?: () => void;
+  onCopyToMyCalendar?: () => void;
+  duplicatePending?: boolean;
+  copyPending?: boolean;
 };
 
 export function EntryFormDialog({
@@ -85,7 +94,11 @@ export function EntryFormDialog({
   isSuccess,
   isError,
   onSave,
-  onDelete
+  onDelete,
+  onDuplicate,
+  onCopyToMyCalendar,
+  duplicatePending,
+  copyPending
 }: EntryFormDialogProps) {
   const isEdit = Boolean(initial?.id && !initial.id.startsWith("temp_"));
 
@@ -95,6 +108,12 @@ export function EntryFormDialog({
   const [allDay, setAllDay] = useState(false);
   const [showAs, setShowAs] = useState<CalendarShowAs>("busy");
   const [isPrivate, setIsPrivate] = useState(false);
+  const [recurrenceFreq, setRecurrenceFreq] = useState<VendorRecurrenceFreq>("none");
+  const [recurrenceInterval, setRecurrenceInterval] = useState(1);
+  const [recurrenceDays, setRecurrenceDays] = useState<WeekdayCode[]>([]);
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState("");
+  const [recurrenceCount, setRecurrenceCount] = useState("");
+  const [reminderMinutesBefore, setReminderMinutesBefore] = useState<number | null>(null);
   const [startLocal, setStartLocal] = useState("");
   const [endLocal, setEndLocal] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -109,6 +128,21 @@ export function EntryFormDialog({
       setAllDay(initial.allDay ?? false);
       setShowAs(initial.showAs ?? "busy");
       setIsPrivate(initial.isPrivate ?? false);
+      setRecurrenceFreq(initial.recurrenceFreq ?? "none");
+      setRecurrenceInterval(initial.recurrenceInterval ?? 1);
+      setRecurrenceDays(
+        (initial.recurrenceDaysOfWeek ?? "")
+          .split(",")
+          .map((d) => d.trim().toUpperCase())
+          .filter((d): d is WeekdayCode =>
+            ["MO", "TU", "WE", "TH", "FR", "SA", "SU"].includes(d)
+          )
+      );
+      setRecurrenceEndDate(
+        initial.recurrenceEndAt ? toLocalDateValue(new Date(initial.recurrenceEndAt)) : ""
+      );
+      setRecurrenceCount(initial.recurrenceCount ? String(initial.recurrenceCount) : "");
+      setReminderMinutesBefore(initial.reminderMinutesBefore ?? null);
       const start = new Date(initial.startAt!);
       const end = new Date(initial.endAt!);
       if (initial.allDay) {
@@ -131,6 +165,12 @@ export function EntryFormDialog({
       setAllDay(slotDefaults.allDay);
       setShowAs("busy");
       setIsPrivate(false);
+      setRecurrenceFreq("none");
+      setRecurrenceInterval(1);
+      setRecurrenceDays([]);
+      setRecurrenceEndDate("");
+      setRecurrenceCount("");
+      setReminderMinutesBefore(null);
       setStartLocal(toLocalDateTimeValue(slotDefaults.start));
       setEndLocal(toLocalDateTimeValue(slotDefaults.end));
       setStartDate(toLocalDateValue(slotDefaults.start));
@@ -168,8 +208,25 @@ export function EntryFormDialog({
       endAt,
       allDay,
       showAs,
-      isPrivate
+      isPrivate,
+      recurrenceFreq,
+      recurrenceInterval,
+      recurrenceDaysOfWeek:
+        recurrenceFreq === "weekly" && recurrenceDays.length > 0
+          ? recurrenceDays.join(",")
+          : null,
+      recurrenceEndAt: recurrenceEndDate
+        ? new Date(`${recurrenceEndDate}T23:59:59`).toISOString()
+        : null,
+      recurrenceCount: recurrenceCount ? Number(recurrenceCount) : null,
+      reminderMinutesBefore
     });
+  }
+
+  function toggleWeekday(code: WeekdayCode) {
+    setRecurrenceDays((prev) =>
+      prev.includes(code) ? prev.filter((d) => d !== code) : [...prev, code]
+    );
   }
 
   return (
@@ -320,12 +377,153 @@ export function EntryFormDialog({
             </Label>
           </div>
 
+          <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50/80 p-3">
+            <Label>Repeat</Label>
+            <Select
+              value={recurrenceFreq}
+              onValueChange={(v) => setRecurrenceFreq(v as VendorRecurrenceFreq)}
+              disabled={!canEdit}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RECURRENCE_FREQ_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {recurrenceFreq !== "none" ? (
+              <div className="space-y-3 pt-1">
+                <div className="space-y-2">
+                  <Label htmlFor="vc-interval">Every</Label>
+                  <Input
+                    id="vc-interval"
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={recurrenceInterval}
+                    onChange={(e) => setRecurrenceInterval(Math.max(1, Number(e.target.value) || 1))}
+                    disabled={!canEdit}
+                  />
+                </div>
+
+                {recurrenceFreq === "weekly" ? (
+                  <div className="space-y-2">
+                    <Label>On days</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {WEEKDAY_OPTIONS.map((day) => (
+                        <Button
+                          key={day.value}
+                          type="button"
+                          size="sm"
+                          variant={recurrenceDays.includes(day.value) ? "default" : "outline"}
+                          className={
+                            recurrenceDays.includes(day.value)
+                              ? "bg-[#1B2A4A] hover:bg-[#152238]"
+                              : undefined
+                          }
+                          onClick={() => toggleWeekday(day.value)}
+                          disabled={!canEdit}
+                        >
+                          {day.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="vc-recur-end">Repeat until (optional)</Label>
+                    <Input
+                      id="vc-recur-end"
+                      type="date"
+                      value={recurrenceEndDate}
+                      onChange={(e) => setRecurrenceEndDate(e.target.value)}
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="vc-recur-count">Or # of times (optional)</Label>
+                    <Input
+                      id="vc-recur-count"
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={recurrenceCount}
+                      onChange={(e) => setRecurrenceCount(e.target.value)}
+                      disabled={!canEdit}
+                      placeholder="e.g. 10"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Reminder</Label>
+            <Select
+              value={reminderMinutesBefore == null ? "none" : String(reminderMinutesBefore)}
+              onValueChange={(v) =>
+                setReminderMinutesBefore(v === "none" ? null : Number(v))
+              }
+              disabled={!canEdit}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {REMINDER_OPTIONS.map((opt) => (
+                  <SelectItem key={String(opt.value)} value={String(opt.value ?? "none")}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Reminder time is saved; email notifications coming soon.
+            </p>
+          </div>
+
+          {initial?.isRecurrenceInstance ? (
+            <p className="text-xs text-amber-700">
+              This is a recurring instance. Saving updates the whole series.
+            </p>
+          ) : null}
+
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {isEdit && canEdit && onDelete ? (
                 <Button type="button" variant="destructive" size="sm" onClick={onDelete}>
                   <Trash2 className="mr-1.5 h-4 w-4" aria-hidden />
                   Delete
+                </Button>
+              ) : null}
+              {isEdit && onDuplicate ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onDuplicate}
+                  disabled={duplicatePending}
+                >
+                  Duplicate
+                </Button>
+              ) : null}
+              {isEdit && onCopyToMyCalendar ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onCopyToMyCalendar}
+                  disabled={copyPending}
+                >
+                  Copy to my calendar
                 </Button>
               ) : null}
               <SaveIndicator isPending={isPending} isSuccess={isSuccess} isError={isError} />

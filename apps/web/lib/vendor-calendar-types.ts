@@ -1,8 +1,13 @@
 export type CalendarShowAs = "busy" | "free" | "tentative" | "oof";
 export type CalendarShareScope = "view" | "edit";
+export type VendorRecurrenceFreq = "none" | "daily" | "weekly" | "monthly" | "yearly";
+export type WeekdayCode = "SU" | "MO" | "TU" | "WE" | "TH" | "FR" | "SA";
 
 export type VendorCalendarEntry = {
   id: string;
+  occurrenceId: string;
+  seriesId: string;
+  isRecurrenceInstance: boolean;
   catererId: string;
   ownerUserId: string;
   title: string;
@@ -13,6 +18,12 @@ export type VendorCalendarEntry = {
   allDay: boolean;
   showAs: CalendarShowAs;
   isPrivate: boolean;
+  recurrenceFreq: VendorRecurrenceFreq;
+  recurrenceInterval: number;
+  recurrenceDaysOfWeek: string | null;
+  recurrenceEndAt: string | null;
+  recurrenceCount: number | null;
+  reminderMinutesBefore: number | null;
   color: string;
   createdAt: string;
   updatedAt: string;
@@ -28,6 +39,12 @@ export type VendorCalendarEntryInput = {
   allDay?: boolean;
   showAs?: CalendarShowAs;
   isPrivate?: boolean;
+  recurrenceFreq?: VendorRecurrenceFreq;
+  recurrenceInterval?: number;
+  recurrenceDaysOfWeek?: string | null;
+  recurrenceEndAt?: string | null;
+  recurrenceCount?: number | null;
+  reminderMinutesBefore?: number | null;
 };
 
 export type VendorCalendarDirectory = {
@@ -76,3 +93,34 @@ export const SHOW_AS_OPTIONS: Array<{ value: CalendarShowAs; label: string; colo
   { value: "tentative", label: "Tentative", color: "#F59E0B" },
   { value: "oof", label: "Out of office", color: "#6B7280" }
 ];
+
+export const RECURRENCE_FREQ_OPTIONS: Array<{ value: VendorRecurrenceFreq; label: string }> = [
+  { value: "none", label: "Does not repeat" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "yearly", label: "Yearly" }
+];
+
+export const WEEKDAY_OPTIONS: Array<{ value: WeekdayCode; label: string }> = [
+  { value: "MO", label: "Mon" },
+  { value: "TU", label: "Tue" },
+  { value: "WE", label: "Wed" },
+  { value: "TH", label: "Thu" },
+  { value: "FR", label: "Fri" },
+  { value: "SA", label: "Sat" },
+  { value: "SU", label: "Sun" }
+];
+
+export const REMINDER_OPTIONS: Array<{ value: number | null; label: string }> = [
+  { value: null, label: "No reminder" },
+  { value: 5, label: "5 minutes before" },
+  { value: 15, label: "15 minutes before" },
+  { value: 30, label: "30 minutes before" },
+  { value: 60, label: "1 hour before" },
+  { value: 1440, label: "1 day before" }
+];
+
+export function showAsColor(showAs: CalendarShowAs) {
+  return SHOW_AS_OPTIONS.find((o) => o.value === showAs)?.color ?? "#1B2A4A";
+}

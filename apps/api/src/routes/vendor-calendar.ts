@@ -11,6 +11,10 @@ import { getAuthorizedSession } from "../lib/authorized-session";
 import { handleRouteError } from "../lib/route-errors";
 import { getSession } from "../lib/session";
 import { timer } from "../lib/perf";
+import {
+  expandVendorCalendarOccurrences,
+  recurringMasterWhere
+} from "../lib/vendor-calendar-recurrence";
 
 const router = Router();
 
@@ -18,6 +22,7 @@ const MAX_RANGE_MS = 93 * 24 * 60 * 60 * 1000;
 
 const SHOW_AS = ["busy", "free", "tentative", "oof"] as const;
 const SHARE_SCOPES = ["view", "edit"] as const;
+const RECURRENCE_FREQ = ["none", "daily", "weekly", "monthly", "yearly"] as const;
 
 const SHOW_AS_COLORS: Record<CalendarShowAs, string> = {
   busy: "#1B2A4A",
@@ -38,7 +43,13 @@ const entryBodySchema = z.object({
   endAt: isoDateString,
   allDay: z.boolean().optional(),
   showAs: z.enum(SHOW_AS).optional(),
-  isPrivate: z.boolean().optional()
+  isPrivate: z.boolean().optional(),
+  recurrenceFreq: z.enum(RECURRENCE_FREQ).optional(),
+  recurrenceInterval: z.number().int().min(1).max(365).optional(),
+  recurrenceDaysOfWeek: z.string().trim().max(32).nullable().optional(),
+  recurrenceEndAt: isoDateString.nullable().optional(),
+  recurrenceCount: z.number().int().min(1).max(500).nullable().optional(),
+  reminderMinutesBefore: z.number().int().min(1).max(10080).nullable().optional()
 });
 
 const entryPatchSchema = entryBodySchema.partial().refine(
@@ -46,11 +57,56 @@ const entryPatchSchema = entryBodySchema.partial().refine(
   { message: "At least one field required" }
 );
 
-const grantBodySchema = z.object({
-  granteeUserId: z.string().min(1),
-  targetUserId: z.string().min(1),
-  scope: z.enum(SHARE_SCOPES).optional()
+const duplicateBodySchema = z.object({
+  startAt: isoDateString.optional(),
+  endAt: isoDateString.optional()
 });
+
+const entrySelect = {
+  id: true,
+  catererId: true,
+  ownerUserId: true,
+  title: true,
+  notes: true,
+  location: true,
+  startAt: true,
+  endAt: true,
+  allDay: true,
+  showAs: true,
+  isPrivate: true,
+  recurrenceFreq: true,
+  recurrenceInterval: true,
+  recurrenceDaysOfWeek: true,
+  recurrenceEndAt: true,
+  recurrenceCount: true,
+  reminderMinutesBefore: true,
+  createdAt: true,
+  updatedAt: true,
+  owner: { select: { id: true, name: true, email: true } }
+} as const;
+
+type EntryRow = {
+  id: string;
+  catererId: string;
+  ownerUserId: string;
+  title: string;
+  notes: string | null;
+  location: string | null;
+  startAt: Date;
+  endAt: Date;
+  allDay: boolean;
+  showAs: CalendarShowAs;
+  isPrivate: boolean;
+  recurrenceFreq: (typeof RECURRENCE_FREQ)[number];
+  recurrenceInterval: number;
+  recurrenceDaysOfWeek: string | null;
+  recurrenceEndAt: Date | null;
+  recurrenceCount: number | null;
+  reminderMinutesBefore: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+  owner?: { id: string; name: string | null; email: string } | null;
+};
 
 function paramId(req: Request): string {
   const raw = req.params["id"];
@@ -89,37 +145,32 @@ function canEdit(access: AccessScope | null): boolean {
 }
 
 function serializeEntry(
-  row: {
-    id: string;
-    catererId: string;
-    ownerUserId: string;
-    title: string;
-    notes: string | null;
-    location: string | null;
-    startAt: Date;
-    endAt: Date;
-    allDay: boolean;
-    showAs: CalendarShowAs;
-    isPrivate: boolean;
-    createdAt: Date;
-    updatedAt: Date;
-    owner?: { id: string; name: string | null; email: string } | null;
-  },
-  opts: { hidePrivateNotes: boolean }
+  row: EntryRow,
+  opts: { hidePrivateNotes: boolean },
+  occurrence?: { occurrenceId: string; startAt: Date; endAt: Date; isRecurrenceInstance: boolean }
 ) {
   const hideNotes = opts.hidePrivateNotes && row.isPrivate;
   return {
     id: row.id,
+    occurrenceId: occurrence?.occurrenceId ?? row.id,
+    seriesId: row.id,
+    isRecurrenceInstance: occurrence?.isRecurrenceInstance ?? false,
     catererId: row.catererId,
     ownerUserId: row.ownerUserId,
     title: row.title,
     notes: hideNotes ? null : row.notes,
     location: row.location,
-    startAt: row.startAt.toISOString(),
-    endAt: row.endAt.toISOString(),
+    startAt: (occurrence?.startAt ?? row.startAt).toISOString(),
+    endAt: (occurrence?.endAt ?? row.endAt).toISOString(),
     allDay: row.allDay,
     showAs: row.showAs,
     isPrivate: row.isPrivate,
+    recurrenceFreq: row.recurrenceFreq,
+    recurrenceInterval: row.recurrenceInterval,
+    recurrenceDaysOfWeek: row.recurrenceDaysOfWeek,
+    recurrenceEndAt: row.recurrenceEndAt?.toISOString() ?? null,
+    recurrenceCount: row.recurrenceCount,
+    reminderMinutesBefore: row.reminderMinutesBefore,
     color: SHOW_AS_COLORS[row.showAs],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -132,6 +183,23 @@ function serializeEntry(
       : undefined
   };
 }
+
+function recurrenceDataFromBody(data: z.infer<typeof entryBodySchema>) {
+  return {
+    recurrenceFreq: (data.recurrenceFreq ?? "none") as (typeof RECURRENCE_FREQ)[number],
+    recurrenceInterval: data.recurrenceInterval ?? 1,
+    recurrenceDaysOfWeek: data.recurrenceDaysOfWeek ?? null,
+    recurrenceEndAt: data.recurrenceEndAt ? new Date(data.recurrenceEndAt) : null,
+    recurrenceCount: data.recurrenceCount ?? null,
+    reminderMinutesBefore: data.reminderMinutesBefore ?? null
+  };
+}
+
+const grantBodySchema = z.object({
+  granteeUserId: z.string().min(1),
+  targetUserId: z.string().min(1),
+  scope: z.enum(SHARE_SCOPES).optional()
+});
 
 function parseRange(req: Request): { start: Date; end: Date } | { error: string } {
   const startRaw = typeof req.query.start === "string" ? req.query.start : "";
@@ -161,6 +229,45 @@ function rangeWhere(start: Date, end: Date): Prisma.VendorCalendarEntryWhereInpu
   };
 }
 
+function buildOwnerWhere(
+  user: { id: string },
+  caterer: { id: string },
+  isSuperAdmin: boolean,
+  ownerUserIdParam: string | null,
+  catererIdParam: string | null
+): Promise<Prisma.VendorCalendarEntryWhereInput | { error: string; status: number }> {
+  return (async () => {
+    if (catererIdParam) {
+      if (!isSuperAdmin) {
+        return { error: "Only super admin can filter by caterer", status: 403 };
+      }
+      const base: Prisma.VendorCalendarEntryWhereInput = { catererId: catererIdParam };
+      if (ownerUserIdParam) {
+        return { ...base, ownerUserId: ownerUserIdParam };
+      }
+      return base;
+    }
+
+    const targetUserId = ownerUserIdParam ?? user.id;
+    const access = await resolveCalendarAccess(user.id, targetUserId, isSuperAdmin);
+    if (!access) {
+      return { error: "Not allowed to view this calendar", status: 403 };
+    }
+    const where: Prisma.VendorCalendarEntryWhereInput = { ownerUserId: targetUserId };
+    if (targetUserId === user.id && !isSuperAdmin) {
+      where.catererId = caterer.id;
+    }
+    return where;
+  })();
+}
+
+async function loadEntryForUser(id: string) {
+  return prisma.vendorCalendarEntry.findUnique({
+    where: { id },
+    select: entrySelect
+  });
+}
+
 /** Authenticated: list entries for a visible calendar in a date range */
 router.get("/entries", async (req: Request, res: Response) => {
   try {
@@ -182,57 +289,59 @@ router.get("/entries", async (req: Request, res: Response) => {
         ? req.query.catererId.trim()
         : null;
 
-    let where: Prisma.VendorCalendarEntryWhereInput = {
-      ...rangeWhere(range.start, range.end)
-    };
+    let ownerWhere = await buildOwnerWhere(user, caterer, isSuperAdmin, ownerUserIdParam, catererIdParam);
+    if ("error" in ownerWhere) {
+      return res.status(ownerWhere.status).json({ error: ownerWhere.error });
+    }
 
-    if (catererIdParam) {
-      if (!isSuperAdmin) {
-        return res.status(403).json({ error: "Only super admin can filter by caterer" });
-      }
-      where = { ...where, catererId: catererIdParam };
-      if (ownerUserIdParam) {
-        where = { ...where, ownerUserId: ownerUserIdParam };
-      }
-    } else {
-      const targetUserId = ownerUserIdParam ?? user.id;
-      const access = await resolveCalendarAccess(user.id, targetUserId, isSuperAdmin);
-      if (!access) {
-        return res.status(403).json({ error: "Not allowed to view this calendar" });
-      }
-      where = { ...where, ownerUserId: targetUserId };
-      // Non–super-admin viewing own calendar stays in tenant; shared views may cross tenants by ownerUserId
-      if (targetUserId === user.id && !isSuperAdmin) {
-        where = { ...where, catererId: caterer.id };
+    const [singleRows, recurringRows] = await Promise.all([
+      prisma.vendorCalendarEntry.findMany({
+        where: {
+          ...ownerWhere,
+          recurrenceFreq: "none",
+          ...rangeWhere(range.start, range.end)
+        },
+        orderBy: { startAt: "asc" },
+        select: entrySelect
+      }),
+      prisma.vendorCalendarEntry.findMany({
+        where: {
+          ...ownerWhere,
+          ...recurringMasterWhere(range.start, range.end)
+        },
+        orderBy: { startAt: "asc" },
+        select: entrySelect
+      })
+    ]);
+    perf.step("db:query");
+
+    const items: ReturnType<typeof serializeEntry>[] = [];
+
+    for (const row of singleRows) {
+      const isOwnerOrSuper = row.ownerUserId === user.id || isSuperAdmin;
+      items.push(serializeEntry(row, { hidePrivateNotes: !isOwnerOrSuper }));
+    }
+
+    for (const row of recurringRows) {
+      const isOwnerOrSuper = row.ownerUserId === user.id || isSuperAdmin;
+      const occurrences = expandVendorCalendarOccurrences(row, range.start, range.end);
+      for (const occ of occurrences) {
+        items.push(
+          serializeEntry(
+            row,
+            { hidePrivateNotes: !isOwnerOrSuper },
+            {
+              occurrenceId: occ.occurrenceId,
+              startAt: occ.startAt,
+              endAt: occ.endAt,
+              isRecurrenceInstance: occ.isRecurrenceInstance
+            }
+          )
+        );
       }
     }
 
-    const rows = await prisma.vendorCalendarEntry.findMany({
-      where,
-      orderBy: { startAt: "asc" },
-      select: {
-        id: true,
-        catererId: true,
-        ownerUserId: true,
-        title: true,
-        notes: true,
-        location: true,
-        startAt: true,
-        endAt: true,
-        allDay: true,
-        showAs: true,
-        isPrivate: true,
-        createdAt: true,
-        updatedAt: true,
-        owner: { select: { id: true, name: true, email: true } }
-      }
-    });
-    perf.step("db:query");
-
-    const items = rows.map((row) => {
-      const isOwnerOrSuper = row.ownerUserId === user.id || isSuperAdmin;
-      return serializeEntry(row, { hidePrivateNotes: !isOwnerOrSuper });
-    });
+    items.sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
 
     perf.end();
     return res.json({ items, start: range.start.toISOString(), end: range.end.toISOString() });
@@ -267,23 +376,10 @@ router.post("/entries", async (req: Request, res: Response) => {
         endAt,
         allDay: parsed.data.allDay ?? false,
         showAs: (parsed.data.showAs ?? "busy") as CalendarShowAs,
-        isPrivate: parsed.data.isPrivate ?? false
+        isPrivate: parsed.data.isPrivate ?? false,
+        ...recurrenceDataFromBody(parsed.data)
       },
-      select: {
-        id: true,
-        catererId: true,
-        ownerUserId: true,
-        title: true,
-        notes: true,
-        location: true,
-        startAt: true,
-        endAt: true,
-        allDay: true,
-        showAs: true,
-        isPrivate: true,
-        createdAt: true,
-        updatedAt: true
-      }
+      select: entrySelect
     });
 
     return res.status(201).json(serializeEntry(row, { hidePrivateNotes: false }));
@@ -335,25 +431,23 @@ router.patch("/entries/:id", async (req: Request, res: Response) => {
     if (parsed.data.allDay !== undefined) data.allDay = parsed.data.allDay;
     if (parsed.data.showAs !== undefined) data.showAs = parsed.data.showAs;
     if (parsed.data.isPrivate !== undefined) data.isPrivate = parsed.data.isPrivate;
+    if (parsed.data.recurrenceFreq !== undefined) data.recurrenceFreq = parsed.data.recurrenceFreq;
+    if (parsed.data.recurrenceInterval !== undefined) data.recurrenceInterval = parsed.data.recurrenceInterval;
+    if (parsed.data.recurrenceDaysOfWeek !== undefined) {
+      data.recurrenceDaysOfWeek = parsed.data.recurrenceDaysOfWeek;
+    }
+    if (parsed.data.recurrenceEndAt !== undefined) {
+      data.recurrenceEndAt = parsed.data.recurrenceEndAt ? new Date(parsed.data.recurrenceEndAt) : null;
+    }
+    if (parsed.data.recurrenceCount !== undefined) data.recurrenceCount = parsed.data.recurrenceCount;
+    if (parsed.data.reminderMinutesBefore !== undefined) {
+      data.reminderMinutesBefore = parsed.data.reminderMinutesBefore;
+    }
 
     const row = await prisma.vendorCalendarEntry.update({
       where: { id },
       data,
-      select: {
-        id: true,
-        catererId: true,
-        ownerUserId: true,
-        title: true,
-        notes: true,
-        location: true,
-        startAt: true,
-        endAt: true,
-        allDay: true,
-        showAs: true,
-        isPrivate: true,
-        createdAt: true,
-        updatedAt: true
-      }
+      select: entrySelect
     });
 
     return res.json(serializeEntry(row, { hidePrivateNotes: false }));
@@ -385,6 +479,120 @@ router.delete("/entries/:id", async (req: Request, res: Response) => {
     return res.status(204).send();
   } catch (e) {
     return handleRouteError(res, e, "Vendor calendar delete");
+  }
+});
+
+/** Duplicate an entry (optionally at new start/end); always creates on viewer's calendar if copy, else same owner */
+router.post("/entries/:id/duplicate", async (req: Request, res: Response) => {
+  try {
+    const { user, caterer, isSuperAdmin } = await getAuthorizedSession(req, "vendor_calendar:write");
+    const id = paramId(req);
+    const parsed = duplicateBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    }
+
+    const existing = await loadEntryForUser(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const access = await resolveCalendarAccess(user.id, existing.ownerUserId, isSuperAdmin);
+    if (!canEdit(access)) {
+      return res.status(403).json({ error: "Not allowed to duplicate this entry" });
+    }
+
+    const durationMs = existing.endAt.getTime() - existing.startAt.getTime();
+    const startAt = parsed.data.startAt ? new Date(parsed.data.startAt) : new Date(existing.startAt);
+    const endAt = parsed.data.endAt
+      ? new Date(parsed.data.endAt)
+      : new Date(startAt.getTime() + durationMs);
+    if (endAt.getTime() <= startAt.getTime()) {
+      return res.status(400).json({ error: "endAt must be after startAt" });
+    }
+
+    const row = await prisma.vendorCalendarEntry.create({
+      data: {
+        catererId: existing.ownerUserId === user.id ? caterer.id : existing.catererId,
+        ownerUserId: existing.ownerUserId,
+        title: existing.title.startsWith("Copy of ") ? existing.title : `Copy of ${existing.title}`,
+        notes: existing.notes,
+        location: existing.location,
+        startAt,
+        endAt,
+        allDay: existing.allDay,
+        showAs: existing.showAs,
+        isPrivate: existing.isPrivate,
+        recurrenceFreq: "none",
+        recurrenceInterval: 1,
+        recurrenceDaysOfWeek: null,
+        recurrenceEndAt: null,
+        recurrenceCount: null,
+        reminderMinutesBefore: existing.reminderMinutesBefore
+      },
+      select: entrySelect
+    });
+
+    return res.status(201).json(serializeEntry(row, { hidePrivateNotes: false }));
+  } catch (e) {
+    return handleRouteError(res, e, "Vendor calendar duplicate");
+  }
+});
+
+/** Copy entry to the authenticated user's calendar (non-recurring snapshot) */
+router.post("/entries/:id/copy-to-my-calendar", async (req: Request, res: Response) => {
+  try {
+    const { user, caterer, isSuperAdmin } = await getAuthorizedSession(req, "vendor_calendar:write");
+    const id = paramId(req);
+    const parsed = duplicateBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    }
+
+    const existing = await loadEntryForUser(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const access = await resolveCalendarAccess(user.id, existing.ownerUserId, isSuperAdmin);
+    if (!access) {
+      return res.status(403).json({ error: "Not allowed to view this entry" });
+    }
+
+    const durationMs = existing.endAt.getTime() - existing.startAt.getTime();
+    const startAt = parsed.data.startAt ? new Date(parsed.data.startAt) : new Date(existing.startAt);
+    const endAt = parsed.data.endAt
+      ? new Date(parsed.data.endAt)
+      : new Date(startAt.getTime() + durationMs);
+    if (endAt.getTime() <= startAt.getTime()) {
+      return res.status(400).json({ error: "endAt must be after startAt" });
+    }
+
+    const row = await prisma.vendorCalendarEntry.create({
+      data: {
+        catererId: caterer.id,
+        ownerUserId: user.id,
+        title: existing.title,
+        notes: existing.isPrivate ? null : existing.notes,
+        location: existing.location,
+        startAt,
+        endAt,
+        allDay: existing.allDay,
+        showAs: existing.showAs,
+        isPrivate: false,
+        recurrenceFreq: "none",
+        recurrenceInterval: 1,
+        recurrenceDaysOfWeek: null,
+        recurrenceEndAt: null,
+        recurrenceCount: null,
+        reminderMinutesBefore: existing.reminderMinutesBefore
+      },
+      select: entrySelect
+    });
+
+    return res.status(201).json(serializeEntry(row, { hidePrivateNotes: false }));
+  } catch (e) {
+    return handleRouteError(res, e, "Vendor calendar copy");
   }
 });
 

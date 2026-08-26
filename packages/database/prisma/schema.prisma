@@ -141,6 +141,14 @@ enum CalendarShareScope {
   edit
 }
 
+enum VendorRecurrenceFreq {
+  none
+  daily
+  weekly
+  monthly
+  yearly
+}
+
 model Caterer {
   id                     String            @id @default(cuid())
   userId                 String?           @unique
@@ -255,6 +263,14 @@ model VendorCalendarEntry {
   allDay      Boolean        @default(false)
   showAs      CalendarShowAs @default(busy)
   isPrivate   Boolean        @default(false)
+  recurrenceFreq          VendorRecurrenceFreq @default(none)
+  recurrenceInterval      Int                  @default(1)
+  /// Comma-separated weekday codes for weekly recurrence (MO,TU,WE,TH,FR,SA,SU).
+  recurrenceDaysOfWeek    String?
+  recurrenceEndAt         DateTime?
+  recurrenceCount         Int?
+  /// Minutes before start to remind (stored for display; delivery via email queue later).
+  reminderMinutesBefore   Int?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   caterer     Caterer        @relation(fields: [catererId], references: [id], onDelete: Cascade)

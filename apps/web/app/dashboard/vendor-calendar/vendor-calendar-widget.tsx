@@ -31,13 +31,14 @@ type VendorCalendarWidgetProps = {
 
 function toFcEvents(items: VendorCalendarEntry[]): EventInput[] {
   return items.map((ev) => ({
-    id: ev.id,
-    title: ev.title,
+    id: ev.occurrenceId,
+    title: ev.isRecurrenceInstance ? `${ev.title} ↻` : ev.title,
     start: ev.startAt,
     end: ev.endAt,
     allDay: ev.allDay,
     backgroundColor: ev.color,
     borderColor: ev.color,
+    editable: !ev.isRecurrenceInstance,
     extendedProps: { entry: ev }
   }));
 }
@@ -74,20 +75,24 @@ export function VendorCalendarWidget({
 
   const handleDrop = useCallback(
     (arg: EventDropArg) => {
+      const entry = arg.event.extendedProps.entry as VendorCalendarEntry | undefined;
+      if (entry?.isRecurrenceInstance) return;
       const start = arg.event.start;
       const end = arg.event.end ?? arg.event.start;
       if (!start || !end) return;
-      onEventMove(arg.event.id, start, end, arg.event.allDay);
+      onEventMove(entry?.seriesId ?? arg.event.id, start, end, arg.event.allDay);
     },
     [onEventMove]
   );
 
   const handleResize = useCallback(
-    (arg: { event: { id: string; start: Date | null; end: Date | null; allDay: boolean } }) => {
+    (arg: { event: { id: string; start: Date | null; end: Date | null; allDay: boolean; extendedProps: Record<string, unknown> } }) => {
+      const entry = arg.event.extendedProps.entry as VendorCalendarEntry | undefined;
+      if (entry?.isRecurrenceInstance) return;
       const start = arg.event.start;
       const end = arg.event.end ?? arg.event.start;
       if (!start || !end) return;
-      onEventMove(arg.event.id, start, end, arg.event.allDay);
+      onEventMove(entry?.seriesId ?? arg.event.id, start, end, arg.event.allDay);
     },
     [onEventMove]
   );
