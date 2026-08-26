@@ -61,6 +61,14 @@ export const queryKeys = {
     init: () => [...queryKeys.calendar.all, "init"] as const
   },
 
+  vendorCalendar: {
+    all: ["vendorCalendar"] as const,
+    entries: (ownerUserId: string, start: string, end: string) =>
+      [...queryKeys.vendorCalendar.all, "entries", ownerUserId, start, end] as const,
+    directory: () => [...queryKeys.vendorCalendar.all, "directory"] as const,
+    grants: () => [...queryKeys.vendorCalendar.all, "grants"] as const
+  },
+
   bookings: {
     all: ["bookings"] as const,
     list: (filters: ListFilters = {}) => [...queryKeys.bookings.all, "list", filters] as const,

@@ -394,6 +394,52 @@ export const api = {
     init: () => apiFetch<unknown>("/api/calendar/init")
   },
 
+  vendorCalendar: {
+    entries: (params: { start: string; end: string; ownerUserId?: string; catererId?: string }) => {
+      const qs = new URLSearchParams({ start: params.start, end: params.end });
+      if (params.ownerUserId) qs.set("ownerUserId", params.ownerUserId);
+      if (params.catererId) qs.set("catererId", params.catererId);
+      return apiFetch<{
+        items: import("@/lib/vendor-calendar-types").VendorCalendarEntry[];
+        start: string;
+        end: string;
+      }>(`/api/vendor-calendar/entries?${qs}`);
+    },
+    create: (body: import("@/lib/vendor-calendar-types").VendorCalendarEntryInput) =>
+      apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarEntry>(
+        "/api/vendor-calendar/entries",
+        { method: "POST", body: JSON.stringify(body) }
+      ),
+    update: (id: string, body: Partial<import("@/lib/vendor-calendar-types").VendorCalendarEntryInput>) =>
+      apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarEntry>(
+        `/api/vendor-calendar/entries/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      ),
+    remove: (id: string) =>
+      apiFetch<void>(`/api/vendor-calendar/entries/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      }),
+    directory: (q?: string) => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : "";
+      return apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarDirectory>(
+        `/api/vendor-calendar/directory${qs}`
+      );
+    },
+    grants: () =>
+      apiFetch<{ items: import("@/lib/vendor-calendar-types").CalendarShareGrant[] }>(
+        "/api/vendor-calendar/grants"
+      ),
+    createGrant: (body: { granteeUserId: string; targetUserId: string; scope?: "view" | "edit" }) =>
+      apiFetch<import("@/lib/vendor-calendar-types").CalendarShareGrant>(
+        "/api/vendor-calendar/grants",
+        { method: "POST", body: JSON.stringify(body) }
+      ),
+    revokeGrant: (id: string) =>
+      apiFetch<void>(`/api/vendor-calendar/grants/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      })
+  },
+
   reports: {
     summary: async (year: number, month: number): Promise<ReportsData> => {
       const params = new URLSearchParams({ year: String(year), month: String(month) });
@@ -543,9 +589,13 @@ export const api = {
 
   team: {
     me: () =>
-      apiFetch<{ role: string; catererName: string; isTeamMember: boolean; isOwner: boolean }>(
-        "/api/team/me"
-      ),
+      apiFetch<{
+        role: string;
+        catererName: string;
+        isTeamMember: boolean;
+        isOwner: boolean;
+        isSuperAdmin: boolean;
+      }>("/api/team/me"),
     list: () =>
       apiFetch<{
         members: Array<{

@@ -5,6 +5,7 @@ import {
   Bell,
   BookCheck,
   Calendar,
+  CalendarClock,
   CalendarDays,
   CheckSquare,
   LayoutDashboard,
@@ -48,6 +49,13 @@ const NAV = [
   { href: "/dashboard/settings", label: "Settings", icon: Settings, permission: "settings:read" as const }
 ] as const;
 
+const VENDOR_CAL_NAV = {
+  href: "/dashboard/vendor-calendar",
+  label: "Vendor Calendar",
+  icon: CalendarClock,
+  permission: "vendor_calendar:read" as const
+} as const;
+
 const TITLE_MAP: Record<string, string> = {
   "/dashboard": "Dashboard",
   "/dashboard/leads": "Leads",
@@ -56,12 +64,13 @@ const TITLE_MAP: Record<string, string> = {
   "/dashboard/discussions": "Discussions",
   "/dashboard/tasks": "Tasks",
   "/dashboard/calendar": "Calendar",
+  "/dashboard/vendor-calendar": "Vendor Calendar",
   "/dashboard/reports": "Reports",
   "/dashboard/quotes": "Quote Builder",
   "/dashboard/settings": "Settings"
 };
 
-type NavItem = (typeof NAV)[number];
+type NavItem = (typeof NAV)[number] | typeof VENDOR_CAL_NAV;
 
 function prefetchRoute(qc: ReturnType<typeof useQueryClient>, href: NavItem["href"]) {
   switch (href) {
@@ -145,6 +154,13 @@ function prefetchRoute(qc: ReturnType<typeof useQueryClient>, href: NavItem["hre
         staleTime: 5 * 60 * 1000
       });
       break;
+    case "/dashboard/vendor-calendar":
+      void qc.prefetchQuery({
+        queryKey: queryKeys.vendorCalendar.directory(),
+        queryFn: () => api.vendorCalendar.directory(),
+        staleTime: 60 * 1000
+      });
+      break;
   }
 }
 
@@ -192,8 +208,12 @@ function NavLink({
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const qc = useQueryClient();
   const { can } = usePermissions();
   const visibleNav = NAV.filter((item) => !item.permission || can(item.permission));
+  const showVendorCal = can(VENDOR_CAL_NAV.permission);
+  const vendorActive =
+    pathname === VENDOR_CAL_NAV.href || pathname.startsWith(`${VENDOR_CAL_NAV.href}/`);
 
   return (
     <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
@@ -210,6 +230,22 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
           />
         );
       })}
+      {showVendorCal ? (
+        <div className="mt-3 border-t border-white/10 pt-3">
+          <Link
+            href={VENDOR_CAL_NAV.href}
+            onClick={onNavigate}
+            onMouseEnter={() => prefetchRoute(qc, VENDOR_CAL_NAV.href)}
+            className={cn(
+              "flex items-center gap-3 rounded-lg border border-teal-400/25 bg-teal-500/10 px-3 py-2.5 text-sm font-semibold text-teal-50 transition-[colors,background-color] duration-150 ease-out hover:bg-teal-500/20",
+              vendorActive && "border-teal-300/40 bg-teal-400/20 text-white"
+            )}
+          >
+            <VENDOR_CAL_NAV.icon className="h-5 w-5 shrink-0 text-teal-200" aria-hidden />
+            {VENDOR_CAL_NAV.label}
+          </Link>
+        </div>
+      ) : null}
     </nav>
   );
 }
@@ -219,6 +255,9 @@ function MobileBottomNav() {
   const qc = useQueryClient();
   const { can } = usePermissions();
   const visibleNav = NAV.filter((item) => !item.permission || can(item.permission));
+  const showVendorCal = can(VENDOR_CAL_NAV.permission);
+  const vendorActive =
+    pathname === VENDOR_CAL_NAV.href || pathname.startsWith(`${VENDOR_CAL_NAV.href}/`);
 
   return (
     <nav
@@ -250,6 +289,26 @@ function MobileBottomNav() {
             </Link>
           );
         })}
+        {showVendorCal ? (
+          <Link
+            href={VENDOR_CAL_NAV.href}
+            onMouseEnter={() => prefetchRoute(qc, VENDOR_CAL_NAV.href)}
+            className={cn(
+              "flex min-w-[3.25rem] flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-semibold text-teal-200/90 transition-colors duration-150 ease-out",
+              vendorActive && "text-teal-50"
+            )}
+          >
+            <span
+              className={cn(
+                "flex h-9 w-9 items-center justify-center rounded-full border border-teal-400/30 bg-teal-500/15 transition-colors duration-150 ease-out",
+                vendorActive && "border-teal-300/50 bg-teal-400/25"
+              )}
+            >
+              <VENDOR_CAL_NAV.icon className="h-5 w-5" aria-hidden />
+            </span>
+            <span className="max-w-[4.5rem] truncate">Vendor</span>
+          </Link>
+        ) : null}
       </div>
     </nav>
   );

@@ -43,6 +43,7 @@ import { quotesRouter } from "./routes/quotes";
 import { reportsRouter } from "./routes/reports";
 import { tasksRouter } from "./routes/tasks";
 import { inviteRouter, teamRouter } from "./routes/team";
+import { vendorCalendarRouter } from "./routes/vendor-calendar";
 
 const REQUIRED_ENV = [
   "DATABASE_URL",
@@ -196,6 +197,7 @@ function createApp() {
   app.use("/api/dashboard", dashboardRouter);
   app.use("/api/bookings", bookingsRouter);
   app.use("/api/calendar", calendarRouter);
+  app.use("/api/vendor-calendar", vendorCalendarRouter);
   app.use("/api/events", eventsRouter);
   app.use("/api/leads", leadsRouter);
   app.use("/api/messages", messagesRouter);

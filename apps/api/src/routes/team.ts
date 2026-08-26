@@ -73,12 +73,13 @@ function webOrigin(): string {
 
 router.get("/me", async (req: Request, res: Response) => {
   try {
-    const { role, caterer, isOwner } = await getSession(req);
+    const { role, caterer, isOwner, isSuperAdmin } = await getSession(req);
     return res.json({
       role,
       catererName: caterer.name,
       isTeamMember: !isOwner,
-      isOwner
+      isOwner,
+      isSuperAdmin
     });
   } catch (e) {
     return handleRouteError(res, e, "Team me");

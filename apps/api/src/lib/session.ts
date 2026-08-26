@@ -7,6 +7,7 @@ import { timer } from "./perf";
 import { seedMenuItemsForCaterer } from "./seed-menu-items";
 import { seedPackagesForCaterer } from "./seed-packages";
 import { ensureCatererSlug, uniqueSlugForName } from "./slug";
+import { resolveIsSuperAdmin } from "./super-admin";
 
 type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 
@@ -348,8 +349,10 @@ export async function getSession(req: Request) {
   const isCatererOwner = caterer.userId === data.user.id;
   const role: TeamRole = isCatererOwner ? "owner" : (teamMembership?.role ?? "owner");
   const isOwner = isCatererOwner;
+  const isSuperAdmin = await resolveIsSuperAdmin(data.user.id, data.user.email ?? null);
+  perf.step("super-admin");
 
   perf.end();
 
-  return { session: data.session, user: data.user, caterer, role, isOwner };
+  return { session: data.session, user: data.user, caterer, role, isOwner, isSuperAdmin };
 }
