@@ -247,3 +247,40 @@ export function useVendorCalendarGrants(enabled: boolean) {
 
   return { list, createGrant, revokeGrant };
 }
+
+export function useGoogleCalendarSync(enabled: boolean) {
+  const qc = useQueryClient();
+
+  const status = useQuery({
+    queryKey: queryKeys.vendorCalendar.googleStatus(),
+    queryFn: () => api.vendorCalendar.googleStatus(),
+    staleTime: 60_000,
+    enabled
+  });
+
+  const disconnect = useMutation({
+    mutationFn: () => api.vendorCalendar.googleDisconnect(),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.googleStatus() });
+      toast.success("Google Calendar disconnected");
+    },
+    onError: () => toast.error("Could not disconnect Google Calendar")
+  });
+
+  const sync = useMutation({
+    mutationFn: (body?: { start?: string; end?: string }) => api.vendorCalendar.googleSync(body),
+    onSuccess: (result) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.all });
+      toast.success(
+        `Synced from Google — ${result.created ?? 0} new, ${result.updated ?? 0} updated`
+      );
+    },
+    onError: () => toast.error("Google sync failed")
+  });
+
+  const connect = () => {
+    window.location.href = "/api/vendor-calendar/google/oauth/start";
+  };
+
+  return { status, disconnect, sync, connect };
+}

@@ -154,6 +154,21 @@ export type VendorCalendarIcalToken = {
   webcalUrl: string;
 };
 
+export type GoogleCalendarSyncStatus = {
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+  calendarId: string;
+  connectedAt: string | null;
+};
+
+export type GoogleCalendarSyncResult = {
+  ok: boolean;
+  created?: number;
+  updated?: number;
+  skipped?: number;
+};
+
 export function showAsColor(showAs: CalendarShowAs, colorHex?: string | null) {
   if (colorHex && /^#[0-9A-Fa-f]{6}$/.test(colorHex)) return colorHex;
   return SHOW_AS_OPTIONS.find((o) => o.value === showAs)?.color ?? "#1B2A4A";

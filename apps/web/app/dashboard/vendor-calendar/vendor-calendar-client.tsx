@@ -1,9 +1,10 @@
 "use client";
 
 import { endOfMonth, startOfMonth } from "date-fns";
-import { CalendarClock, Download, Link2, Plus, Shield } from "lucide-react";
+import { CalendarClock, Download, Link2, Plus, RefreshCw, Shield } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useCallback, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  useGoogleCalendarSync,
   useVendorCalendarDirectory,
   useVendorCalendarEntries,
   useVendorCalendarGrants,
@@ -38,6 +40,8 @@ const VendorCalendarWidget = dynamic(
 );
 
 export default function VendorCalendarClient() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: session } = useSession();
   const { can, isSuperAdmin } = usePermissions();
   const canWrite = can("vendor_calendar:write");
@@ -84,6 +88,20 @@ export default function VendorCalendarClient() {
   const sharedScope = directory?.shared.find((s) => s.userId === ownerUserId)?.scope;
   const canEdit =
     canWrite && (isOwnCalendar || isSuperAdmin || sharedScope === "edit");
+
+  const googleSync = useGoogleCalendarSync(Boolean(isOwnCalendar && canWrite));
+
+  useEffect(() => {
+    const google = searchParams.get("google");
+    if (!google) return;
+    if (google === "connected") toast.success("Google Calendar connected — entries will sync");
+    else if (google === "oauth_denied") toast.error("Google Calendar connection cancelled");
+    else if (google === "oauth_failed") toast.error("Google Calendar connection failed");
+    else if (google === "oauth_not_configured") {
+      toast.error("Google Calendar OAuth is not configured on the server");
+    }
+    router.replace("/dashboard/vendor-calendar");
+  }, [searchParams, router]);
 
   const entries = data?.items ?? [];
 
@@ -245,6 +263,55 @@ export default function VendorCalendarClient() {
           ) : null}
         </div>
       </div>
+
+      {isOwnCalendar && canWrite && googleSync.status.data?.configured ? (
+        <Card className="border-slate-200 bg-gradient-to-r from-white to-slate-50">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-[#1B2A4A]">Google Calendar sync</p>
+              <p className="text-xs text-muted-foreground">
+                {googleSync.status.data.connected
+                  ? `Connected as ${googleSync.status.data.email ?? "Google account"}. New entries push automatically; use Sync now to pull changes.`
+                  : "Connect to sync entries two-way with your Google Calendar (non-recurring events)."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {googleSync.status.data.connected ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      googleSync.sync.mutate({ start: range.start, end: range.end })
+                    }
+                  >
+                    <RefreshCw className="mr-1.5 h-4 w-4" aria-hidden />
+                    Sync now
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => googleSync.disconnect.mutate()}
+                  >
+                    Disconnect
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-[#1B2A4A] hover:bg-[#152238]"
+                  onClick={googleSync.connect}
+                >
+                  Connect Google Calendar
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {(calendarOptions.length > 1 || isSuperAdmin) && (
         <div className="max-w-md space-y-2">

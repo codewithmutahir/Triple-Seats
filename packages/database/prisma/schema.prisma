@@ -241,6 +241,13 @@ model User {
   isSuperAdmin  Boolean   @default(false)
   /// Secret token for read-only iCal/webcal subscription feed.
   vendorCalendarIcalToken String? @unique
+  /// Google Calendar OAuth (encrypted refresh token).
+  googleCalendarRefreshTokenEnc String?
+  googleCalendarAccessTokenEnc  String?
+  googleCalendarTokenExpiresAt  DateTime?
+  googleCalendarId              String?   @default("primary")
+  googleCalendarEmail           String?
+  googleCalendarConnectedAt     DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
@@ -279,6 +286,10 @@ model VendorCalendarEntry {
   meetingUrl              String?
   /// Optional custom hex color override (#RRGGBB).
   colorHex                String?
+  /// Linked Google Calendar event (two-way sync).
+  googleEventId           String?
+  googleEventEtag         String?
+  googleEventUpdatedAt    DateTime?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   caterer     Caterer        @relation(fields: [catererId], references: [id], onDelete: Cascade)
@@ -290,6 +301,7 @@ model VendorCalendarEntry {
   @@index([catererId, startAt, endAt])
   @@index([ownerUserId, startAt])
   @@index([ownerUserId, recurrenceFreq])
+  @@index([ownerUserId, googleEventId])
   @@map("vendor_calendar_entries")
 }
 
