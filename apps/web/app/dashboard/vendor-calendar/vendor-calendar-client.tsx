@@ -264,19 +264,23 @@ export default function VendorCalendarClient() {
         </div>
       </div>
 
-      {isOwnCalendar && canWrite && googleSync.status.data?.configured ? (
+      {isOwnCalendar && canWrite ? (
         <Card className="border-slate-200 bg-gradient-to-r from-white to-slate-50">
           <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-[#1B2A4A]">Google Calendar sync</p>
               <p className="text-xs text-muted-foreground">
-                {googleSync.status.data.connected
-                  ? `Connected as ${googleSync.status.data.email ?? "Google account"}. New entries push automatically; use Sync now to pull changes.`
-                  : "Connect to sync entries two-way with your Google Calendar (non-recurring events)."}
+                {googleSync.status.isLoading
+                  ? "Checking Google connection…"
+                  : !googleSync.status.data?.configured
+                    ? "Google OAuth is not configured on the API server yet (add GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET on Hostinger, then restart API)."
+                    : googleSync.status.data.connected
+                      ? `Connected as ${googleSync.status.data.email ?? "Google account"}. New entries push automatically; use Sync now to pull changes.`
+                      : "Connect to sync entries two-way with your Google Calendar (non-recurring events)."}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {googleSync.status.data.connected ? (
+              {googleSync.status.data?.configured && googleSync.status.data.connected ? (
                 <>
                   <Button
                     type="button"
@@ -298,7 +302,7 @@ export default function VendorCalendarClient() {
                     Disconnect
                   </Button>
                 </>
-              ) : (
+              ) : googleSync.status.data?.configured ? (
                 <Button
                   type="button"
                   size="sm"
@@ -307,7 +311,7 @@ export default function VendorCalendarClient() {
                 >
                   Connect Google Calendar
                 </Button>
-              )}
+              ) : null}
             </div>
           </CardContent>
         </Card>
