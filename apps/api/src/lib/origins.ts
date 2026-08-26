@@ -16,6 +16,7 @@ function authUrlIsLocal(): boolean {
  * Origins allowed for CORS and Better Auth `trustedOrigins`.
  * Set `WEB_ORIGIN` and `BETTER_AUTH_URL` to your production https origin.
  * For subdomain tenants, set `PUBLIC_ROOT_DOMAIN` (e.g. catepro.app) — subdomains are allowed automatically.
+ * For Vercel preview deploys, set `ALLOW_VERCEL_PREVIEW_ORIGINS=true` or list URLs in `BETTER_AUTH_TRUSTED_ORIGINS`.
  */
 export function allowedWebOrigins(): string[] {
   const origins: string[] = [];
@@ -39,13 +40,28 @@ export function allowedWebOrigins(): string[] {
       .map((s) => s.trim().replace(/\/+$/, ""))
       .filter((s) => s.length > 0) ?? [];
 
+  if (process.env.ALLOW_VERCEL_PREVIEW_ORIGINS === "true") {
+    origins.push("https://*.vercel.app");
+  }
+
   return [...new Set([...origins, ...extras])];
+}
+
+function isVercelPreviewOrigin(origin: string): boolean {
+  if (process.env.ALLOW_VERCEL_PREVIEW_ORIGINS !== "true") return false;
+  try {
+    const { protocol, hostname } = new URL(origin.replace(/\/+$/, ""));
+    return protocol === "https:" && hostname.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
 }
 
 /** CORS origin check — includes tenant subdomains when PUBLIC_ROOT_DOMAIN is set. */
 export function isAllowedWebOrigin(origin: string): boolean {
   const normalized = origin.replace(/\/+$/, "");
   if (allowedWebOrigins().includes(normalized)) return true;
+  if (isVercelPreviewOrigin(normalized)) return true;
 
   const root = process.env.PUBLIC_ROOT_DOMAIN?.trim().toLowerCase();
   if (!root) return false;

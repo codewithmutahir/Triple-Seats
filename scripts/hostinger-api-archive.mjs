@@ -174,6 +174,10 @@ function main() {
   const apiPkg = JSON.parse(fs.readFileSync(apiPkgPath, "utf8"));
   apiPkg.scripts.build = "echo dist prebuilt";
   replaceWorkspaceDeps(apiPkg.dependencies);
+  // Hostinger runs npm install without lockfile — pin auth deps to avoid surprise major upgrades.
+  if (apiPkg.dependencies?.["better-auth"]) {
+    apiPkg.dependencies["better-auth"] = "1.7.1";
+  }
   writeUtf8(apiPkgPath, `${JSON.stringify(apiPkg, null, 2)}\n`);
 
   const dbPkgPath = path.join(staging, "packages/database/package.json");
