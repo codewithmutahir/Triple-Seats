@@ -453,7 +453,22 @@ export const api = {
     revokeGrant: (id: string) =>
       apiFetch<void>(`/api/vendor-calendar/grants/${encodeURIComponent(id)}`, {
         method: "DELETE"
-      })
+      }),
+    exportIcal: async (params: { start: string; end: string; ownerUserId?: string }) => {
+      const qs = new URLSearchParams({ start: params.start, end: params.end });
+      if (params.ownerUserId) qs.set("ownerUserId", params.ownerUserId);
+      const res = await fetch(`/api/vendor-calendar/export.ics?${qs}`, { credentials: "include" });
+      if (!res.ok) {
+        const error = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new ApiError(error.error ?? "Export failed", res.status);
+      }
+      return res.text();
+    },
+    icalToken: () =>
+      apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarIcalToken>(
+        "/api/vendor-calendar/ical-token",
+        { method: "POST", body: "{}" }
+      )
   },
 
   reports: {

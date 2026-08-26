@@ -1,9 +1,10 @@
 "use client";
 
 import { endOfMonth, startOfMonth } from "date-fns";
-import { CalendarClock, Plus, Shield } from "lucide-react";
+import { CalendarClock, Download, Link2, Plus, Shield } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,6 +25,7 @@ import {
 } from "@/hooks/use-vendor-calendar";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useSession } from "@/lib/auth-client";
+import { api } from "@/lib/api";
 import { SHOW_AS_OPTIONS, type VendorCalendarEntry } from "@/lib/vendor-calendar-types";
 
 import { EntryFormDialog } from "./entry-form-dialog";
@@ -154,6 +156,37 @@ export default function VendorCalendarClient() {
     [canEdit, update, entries]
   );
 
+  const handleExportIcal = useCallback(async () => {
+    try {
+      const ics = await api.vendorCalendar.exportIcal({
+        start: range.start,
+        end: range.end,
+        ownerUserId: isOwnCalendar ? undefined : ownerUserId
+      });
+      const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "vendor-calendar.ics";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Calendar exported");
+    } catch {
+      toast.error("Export failed");
+    }
+  }, [range.start, range.end, ownerUserId, isOwnCalendar]);
+
+  const handleSubscribeLink = useCallback(async () => {
+    if (!isOwnCalendar) return;
+    try {
+      const data = await api.vendorCalendar.icalToken();
+      await navigator.clipboard.writeText(data.webcalUrl);
+      toast.success("Subscribe link copied — paste into Outlook or Google Calendar");
+    } catch {
+      toast.error("Could not create subscribe link");
+    }
+  }, [isOwnCalendar]);
+
   if (dirLoading && !directory) {
     return (
       <div className="space-y-4">
@@ -181,6 +214,18 @@ export default function VendorCalendarClient() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {isOwnCalendar ? (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={() => void handleExportIcal()}>
+                <Download className="mr-1.5 h-4 w-4" aria-hidden />
+                Export .ics
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => void handleSubscribeLink()}>
+                <Link2 className="mr-1.5 h-4 w-4" aria-hidden />
+                Subscribe link
+              </Button>
+            </>
+          ) : null}
           {isSuperAdmin ? (
             <Button type="button" variant="outline" size="sm" onClick={() => setGrantsOpen(true)}>
               <Shield className="mr-1.5 h-4 w-4" aria-hidden />

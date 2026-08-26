@@ -1,6 +1,10 @@
--- Vendor Calendar Phase 2: recurrence + reminders
+-- Vendor Calendar Phase 2: recurrence + reminders (idempotent)
 
-CREATE TYPE "VendorRecurrenceFreq" AS ENUM ('none', 'daily', 'weekly', 'monthly', 'yearly');
+DO $$ BEGIN
+  CREATE TYPE "VendorRecurrenceFreq" AS ENUM ('none', 'daily', 'weekly', 'monthly', 'yearly');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 ALTER TABLE "vendor_calendar_entries"
   ADD COLUMN IF NOT EXISTS "recurrenceFreq" "VendorRecurrenceFreq" NOT NULL DEFAULT 'none',

@@ -24,6 +24,9 @@ export type VendorCalendarEntry = {
   recurrenceEndAt: string | null;
   recurrenceCount: number | null;
   reminderMinutesBefore: number | null;
+  meetingUrl: string | null;
+  colorHex: string | null;
+  attendees: VendorCalendarAttendee[];
   color: string;
   createdAt: string;
   updatedAt: string;
@@ -45,6 +48,20 @@ export type VendorCalendarEntryInput = {
   recurrenceEndAt?: string | null;
   recurrenceCount?: number | null;
   reminderMinutesBefore?: number | null;
+  meetingUrl?: string | null;
+  colorHex?: string | null;
+  attendees?: VendorCalendarAttendeeInput[];
+};
+
+export type VendorCalendarAttendeeInput = {
+  email: string;
+  name?: string | null;
+};
+
+export type VendorCalendarAttendee = {
+  id: string;
+  email: string;
+  name: string | null;
 };
 
 export type VendorCalendarDirectory = {
@@ -121,6 +138,23 @@ export const REMINDER_OPTIONS: Array<{ value: number | null; label: string }> = 
   { value: 1440, label: "1 day before" }
 ];
 
-export function showAsColor(showAs: CalendarShowAs) {
+export const CATEGORY_COLOR_OPTIONS: Array<{ value: string | null; label: string; color: string }> = [
+  { value: null, label: "Default (show-as color)", color: "#1B2A4A" },
+  { value: "#1B2A4A", label: "Navy", color: "#1B2A4A" },
+  { value: "#10B981", label: "Green", color: "#10B981" },
+  { value: "#F59E0B", label: "Amber", color: "#F59E0B" },
+  { value: "#EF4444", label: "Red", color: "#EF4444" },
+  { value: "#8B5CF6", label: "Purple", color: "#8B5CF6" },
+  { value: "#0EA5E9", label: "Sky", color: "#0EA5E9" }
+];
+
+export type VendorCalendarIcalToken = {
+  token: string;
+  subscribeUrl: string;
+  webcalUrl: string;
+};
+
+export function showAsColor(showAs: CalendarShowAs, colorHex?: string | null) {
+  if (colorHex && /^#[0-9A-Fa-f]{6}$/.test(colorHex)) return colorHex;
   return SHOW_AS_OPTIONS.find((o) => o.value === showAs)?.color ?? "#1B2A4A";
 }

@@ -183,6 +183,8 @@ model Caterer {
   teamMembers            TeamMember[]
   auditLogs              AuditLog[]
   vendorCalendarEntries  VendorCalendarEntry[]
+  vendorCalendarAttendees VendorCalendarAttendee[]
+  vendorCalendarReminderLogs VendorCalendarReminderLog[]
 
   @@index([cloverMerchantId])
   @@map("caterers")
@@ -237,6 +239,8 @@ model User {
   image         String?
   /// Platform-level flag — can view all vendor calendars and manage share grants.
   isSuperAdmin  Boolean   @default(false)
+  /// Secret token for read-only iCal/webcal subscription feed.
+  vendorCalendarIcalToken String? @unique
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
@@ -271,15 +275,53 @@ model VendorCalendarEntry {
   recurrenceCount         Int?
   /// Minutes before start to remind (stored for display; delivery via email queue later).
   reminderMinutesBefore   Int?
+  /// Teams / Google Meet / Zoom link (stored URL only).
+  meetingUrl              String?
+  /// Optional custom hex color override (#RRGGBB).
+  colorHex                String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   caterer     Caterer        @relation(fields: [catererId], references: [id], onDelete: Cascade)
   owner       User           @relation("VendorCalendarOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  attendees   VendorCalendarAttendee[]
+  reminderLogs VendorCalendarReminderLog[]
 
   @@index([catererId])
   @@index([catererId, startAt, endAt])
   @@index([ownerUserId, startAt])
+  @@index([ownerUserId, recurrenceFreq])
   @@map("vendor_calendar_entries")
+}
+
+model VendorCalendarAttendee {
+  id        String              @id @default(cuid())
+  catererId String
+  entryId   String
+  email     String
+  name      String?
+  createdAt DateTime            @default(now())
+  caterer   Caterer             @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  entry     VendorCalendarEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@unique([entryId, email])
+  @@index([catererId])
+  @@index([entryId])
+  @@map("vendor_calendar_attendees")
+}
+
+model VendorCalendarReminderLog {
+  id                String              @id @default(cuid())
+  catererId         String
+  entryId           String
+  occurrenceStartAt DateTime
+  sentAt            DateTime            @default(now())
+  caterer           Caterer             @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  entry             VendorCalendarEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@unique([entryId, occurrenceStartAt])
+  @@index([catererId])
+  @@index([entryId])
+  @@map("vendor_calendar_reminder_logs")
 }
 
 /// Super-admin grants: grantee may view (or edit) target user's vendor calendar.

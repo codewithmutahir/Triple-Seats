@@ -23,11 +23,13 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  CATEGORY_COLOR_OPTIONS,
   RECURRENCE_FREQ_OPTIONS,
   REMINDER_OPTIONS,
   SHOW_AS_OPTIONS,
   WEEKDAY_OPTIONS,
   type CalendarShowAs,
+  type VendorCalendarAttendeeInput,
   type VendorCalendarEntry,
   type VendorCalendarEntryInput,
   type VendorRecurrenceFreq,
@@ -65,6 +67,28 @@ function inclusiveEndDateFromExclusive(endIso: string) {
   const end = new Date(endIso);
   end.setDate(end.getDate() - 1);
   return toLocalDateValue(end);
+}
+
+function formatAttendeesForTextarea(attendees?: Array<{ email: string; name: string | null }>) {
+  if (!attendees?.length) return "";
+  return attendees
+    .map((a) => (a.name ? `${a.email}, ${a.name}` : a.email))
+    .join("\n");
+}
+
+function parseAttendeesText(raw: string): VendorCalendarAttendeeInput[] {
+  const seen = new Set<string>();
+  const items: VendorCalendarAttendeeInput[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [emailPart, ...nameParts] = trimmed.split(",");
+    const email = emailPart?.trim().toLowerCase() ?? "";
+    if (!email || !email.includes("@") || seen.has(email)) continue;
+    seen.add(email);
+    items.push({ email, name: nameParts.join(",").trim() || null });
+  }
+  return items.slice(0, 20);
 }
 
 type EntryFormDialogProps = {
@@ -114,6 +138,9 @@ export function EntryFormDialog({
   const [recurrenceEndDate, setRecurrenceEndDate] = useState("");
   const [recurrenceCount, setRecurrenceCount] = useState("");
   const [reminderMinutesBefore, setReminderMinutesBefore] = useState<number | null>(null);
+  const [meetingUrl, setMeetingUrl] = useState("");
+  const [colorHex, setColorHex] = useState<string | null>(null);
+  const [attendeesText, setAttendeesText] = useState("");
   const [startLocal, setStartLocal] = useState("");
   const [endLocal, setEndLocal] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -143,6 +170,9 @@ export function EntryFormDialog({
       );
       setRecurrenceCount(initial.recurrenceCount ? String(initial.recurrenceCount) : "");
       setReminderMinutesBefore(initial.reminderMinutesBefore ?? null);
+      setMeetingUrl(initial.meetingUrl ?? "");
+      setColorHex(initial.colorHex ?? null);
+      setAttendeesText(formatAttendeesForTextarea(initial.attendees));
       const start = new Date(initial.startAt!);
       const end = new Date(initial.endAt!);
       if (initial.allDay) {
@@ -171,6 +201,9 @@ export function EntryFormDialog({
       setRecurrenceEndDate("");
       setRecurrenceCount("");
       setReminderMinutesBefore(null);
+      setMeetingUrl("");
+      setColorHex(null);
+      setAttendeesText("");
       setStartLocal(toLocalDateTimeValue(slotDefaults.start));
       setEndLocal(toLocalDateTimeValue(slotDefaults.end));
       setStartDate(toLocalDateValue(slotDefaults.start));
@@ -219,7 +252,10 @@ export function EntryFormDialog({
         ? new Date(`${recurrenceEndDate}T23:59:59`).toISOString()
         : null,
       recurrenceCount: recurrenceCount ? Number(recurrenceCount) : null,
-      reminderMinutesBefore
+      reminderMinutesBefore,
+      meetingUrl: meetingUrl.trim() || null,
+      colorHex,
+      attendees: parseAttendeesText(attendeesText)
     });
   }
 
@@ -351,6 +387,60 @@ export function EntryFormDialog({
               placeholder="Optional"
               disabled={!canEdit}
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="vc-meeting">Meeting link (Teams / Meet / Zoom)</Label>
+            <Input
+              id="vc-meeting"
+              type="url"
+              value={meetingUrl}
+              onChange={(e) => setMeetingUrl(e.target.value)}
+              placeholder="https://teams.microsoft.com/..."
+              disabled={!canEdit}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Entry color</Label>
+            <Select
+              value={colorHex ?? "default"}
+              onValueChange={(v) => setColorHex(v === "default" ? null : v)}
+              disabled={!canEdit}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CATEGORY_COLOR_OPTIONS.map((opt) => (
+                  <SelectItem key={String(opt.value ?? "default")} value={opt.value ?? "default"}>
+                    <span className="inline-flex items-center gap-2">
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: opt.color }}
+                        aria-hidden
+                      />
+                      {opt.label}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="vc-attendees">Invite attendees</Label>
+            <Textarea
+              id="vc-attendees"
+              value={attendeesText}
+              onChange={(e) => setAttendeesText(e.target.value)}
+              placeholder={"one per line\nejane@example.com, Jane Doe\nbob@example.com"}
+              rows={3}
+              disabled={!canEdit}
+            />
+            <p className="text-xs text-muted-foreground">
+              Invites are emailed when you save (requires Resend configured on API).
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -486,7 +576,7 @@ export function EntryFormDialog({
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Reminder time is saved; email notifications coming soon.
+              Reminder emails send automatically once the API cron job is configured on the server.
             </p>
           </div>
 
