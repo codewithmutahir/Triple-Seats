@@ -28,6 +28,7 @@ import {
 import { usePermissions } from "@/hooks/use-permissions";
 import { useSession } from "@/lib/auth-client";
 import { api } from "@/lib/api";
+import { ApiError } from "@/lib/api-error";
 import { SHOW_AS_OPTIONS, type VendorCalendarEntry } from "@/lib/vendor-calendar-types";
 
 import { EntryFormDialog } from "./entry-form-dialog";
@@ -189,8 +190,8 @@ export default function VendorCalendarClient() {
       a.click();
       URL.revokeObjectURL(url);
       toast.success("Calendar exported");
-    } catch {
-      toast.error("Export failed");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Export failed");
     }
   }, [range.start, range.end, ownerUserId, isOwnCalendar]);
 
@@ -200,8 +201,8 @@ export default function VendorCalendarClient() {
       const data = await api.vendorCalendar.icalToken();
       await navigator.clipboard.writeText(data.webcalUrl);
       toast.success("Subscribe link copied — paste into Outlook or Google Calendar");
-    } catch {
-      toast.error("Could not create subscribe link");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not create subscribe link");
     }
   }, [isOwnCalendar]);
 
@@ -234,6 +235,16 @@ export default function VendorCalendarClient() {
         <div className="flex flex-wrap items-center gap-2">
           {isOwnCalendar ? (
             <>
+              {googleSync.status.data?.configured && !googleSync.status.data.connected ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-[#1B2A4A] hover:bg-[#152238]"
+                  onClick={googleSync.connect}
+                >
+                  Connect Google Calendar
+                </Button>
+              ) : null}
               <Button type="button" variant="outline" size="sm" onClick={() => void handleExportIcal()}>
                 <Download className="mr-1.5 h-4 w-4" aria-hidden />
                 Export .ics
@@ -272,9 +283,11 @@ export default function VendorCalendarClient() {
               <p className="text-xs text-muted-foreground">
                 {googleSync.status.isLoading
                   ? "Checking Google connection…"
-                  : !googleSync.status.data?.configured
-                    ? "Google OAuth is not configured on the API server yet (add GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET on Hostinger, then restart API)."
-                    : googleSync.status.data.connected
+                  : googleSync.status.isError
+                    ? "Google sync API not found — redeploy tripeseats-api-hostinger-v2.zip on Hostinger, then restart the Node app."
+                    : !googleSync.status.data?.configured
+                      ? "Google OAuth is not configured on the API server yet (add GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET on Hostinger, then restart API)."
+                      : googleSync.status.data.connected
                       ? `Connected as ${googleSync.status.data.email ?? "Google account"}. New entries push automatically; use Sync now to pull changes.`
                       : "Connect to sync entries two-way with your Google Calendar (non-recurring events)."}
               </p>
