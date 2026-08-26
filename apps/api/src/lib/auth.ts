@@ -73,7 +73,7 @@ export const auth = betterAuth({
       enabled: true,
       maxAge: AUTH_COOKIE_CACHE_MAX_AGE_SECONDS,
       strategy: "compact",
-      refreshCache: true
+      refreshCache: false
     }
   },
   advanced: rootDomain
