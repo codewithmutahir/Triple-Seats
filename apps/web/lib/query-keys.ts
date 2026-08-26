@@ -66,7 +66,8 @@ export const queryKeys = {
     entries: (ownerUserId: string, start: string, end: string) =>
       [...queryKeys.vendorCalendar.all, "entries", ownerUserId, start, end] as const,
     directory: () => [...queryKeys.vendorCalendar.all, "directory"] as const,
-    grants: () => [...queryKeys.vendorCalendar.all, "grants"] as const
+    grants: () => [...queryKeys.vendorCalendar.all, "grants"] as const,
+    googleStatus: () => [...queryKeys.vendorCalendar.all, "googleStatus"] as const
   },
 
   bookings: {

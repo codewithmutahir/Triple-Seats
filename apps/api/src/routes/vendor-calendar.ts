@@ -20,6 +20,8 @@ import {
   dispatchDueVendorCalendarReminders,
   sendVendorCalendarAttendeeInviteEmail
 } from "../lib/vendor-calendar-mail";
+import { queueGoogleDelete, queueGooglePush } from "../lib/google-calendar-sync";
+import { vendorCalendarGoogleRouter } from "./vendor-calendar-google";
 
 const router = Router();
 
@@ -576,6 +578,8 @@ router.post("/entries", async (req: Request, res: Response) => {
       );
     }
 
+    queueGooglePush(row.id);
+
     return res.status(201).json(serializeEntry(row, { hidePrivateNotes: false }));
   } catch (e) {
     return handleRouteError(res, e, "Vendor calendar create");
@@ -679,6 +683,8 @@ router.patch("/entries/:id", async (req: Request, res: Response) => {
       ? await loadEntryForUser(id)
       : row;
 
+    queueGooglePush(id);
+
     return res.json(serializeEntry(refreshed ?? row, { hidePrivateNotes: false }));
   } catch (e) {
     return handleRouteError(res, e, "Vendor calendar update");
@@ -693,7 +699,7 @@ router.delete("/entries/:id", async (req: Request, res: Response) => {
 
     const existing = await prisma.vendorCalendarEntry.findUnique({
       where: { id },
-      select: { id: true, ownerUserId: true }
+      select: { id: true, ownerUserId: true, googleEventId: true }
     });
     if (!existing) {
       return res.status(404).json({ error: "Not found" });
@@ -705,6 +711,7 @@ router.delete("/entries/:id", async (req: Request, res: Response) => {
     }
 
     await prisma.vendorCalendarEntry.delete({ where: { id } });
+    queueGoogleDelete(existing.ownerUserId, existing.googleEventId);
     return res.status(204).send();
   } catch (e) {
     return handleRouteError(res, e, "Vendor calendar delete");
@@ -1187,5 +1194,7 @@ router.post("/reminders/dispatch", async (req: Request, res: Response) => {
     return handleRouteError(res, e, "Vendor calendar reminder dispatch");
   }
 });
+
+router.use("/google", vendorCalendarGoogleRouter);
 
 export { router as vendorCalendarRouter };

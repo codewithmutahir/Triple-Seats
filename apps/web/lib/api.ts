@@ -468,6 +468,20 @@ export const api = {
       apiFetch<import("@/lib/vendor-calendar-types").VendorCalendarIcalToken>(
         "/api/vendor-calendar/ical-token",
         { method: "POST", body: "{}" }
+      ),
+    googleStatus: () =>
+      apiFetch<import("@/lib/vendor-calendar-types").GoogleCalendarSyncStatus>(
+        "/api/vendor-calendar/google/status"
+      ),
+    googleDisconnect: () =>
+      apiFetch<{ ok: boolean }>("/api/vendor-calendar/google/disconnect", {
+        method: "POST",
+        body: "{}"
+      }),
+    googleSync: (body?: { start?: string; end?: string }) =>
+      apiFetch<import("@/lib/vendor-calendar-types").GoogleCalendarSyncResult>(
+        "/api/vendor-calendar/google/sync",
+        { method: "POST", body: JSON.stringify(body ?? {}) }
       )
   },
 
