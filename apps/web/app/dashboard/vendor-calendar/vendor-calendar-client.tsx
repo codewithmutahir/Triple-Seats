@@ -99,7 +99,7 @@ export default function VendorCalendarClient() {
     else if (google === "oauth_denied") toast.error("Google Calendar connection cancelled");
     else if (google === "oauth_failed") toast.error("Google Calendar connection failed");
     else if (google === "oauth_not_configured") {
-      toast.error("Google Calendar OAuth is not configured on the server");
+      toast.error("Google Calendar sync isn't available right now");
     }
     router.replace("/dashboard/vendor-calendar");
   }, [searchParams, router]);
@@ -284,9 +284,9 @@ export default function VendorCalendarClient() {
                 {googleSync.status.isLoading
                   ? "Checking Google connection…"
                   : googleSync.status.isError
-                    ? "Google sync API not found — redeploy tripeseats-api-hostinger-v2.zip on Hostinger, then restart the Node app."
+                    ? "Google Calendar sync isn't available right now. Try again later."
                     : !googleSync.status.data?.configured
-                      ? "Google OAuth is not configured on the API server yet (add GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET on Hostinger, then restart API)."
+                      ? "Google Calendar sync isn't set up yet. Contact your administrator if you need this feature."
                       : googleSync.status.data.connected
                       ? `Connected as ${googleSync.status.data.email ?? "Google account"}. New entries push automatically; use Sync now to pull changes.`
                       : "Connect to sync entries two-way with your Google Calendar (non-recurring events)."}

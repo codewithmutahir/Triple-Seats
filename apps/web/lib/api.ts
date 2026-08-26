@@ -466,7 +466,7 @@ export const api = {
           if (json.error) message = json.error;
         } catch {
           if (text.includes("Cannot GET")) {
-            message = "Export API not deployed — upload latest tripeseats-api-hostinger-v2.zip to Hostinger";
+            message = "Export isn't available right now. Please try again later.";
           }
         }
         throw new ApiError(message, res.status);
