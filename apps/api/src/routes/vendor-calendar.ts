@@ -15,6 +15,11 @@ import {
   expandVendorCalendarOccurrences,
   recurringMasterWhere
 } from "../lib/vendor-calendar-recurrence";
+import { buildIcalCalendar, entryColorHex, generateIcalToken } from "../lib/vendor-calendar-ical";
+import {
+  dispatchDueVendorCalendarReminders,
+  sendVendorCalendarAttendeeInviteEmail
+} from "../lib/vendor-calendar-mail";
 
 const router = Router();
 
@@ -24,15 +29,18 @@ const SHOW_AS = ["busy", "free", "tentative", "oof"] as const;
 const SHARE_SCOPES = ["view", "edit"] as const;
 const RECURRENCE_FREQ = ["none", "daily", "weekly", "monthly", "yearly"] as const;
 
-const SHOW_AS_COLORS: Record<CalendarShowAs, string> = {
-  busy: "#1B2A4A",
-  free: "#10B981",
-  tentative: "#F59E0B",
-  oof: "#6B7280"
-};
-
 const isoDateString = z.string().refine((v) => !Number.isNaN(Date.parse(v)), {
   message: "Invalid ISO datetime"
+});
+const hexColor = z
+  .string()
+  .regex(/^#[0-9A-Fa-f]{6}$/, "Invalid hex color")
+  .nullable()
+  .optional();
+const meetingUrl = z.union([z.string().trim().url().max(2000), z.literal(""), z.null()]).optional();
+const attendeeSchema = z.object({
+  email: z.string().trim().email().max(320),
+  name: z.string().trim().max(120).nullable().optional()
 });
 
 const entryBodySchema = z.object({
@@ -49,7 +57,10 @@ const entryBodySchema = z.object({
   recurrenceDaysOfWeek: z.string().trim().max(32).nullable().optional(),
   recurrenceEndAt: isoDateString.nullable().optional(),
   recurrenceCount: z.number().int().min(1).max(500).nullable().optional(),
-  reminderMinutesBefore: z.number().int().min(1).max(10080).nullable().optional()
+  reminderMinutesBefore: z.number().int().min(1).max(10080).nullable().optional(),
+  meetingUrl,
+  colorHex: hexColor,
+  attendees: z.array(attendeeSchema).max(20).optional()
 });
 
 const entryPatchSchema = entryBodySchema.partial().refine(
@@ -80,9 +91,12 @@ const entrySelect = {
   recurrenceEndAt: true,
   recurrenceCount: true,
   reminderMinutesBefore: true,
+  meetingUrl: true,
+  colorHex: true,
   createdAt: true,
   updatedAt: true,
-  owner: { select: { id: true, name: true, email: true } }
+  owner: { select: { id: true, name: true, email: true } },
+  attendees: { select: { id: true, email: true, name: true } }
 } as const;
 
 type EntryRow = {
@@ -103,9 +117,12 @@ type EntryRow = {
   recurrenceEndAt: Date | null;
   recurrenceCount: number | null;
   reminderMinutesBefore: number | null;
+  meetingUrl: string | null;
+  colorHex: string | null;
   createdAt: Date;
   updatedAt: Date;
   owner?: { id: string; name: string | null; email: string } | null;
+  attendees?: Array<{ id: string; email: string; name: string | null }>;
 };
 
 function paramId(req: Request): string {
@@ -171,7 +188,14 @@ function serializeEntry(
     recurrenceEndAt: row.recurrenceEndAt?.toISOString() ?? null,
     recurrenceCount: row.recurrenceCount,
     reminderMinutesBefore: row.reminderMinutesBefore,
-    color: SHOW_AS_COLORS[row.showAs],
+    meetingUrl: row.meetingUrl,
+    colorHex: row.colorHex,
+    color: entryColorHex(row.showAs, row.colorHex),
+    attendees: (row.attendees ?? []).map((a) => ({
+      id: a.id,
+      email: a.email,
+      name: a.name
+    })),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     owner: row.owner
@@ -191,8 +215,161 @@ function recurrenceDataFromBody(data: z.infer<typeof entryBodySchema>) {
     recurrenceDaysOfWeek: data.recurrenceDaysOfWeek ?? null,
     recurrenceEndAt: data.recurrenceEndAt ? new Date(data.recurrenceEndAt) : null,
     recurrenceCount: data.recurrenceCount ?? null,
-    reminderMinutesBefore: data.reminderMinutesBefore ?? null
+    reminderMinutesBefore: data.reminderMinutesBefore ?? null,
+    meetingUrl: data.meetingUrl && data.meetingUrl.trim() ? data.meetingUrl.trim() : null,
+    colorHex: data.colorHex ?? null
   };
+}
+
+type AttendeeInput = z.infer<typeof attendeeSchema>;
+
+function queueAttendeeInvites(
+  entry: {
+    title: string;
+    startAt: Date;
+    endAt: Date;
+    allDay: boolean;
+    location: string | null;
+    meetingUrl: string | null;
+    notes: string | null;
+    isPrivate: boolean;
+  },
+  owner: { name: string | null; email: string },
+  attendees: AttendeeInput[]
+) {
+  for (const attendee of attendees) {
+    void sendVendorCalendarAttendeeInviteEmail({
+      to: attendee.email,
+      attendeeName: attendee.name,
+      ownerName: owner.name,
+      ownerEmail: owner.email,
+      title: entry.title,
+      startAt: entry.startAt,
+      endAt: entry.endAt,
+      allDay: entry.allDay,
+      location: entry.location,
+      meetingUrl: entry.meetingUrl,
+      notes: entry.isPrivate ? null : entry.notes
+    }).catch(() => undefined);
+  }
+}
+
+async function replaceAttendees(
+  entryId: string,
+  catererId: string,
+  attendees: AttendeeInput[] | undefined,
+  opts: {
+    entry: Parameters<typeof queueAttendeeInvites>[0];
+    owner: { name: string | null; email: string };
+  }
+) {
+  if (attendees === undefined) return;
+
+  const existing = await prisma.vendorCalendarAttendee.findMany({
+    where: { entryId },
+    select: { email: true }
+  });
+  const existingEmails = new Set(existing.map((a) => a.email.toLowerCase()));
+
+  await prisma.vendorCalendarAttendee.deleteMany({ where: { entryId, catererId } });
+  if (attendees.length > 0) {
+    await prisma.vendorCalendarAttendee.createMany({
+      data: attendees.map((a) => ({
+        catererId,
+        entryId,
+        email: a.email.toLowerCase(),
+        name: a.name ?? null
+      }))
+    });
+  }
+
+  const newlyAdded = attendees.filter((a) => !existingEmails.has(a.email.toLowerCase()));
+  if (newlyAdded.length > 0) {
+    queueAttendeeInvites(opts.entry, opts.owner, newlyAdded);
+  }
+}
+
+async function collectIcalEventsForOwner(ownerUserId: string, rangeStart: Date, rangeEnd: Date) {
+  const [singleRows, recurringRows] = await Promise.all([
+    prisma.vendorCalendarEntry.findMany({
+      where: {
+        ownerUserId,
+        recurrenceFreq: "none",
+        ...rangeWhere(rangeStart, rangeEnd)
+      },
+      select: {
+        id: true,
+        title: true,
+        notes: true,
+        location: true,
+        meetingUrl: true,
+        startAt: true,
+        endAt: true,
+        allDay: true,
+        isPrivate: true,
+        recurrenceFreq: true,
+        recurrenceInterval: true,
+        recurrenceDaysOfWeek: true,
+        recurrenceEndAt: true,
+        recurrenceCount: true
+      }
+    }),
+    prisma.vendorCalendarEntry.findMany({
+      where: {
+        ownerUserId,
+        ...recurringMasterWhere(rangeStart, rangeEnd)
+      },
+      select: {
+        id: true,
+        title: true,
+        notes: true,
+        location: true,
+        meetingUrl: true,
+        startAt: true,
+        endAt: true,
+        allDay: true,
+        isPrivate: true,
+        recurrenceFreq: true,
+        recurrenceInterval: true,
+        recurrenceDaysOfWeek: true,
+        recurrenceEndAt: true,
+        recurrenceCount: true
+      }
+    })
+  ]);
+
+  const events: Parameters<typeof buildIcalCalendar>[0] = [];
+
+  for (const row of singleRows) {
+    events.push({
+      uid: `${row.id}@tripeseats`,
+      title: row.title,
+      description: row.isPrivate ? null : row.notes,
+      location: row.location,
+      meetingUrl: row.meetingUrl,
+      startAt: row.startAt,
+      endAt: row.endAt,
+      allDay: row.allDay
+    });
+  }
+
+  for (const row of recurringRows) {
+    const occurrences = expandVendorCalendarOccurrences(row, rangeStart, rangeEnd);
+    for (const occ of occurrences) {
+      events.push({
+        uid: `${occ.occurrenceId}@tripeseats`,
+        title: row.title,
+        description: row.isPrivate ? null : row.notes,
+        location: row.location,
+        meetingUrl: row.meetingUrl,
+        startAt: occ.startAt,
+        endAt: occ.endAt,
+        allDay: row.allDay
+      });
+    }
+  }
+
+  return events;
 }
 
 const grantBodySchema = z.object({
@@ -377,10 +554,27 @@ router.post("/entries", async (req: Request, res: Response) => {
         allDay: parsed.data.allDay ?? false,
         showAs: (parsed.data.showAs ?? "busy") as CalendarShowAs,
         isPrivate: parsed.data.isPrivate ?? false,
-        ...recurrenceDataFromBody(parsed.data)
+        ...recurrenceDataFromBody(parsed.data),
+        attendees: parsed.data.attendees?.length
+          ? {
+              create: parsed.data.attendees.map((a) => ({
+                catererId: caterer.id,
+                email: a.email.toLowerCase(),
+                name: a.name ?? null
+              }))
+            }
+          : undefined
       },
       select: entrySelect
     });
+
+    if (parsed.data.attendees?.length && user.email) {
+      queueAttendeeInvites(
+        row,
+        { name: user.name ?? null, email: user.email },
+        parsed.data.attendees
+      );
+    }
 
     return res.status(201).json(serializeEntry(row, { hidePrivateNotes: false }));
   } catch (e) {
@@ -402,9 +596,17 @@ router.patch("/entries/:id", async (req: Request, res: Response) => {
       where: { id },
       select: {
         id: true,
+        catererId: true,
         ownerUserId: true,
+        title: true,
+        notes: true,
+        location: true,
+        meetingUrl: true,
+        isPrivate: true,
+        allDay: true,
         startAt: true,
-        endAt: true
+        endAt: true,
+        owner: { select: { name: true, email: true } }
       }
     });
     if (!existing) {
@@ -443,6 +645,13 @@ router.patch("/entries/:id", async (req: Request, res: Response) => {
     if (parsed.data.reminderMinutesBefore !== undefined) {
       data.reminderMinutesBefore = parsed.data.reminderMinutesBefore;
     }
+    if (parsed.data.meetingUrl !== undefined) {
+      data.meetingUrl =
+        parsed.data.meetingUrl && parsed.data.meetingUrl.trim()
+          ? parsed.data.meetingUrl.trim()
+          : null;
+    }
+    if (parsed.data.colorHex !== undefined) data.colorHex = parsed.data.colorHex;
 
     const row = await prisma.vendorCalendarEntry.update({
       where: { id },
@@ -450,7 +659,27 @@ router.patch("/entries/:id", async (req: Request, res: Response) => {
       select: entrySelect
     });
 
-    return res.json(serializeEntry(row, { hidePrivateNotes: false }));
+    if (parsed.data.attendees !== undefined && existing.owner.email) {
+      await replaceAttendees(id, existing.catererId, parsed.data.attendees, {
+        entry: {
+          title: row.title,
+          startAt: row.startAt,
+          endAt: row.endAt,
+          allDay: row.allDay,
+          location: row.location,
+          meetingUrl: row.meetingUrl,
+          notes: row.notes,
+          isPrivate: row.isPrivate
+        },
+        owner: { name: existing.owner.name, email: existing.owner.email }
+      });
+    }
+
+    const refreshed = parsed.data.attendees
+      ? await loadEntryForUser(id)
+      : row;
+
+    return res.json(serializeEntry(refreshed ?? row, { hidePrivateNotes: false }));
   } catch (e) {
     return handleRouteError(res, e, "Vendor calendar update");
   }
@@ -528,7 +757,9 @@ router.post("/entries/:id/duplicate", async (req: Request, res: Response) => {
         recurrenceDaysOfWeek: null,
         recurrenceEndAt: null,
         recurrenceCount: null,
-        reminderMinutesBefore: existing.reminderMinutesBefore
+        reminderMinutesBefore: existing.reminderMinutesBefore,
+        meetingUrl: existing.meetingUrl,
+        colorHex: existing.colorHex
       },
       select: entrySelect
     });
@@ -585,7 +816,9 @@ router.post("/entries/:id/copy-to-my-calendar", async (req: Request, res: Respon
         recurrenceDaysOfWeek: null,
         recurrenceEndAt: null,
         recurrenceCount: null,
-        reminderMinutesBefore: existing.reminderMinutesBefore
+        reminderMinutesBefore: existing.reminderMinutesBefore,
+        meetingUrl: existing.meetingUrl,
+        colorHex: existing.colorHex
       },
       select: entrySelect
     });
@@ -843,6 +1076,115 @@ router.delete("/grants/:id", async (req: Request, res: Response) => {
     return res.status(204).send();
   } catch (e) {
     return handleRouteError(res, e, "Calendar grant delete");
+  }
+});
+
+/** Read-only iCal/webcal feed (token auth — no session cookie). */
+router.get("/feed/:token", async (req: Request, res: Response) => {
+  try {
+    const token = String(req.params.token ?? "").replace(/\.ics$/i, "");
+    if (!token) return res.status(404).send("Not found");
+
+    const user = await prisma.user.findFirst({
+      where: { vendorCalendarIcalToken: token },
+      select: { id: true, name: true, email: true }
+    });
+    if (!user) return res.status(404).send("Not found");
+
+    const start = new Date();
+    const end = new Date(start.getTime() + MAX_RANGE_MS);
+    const events = await collectIcalEventsForOwner(user.id, start, end);
+    const ics = buildIcalCalendar(events, `${user.name ?? user.email} — Vendor Calendar`);
+
+    res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return res.send(ics);
+  } catch (e) {
+    return handleRouteError(res, e, "Vendor calendar feed");
+  }
+});
+
+/** Authenticated export for visible calendar range. */
+router.get("/export.ics", async (req: Request, res: Response) => {
+  try {
+    const { user, caterer, isSuperAdmin } = await getAuthorizedSession(req, "vendor_calendar:read");
+    const range = parseRange(req);
+    if ("error" in range) {
+      return res.status(400).json({ error: range.error });
+    }
+
+    const ownerUserIdParam =
+      typeof req.query.ownerUserId === "string" && req.query.ownerUserId.trim()
+        ? req.query.ownerUserId.trim()
+        : null;
+    const catererIdParam =
+      typeof req.query.catererId === "string" && req.query.catererId.trim()
+        ? req.query.catererId.trim()
+        : null;
+
+    let ownerWhere = await buildOwnerWhere(user, caterer, isSuperAdmin, ownerUserIdParam, catererIdParam);
+    if ("error" in ownerWhere) {
+      return res.status(ownerWhere.status).json({ error: ownerWhere.error });
+    }
+
+    const targetUserId =
+      ownerUserIdParam ??
+      (typeof ownerWhere.ownerUserId === "string" ? ownerWhere.ownerUserId : user.id);
+
+    const events = await collectIcalEventsForOwner(targetUserId, range.start, range.end);
+    const ics = buildIcalCalendar(events, "Vendor Calendar export");
+
+    res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="vendor-calendar.ics"');
+    return res.send(ics);
+  } catch (e) {
+    return handleRouteError(res, e, "Vendor calendar export");
+  }
+});
+
+/** Create or return iCal subscription token for the current user. */
+router.post("/ical-token", async (req: Request, res: Response) => {
+  try {
+    const { user } = await getAuthorizedSession(req, "vendor_calendar:read");
+
+    const existing = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { vendorCalendarIcalToken: true }
+    });
+
+    let token = existing?.vendorCalendarIcalToken;
+    if (!token) {
+      token = generateIcalToken();
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { vendorCalendarIcalToken: token }
+      });
+    }
+
+    const webOrigin = process.env.WEB_ORIGIN?.replace(/\/$/, "") ?? "http://localhost:3000";
+    const subscribeUrl = `${webOrigin}/api/vendor-calendar/feed/${token}.ics`;
+    const webcalUrl = subscribeUrl.replace(/^https?:\/\//, "webcal://");
+
+    return res.json({ token, subscribeUrl, webcalUrl });
+  } catch (e) {
+    return handleRouteError(res, e, "Vendor calendar iCal token");
+  }
+});
+
+/** Cron endpoint: dispatch due reminder emails (requires x-cron-secret header). */
+router.post("/reminders/dispatch", async (req: Request, res: Response) => {
+  try {
+    const secret = process.env.VENDOR_CALENDAR_CRON_SECRET?.trim();
+    const header = req.headers["x-cron-secret"];
+    const provided = Array.isArray(header) ? header[0] : header;
+    if (!secret || provided !== secret) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const result = await dispatchDueVendorCalendarReminders();
+    return res.json(result);
+  } catch (e) {
+    return handleRouteError(res, e, "Vendor calendar reminder dispatch");
   }
 });
 

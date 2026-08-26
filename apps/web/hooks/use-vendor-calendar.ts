@@ -73,7 +73,14 @@ export function useVendorCalendarMutations(ownerUserId: string, start: string, e
         showAs,
         isPrivate: body.isPrivate ?? false,
         ...defaultRecurrenceFields(body),
-        color: showAsColor(showAs),
+        meetingUrl: body.meetingUrl ?? null,
+        colorHex: body.colorHex ?? null,
+        attendees: (body.attendees ?? []).map((a, i) => ({
+          id: `temp_att_${i}`,
+          email: a.email,
+          name: a.name ?? null
+        })),
+        color: showAsColor(showAs, body.colorHex),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
