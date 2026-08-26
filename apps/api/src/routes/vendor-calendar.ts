@@ -1112,7 +1112,7 @@ router.get("/feed/:token", async (req: Request, res: Response) => {
 });
 
 /** Authenticated export for visible calendar range. */
-router.get("/export.ics", async (req: Request, res: Response) => {
+async function handleIcalExport(req: Request, res: Response) {
   try {
     const { user, caterer, isSuperAdmin } = await getAuthorizedSession(req, "vendor_calendar:read");
     const range = parseRange(req);
@@ -1147,7 +1147,10 @@ router.get("/export.ics", async (req: Request, res: Response) => {
   } catch (e) {
     return handleRouteError(res, e, "Vendor calendar export");
   }
-});
+}
+
+router.get("/export", handleIcalExport);
+router.get("/export.ics", handleIcalExport);
 
 /** Create or return iCal subscription token for the current user. */
 router.post("/ical-token", async (req: Request, res: Response) => {
@@ -1169,7 +1172,7 @@ router.post("/ical-token", async (req: Request, res: Response) => {
     }
 
     const webOrigin = process.env.WEB_ORIGIN?.replace(/\/$/, "") ?? "http://localhost:3000";
-    const subscribeUrl = `${webOrigin}/api/vendor-calendar/feed/${token}.ics`;
+    const subscribeUrl = `${webOrigin}/api/vendor-calendar/feed/${token}`;
     const webcalUrl = subscribeUrl.replace(/^https?:\/\//, "webcal://");
 
     return res.json({ token, subscribeUrl, webcalUrl });

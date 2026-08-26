@@ -457,10 +457,19 @@ export const api = {
     exportIcal: async (params: { start: string; end: string; ownerUserId?: string }) => {
       const qs = new URLSearchParams({ start: params.start, end: params.end });
       if (params.ownerUserId) qs.set("ownerUserId", params.ownerUserId);
-      const res = await fetch(`/api/vendor-calendar/export.ics?${qs}`, { credentials: "include" });
+      const res = await fetch(`/api/vendor-calendar/export?${qs}`, { credentials: "include" });
       if (!res.ok) {
-        const error = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new ApiError(error.error ?? "Export failed", res.status);
+        const text = await res.text();
+        let message = "Export failed";
+        try {
+          const json = JSON.parse(text) as { error?: string };
+          if (json.error) message = json.error;
+        } catch {
+          if (text.includes("Cannot GET")) {
+            message = "Export isn't available right now. Please try again later.";
+          }
+        }
+        throw new ApiError(message, res.status);
       }
       return res.text();
     },

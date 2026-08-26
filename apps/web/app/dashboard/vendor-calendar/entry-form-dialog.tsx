@@ -439,7 +439,7 @@ export function EntryFormDialog({
               disabled={!canEdit}
             />
             <p className="text-xs text-muted-foreground">
-              Invites are emailed when you save (requires Resend configured on API).
+              Invites are emailed to attendees when you save.
             </p>
           </div>
 
@@ -575,9 +575,11 @@ export function EntryFormDialog({
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Reminder emails send automatically once the API cron job is configured on the server.
-            </p>
+            {reminderMinutesBefore != null ? (
+              <p className="text-xs text-muted-foreground">
+                You&apos;ll receive an email reminder before this entry starts.
+              </p>
+            ) : null}
           </div>
 
           {initial?.isRecurrenceInstance ? (
