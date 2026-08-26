@@ -129,6 +129,18 @@ enum CustomerType {
   b2c
 }
 
+enum CalendarShowAs {
+  busy
+  free
+  tentative
+  oof
+}
+
+enum CalendarShareScope {
+  view
+  edit
+}
+
 model Caterer {
   id                     String            @id @default(cuid())
   userId                 String?           @unique
@@ -162,6 +174,7 @@ model Caterer {
   payments               Payment[]
   teamMembers            TeamMember[]
   auditLogs              AuditLog[]
+  vendorCalendarEntries  VendorCalendarEntry[]
 
   @@index([cloverMerchantId])
   @@map("caterers")
@@ -214,13 +227,61 @@ model User {
   name          String?
   emailVerified Boolean   @default(false)
   image         String?
+  /// Platform-level flag — can view all vendor calendars and manage share grants.
+  isSuperAdmin  Boolean   @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
   caterer       Caterer?
+  vendorCalendarEntries VendorCalendarEntry[] @relation("VendorCalendarOwner")
+  calendarGrantsReceived CalendarShareGrant[] @relation("CalendarGrantGrantee")
+  calendarGrantsTargeted CalendarShareGrant[] @relation("CalendarGrantTarget")
+  calendarGrantsCreated  CalendarShareGrant[] @relation("CalendarGrantCreator")
 
   @@map("user")
+}
+
+/// Personal/ops availability blocks per user (separate from booking Event calendar).
+model VendorCalendarEntry {
+  id          String         @id @default(cuid())
+  catererId   String
+  ownerUserId String
+  title       String
+  notes       String?
+  location    String?
+  startAt     DateTime
+  endAt       DateTime
+  allDay      Boolean        @default(false)
+  showAs      CalendarShowAs @default(busy)
+  isPrivate   Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  caterer     Caterer        @relation(fields: [catererId], references: [id], onDelete: Cascade)
+  owner       User           @relation("VendorCalendarOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@index([catererId])
+  @@index([catererId, startAt, endAt])
+  @@index([ownerUserId, startAt])
+  @@map("vendor_calendar_entries")
+}
+
+/// Super-admin grants: grantee may view (or edit) target user's vendor calendar.
+model CalendarShareGrant {
+  id              String             @id @default(cuid())
+  granteeUserId   String
+  targetUserId    String
+  scope           CalendarShareScope @default(view)
+  grantedByUserId String
+  createdAt       DateTime           @default(now())
+  grantee         User               @relation("CalendarGrantGrantee", fields: [granteeUserId], references: [id], onDelete: Cascade)
+  target          User               @relation("CalendarGrantTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  grantedBy       User               @relation("CalendarGrantCreator", fields: [grantedByUserId], references: [id], onDelete: Cascade)
+
+  @@unique([granteeUserId, targetUserId])
+  @@index([granteeUserId])
+  @@index([targetUserId])
+  @@map("calendar_share_grants")
 }
 
 model Session {

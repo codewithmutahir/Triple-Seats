@@ -20,7 +20,9 @@ export const ROLE_PERMISSIONS = {
     "team:read",
     "team:write",
     "billing:read",
-    "billing:write"
+    "billing:write",
+    "vendor_calendar:read",
+    "vendor_calendar:write"
   ],
   admin: [
     "leads:read",
@@ -39,7 +41,9 @@ export const ROLE_PERMISSIONS = {
     "settings:read",
     "settings:write",
     "team:read",
-    "team:write"
+    "team:write",
+    "vendor_calendar:read",
+    "vendor_calendar:write"
   ],
   manager: [
     "leads:read",
@@ -55,7 +59,9 @@ export const ROLE_PERMISSIONS = {
     "discussions:read",
     "discussions:write",
     "reports:read",
-    "settings:read"
+    "settings:read",
+    "vendor_calendar:read",
+    "vendor_calendar:write"
   ],
   sales: [
     "leads:read",
@@ -65,10 +71,29 @@ export const ROLE_PERMISSIONS = {
     "discussions:read",
     "discussions:write",
     "tasks:read",
-    "tasks:write"
+    "tasks:write",
+    "vendor_calendar:read",
+    "vendor_calendar:write"
   ],
-  ops: ["events:read", "events:write", "tasks:read", "tasks:write", "bookings:read", "discussions:read"],
-  viewer: ["leads:read", "events:read", "quotes:read", "bookings:read", "tasks:read"]
+  ops: [
+    "events:read",
+    "events:write",
+    "tasks:read",
+    "tasks:write",
+    "bookings:read",
+    "discussions:read",
+    "vendor_calendar:read",
+    "vendor_calendar:write"
+  ],
+  viewer: [
+    "leads:read",
+    "events:read",
+    "quotes:read",
+    "bookings:read",
+    "tasks:read",
+    "vendor_calendar:read",
+    "vendor_calendar:write"
+  ]
 } as const;
 
 export type Permission = (typeof ROLE_PERMISSIONS)["owner"][number];

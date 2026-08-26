@@ -14,12 +14,14 @@ export function usePermissions() {
   const role = (data?.role ?? "owner") as TeamRole;
   const isOwner = data?.isOwner ?? role === "owner";
   const isReadOnly = isReadOnlyRole(role);
+  const isSuperAdmin = data?.isSuperAdmin ?? false;
 
   return {
     role,
     catererName: data?.catererName ?? null,
     isTeamMember: data?.isTeamMember ?? !isOwner,
     isOwner,
+    isSuperAdmin,
     isReadOnly,
     can: (permission: Permission) => hasPermission(role, permission),
     canWrite: (permission: Permission) => hasPermission(role, permission),
