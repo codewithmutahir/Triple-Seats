@@ -93,8 +93,8 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
           </div>
           {invite.role === "calendar_only" ? (
             <p className="text-sm text-muted-foreground">
-              For {invite.catererName}. You&apos;ll only have access to your vendor calendar — not
-              leads, bookings, or settings.
+              You&apos;ll only have access to your vendor calendar — not leads, bookings, or
+              settings.
             </p>
           ) : null}
           <p className="text-sm text-muted-foreground">Invitation for {invite.email}</p>

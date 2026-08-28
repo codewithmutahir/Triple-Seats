@@ -1,7 +1,7 @@
 "use client";
 
 import { Mail, UserPlus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,13 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "@/components/ui/select";
 import type {
   VendorCalendarDirectory,
   VendorCalendarExternalInvite
@@ -34,7 +27,7 @@ type InviteExternalPanelProps = {
   isLoading: boolean;
   isInviting: boolean;
   isRevoking: boolean;
-  onInvite: (body: { email: string; name?: string; catererId: string }) => void;
+  onInvite: (body: { email: string; name?: string }) => void;
   onRevoke: (id: string) => void;
 };
 
@@ -51,21 +44,14 @@ export function InviteExternalPanel({
 }: InviteExternalPanelProps) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [catererId, setCatererId] = useState("");
-
-  const caterers = useMemo(
-    () => directory?.caterers ?? [],
-    [directory?.caterers]
-  );
 
   const pendingInvites = invites.length > 0 ? invites : directory?.pendingExternalInvites ?? [];
 
   function handleInvite() {
-    if (!email.trim() || !catererId) return;
+    if (!email.trim()) return;
     onInvite({
       email: email.trim(),
-      name: name.trim() || undefined,
-      catererId
+      name: name.trim() || undefined
     });
     setEmail("");
     setName("");
@@ -77,9 +63,9 @@ export function InviteExternalPanel({
         <DialogHeader>
           <DialogTitle className="font-heading text-[#1B2A4A]">Invite external vendor</DialogTitle>
           <DialogDescription>
-            Send an email invitation for vendor calendar access only. They won&apos;t see leads,
-            bookings, settings, or other dashboard pages. Use Share access to let them view other
-            calendars after they join.
+            Send an email invitation for vendor calendar access only. They are not added to any
+            caterer business — just their own calendar. Use Share access if they should view
+            someone else&apos;s calendar after they join.
           </DialogDescription>
         </DialogHeader>
 
@@ -103,25 +89,10 @@ export function InviteExternalPanel({
               placeholder="Vendor name"
             />
           </div>
-          <div className="space-y-2">
-            <Label>Attach to business</Label>
-            <Select value={catererId} onValueChange={setCatererId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select caterer" />
-              </SelectTrigger>
-              <SelectContent>
-                {caterers.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           <Button
             type="button"
             className="bg-[#1B2A4A] hover:bg-[#152238]"
-            disabled={!email.trim() || !catererId || isInviting}
+            disabled={!email.trim() || isInviting}
             onClick={handleInvite}
           >
             <Mail className="mr-1.5 h-4 w-4" aria-hidden />
@@ -147,7 +118,7 @@ export function InviteExternalPanel({
                       {inv.name ? `${inv.name} · ` : ""}
                       {inv.email}
                     </p>
-                    <p className="text-xs text-muted-foreground">{inv.catererName}</p>
+                    <p className="text-xs text-muted-foreground">External vendor · awaiting accept</p>
                   </div>
                   <Button
                     type="button"

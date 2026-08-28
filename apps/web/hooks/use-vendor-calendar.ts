@@ -296,7 +296,7 @@ export function useVendorCalendarExternalInvites(enabled: boolean) {
   });
 
   const invite = useMutation({
-    mutationFn: (body: { email: string; name?: string; catererId: string }) =>
+    mutationFn: (body: { email: string; name?: string }) =>
       api.vendorCalendar.inviteExternal(body),
     onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.externalInvites() });

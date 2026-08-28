@@ -496,7 +496,7 @@ export const api = {
       apiFetch<{ items: import("@/lib/vendor-calendar-types").VendorCalendarExternalInvite[] }>(
         "/api/vendor-calendar/external-invites"
       ),
-    inviteExternal: (body: { email: string; name?: string; catererId: string }) =>
+    inviteExternal: (body: { email: string; name?: string }) =>
       apiFetch<{
         invite: import("@/lib/vendor-calendar-types").VendorCalendarExternalInvite & {
           inviteStatus: string;
