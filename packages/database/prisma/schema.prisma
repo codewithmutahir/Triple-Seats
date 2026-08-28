@@ -90,6 +90,8 @@ enum TeamRole {
   sales
   ops
   viewer
+  /// External vendor — vendor calendar only (no leads, settings, etc.).
+  calendar_only
 }
 
 enum InviteStatus {

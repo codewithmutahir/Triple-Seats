@@ -93,7 +93,8 @@ export const ROLE_PERMISSIONS = {
     "tasks:read",
     "vendor_calendar:read",
     "vendor_calendar:write"
-  ]
+  ],
+  calendar_only: ["vendor_calendar:read", "vendor_calendar:write"]
 } as const;
 
 export type Permission = (typeof ROLE_PERMISSIONS)["owner"][number];
@@ -104,7 +105,8 @@ const ROLE_RANK: Record<TeamRole, number> = {
   manager: 4,
   sales: 3,
   ops: 3,
-  viewer: 1
+  viewer: 1,
+  calendar_only: 0
 };
 
 export function roleRank(role: TeamRole): number {
@@ -123,10 +125,14 @@ export function requirePermission(role: TeamRole, permission: Permission): void 
 }
 
 export function canAssignRole(assignerRole: TeamRole, targetRole: TeamRole): boolean {
-  if (targetRole === "owner") return false;
+  if (targetRole === "owner" || targetRole === "calendar_only") return false;
   if (assignerRole === "owner") return true;
-  if (assignerRole === "viewer") return false;
+  if (assignerRole === "viewer" || assignerRole === "calendar_only") return false;
   return roleRank(targetRole) <= roleRank(assignerRole);
+}
+
+export function isCalendarOnlyRole(role: TeamRole): boolean {
+  return role === "calendar_only";
 }
 
 /** Pass if the role has at least one of the listed permissions. */

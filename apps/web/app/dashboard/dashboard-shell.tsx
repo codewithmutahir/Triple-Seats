@@ -209,11 +209,27 @@ function NavLink({
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const qc = useQueryClient();
-  const { can } = usePermissions();
-  const visibleNav = NAV.filter((item) => !item.permission || can(item.permission));
+  const { can, isCalendarOnly } = usePermissions();
+  const visibleNav = isCalendarOnly
+    ? []
+    : NAV.filter((item) => !item.permission || can(item.permission));
   const showVendorCal = can(VENDOR_CAL_NAV.permission);
   const vendorActive =
     pathname === VENDOR_CAL_NAV.href || pathname.startsWith(`${VENDOR_CAL_NAV.href}/`);
+
+  if (isCalendarOnly && showVendorCal) {
+    return (
+      <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
+        <NavLink
+          href={VENDOR_CAL_NAV.href}
+          label={VENDOR_CAL_NAV.label}
+          icon={VENDOR_CAL_NAV.icon}
+          active={vendorActive}
+          onNavigate={onNavigate}
+        />
+      </nav>
+    );
+  }
 
   return (
     <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
@@ -253,11 +269,35 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 function MobileBottomNav() {
   const pathname = usePathname();
   const qc = useQueryClient();
-  const { can } = usePermissions();
-  const visibleNav = NAV.filter((item) => !item.permission || can(item.permission));
+  const { can, isCalendarOnly } = usePermissions();
+  const visibleNav = isCalendarOnly
+    ? []
+    : NAV.filter((item) => !item.permission || can(item.permission));
   const showVendorCal = can(VENDOR_CAL_NAV.permission);
   const vendorActive =
     pathname === VENDOR_CAL_NAV.href || pathname.startsWith(`${VENDOR_CAL_NAV.href}/`);
+
+  if (isCalendarOnly && showVendorCal) {
+    return (
+      <nav
+        className="fixed inset-x-0 bottom-0 z-50 flex border-t border-white/10 bg-[#1B2A4A] px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 md:hidden"
+        aria-label="Primary"
+      >
+        <Link
+          href={VENDOR_CAL_NAV.href}
+          onMouseEnter={() => prefetchRoute(qc, VENDOR_CAL_NAV.href)}
+          className={cn(
+            "flex w-full flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-xs font-semibold text-teal-50"
+          )}
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-full border border-teal-400/30 bg-teal-500/15">
+            <VENDOR_CAL_NAV.icon className="h-5 w-5" aria-hidden />
+          </span>
+          Vendor Calendar
+        </Link>
+      </nav>
+    );
+  }
 
   return (
     <nav
@@ -324,10 +364,20 @@ export function DashboardShell({
   const pathname = usePathname();
   const router = useRouter();
   const { data: session, refetch } = useSession();
-  const { role, catererName, isOwner, isReadOnly } = usePermissions();
+  const { role, catererName, isOwner, isReadOnly, isCalendarOnly } = usePermissions();
 
   const pageTitle = TITLE_MAP[pathname] ?? "Dashboard";
   const user = session?.user ?? initialUser;
+
+  useEffect(() => {
+    if (!isCalendarOnly) return;
+    if (
+      pathname === "/dashboard" ||
+      (pathname.startsWith("/dashboard/") && !pathname.startsWith("/dashboard/vendor-calendar"))
+    ) {
+      router.replace("/dashboard/vendor-calendar");
+    }
+  }, [isCalendarOnly, pathname, router]);
 
   const initials = useMemo(
     () => initialsFromUser(user.name, user.email ?? undefined),
@@ -358,10 +408,12 @@ export function DashboardShell({
     <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900">
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-[#1B2A4A] text-white md:flex">
         <div className="border-b border-white/10 px-5 py-6">
-          <Link href="/dashboard" className="block">
+          <Link href={isCalendarOnly ? "/dashboard/vendor-calendar" : "/dashboard"} className="block">
             <p className="font-heading text-2xl font-semibold tracking-tight text-white">Tripeseats</p>
             {isOwner ? (
               <p className="text-xs text-white/60">Caterer workspace</p>
+            ) : isCalendarOnly ? (
+              <p className="text-xs text-white/60">Vendor calendar</p>
             ) : null}
           </Link>
 

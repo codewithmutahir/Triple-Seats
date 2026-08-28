@@ -55,7 +55,7 @@ export function ShareGrantsPanel({
       for (const u of c.users) {
         map.set(u.userId, {
           userId: u.userId,
-          label: `${u.name ?? u.email} · ${c.name}`
+          label: `${u.name ?? u.email} · ${c.name}${u.role === "calendar_only" ? " (external)" : ""}`
         });
       }
     }

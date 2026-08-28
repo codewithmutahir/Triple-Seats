@@ -491,7 +491,25 @@ export const api = {
       apiFetch<import("@/lib/vendor-calendar-types").GoogleCalendarSyncResult>(
         "/api/vendor-calendar/google/sync",
         { method: "POST", body: JSON.stringify(body ?? {}) }
-      )
+      ),
+    externalInvites: () =>
+      apiFetch<{ items: import("@/lib/vendor-calendar-types").VendorCalendarExternalInvite[] }>(
+        "/api/vendor-calendar/external-invites"
+      ),
+    inviteExternal: (body: { email: string; name?: string; catererId: string }) =>
+      apiFetch<{
+        invite: import("@/lib/vendor-calendar-types").VendorCalendarExternalInvite & {
+          inviteStatus: string;
+        };
+        emailSent: boolean;
+      }>("/api/vendor-calendar/external-invites", {
+        method: "POST",
+        body: JSON.stringify(body)
+      }),
+    revokeExternalInvite: (id: string) =>
+      apiFetch<void>(`/api/vendor-calendar/external-invites/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      })
   },
 
   reports: {
@@ -649,6 +667,7 @@ export const api = {
         isTeamMember: boolean;
         isOwner: boolean;
         isSuperAdmin: boolean;
+        isCalendarOnly: boolean;
       }>("/api/team/me"),
     list: () =>
       apiFetch<{

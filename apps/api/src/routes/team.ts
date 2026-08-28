@@ -6,7 +6,7 @@ import { Router, type Request, type Response } from "express";
 import { AUDIT_ACTIONS, serializeAuditLog, writeAuditLog } from "../lib/audit-log";
 import { getAuthorizedSession } from "../lib/authorized-session";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
-import { canAssignRole } from "../lib/permissions";
+import { canAssignRole, isCalendarOnlyRole } from "../lib/permissions";
 import { handleRouteError } from "../lib/route-errors";
 import { clearCatererCacheForUser, getSession } from "../lib/session";
 
@@ -79,7 +79,8 @@ router.get("/me", async (req: Request, res: Response) => {
       catererName: caterer.name,
       isTeamMember: !isOwner,
       isOwner,
-      isSuperAdmin
+      isSuperAdmin,
+      isCalendarOnly: isCalendarOnlyRole(role)
     });
   } catch (e) {
     return handleRouteError(res, e, "Team me");
@@ -450,7 +451,10 @@ inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
       metadata: { email: invite.email, role: invite.role }
     });
 
-    return res.json({ member: serializeMember(updated), redirect: "/dashboard" });
+    return res.json({
+      member: serializeMember(updated),
+      redirect: invite.role === "calendar_only" ? "/dashboard/vendor-calendar" : "/dashboard"
+    });
   } catch (e) {
     return handleRouteError(res, e, "Invite accept");
   }

@@ -7,7 +7,8 @@ export const ROLE_LABELS: Record<TeamRole, string> = {
   manager: "Manager",
   sales: "Sales",
   ops: "Operations",
-  viewer: "View Only"
+  viewer: "View Only",
+  calendar_only: "Vendor Calendar"
 };
 
 export const ADMIN_ROLES: TeamRole[] = ["admin"];

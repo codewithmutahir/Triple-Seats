@@ -82,6 +82,14 @@ export type VendorCalendarDirectory = {
     source: "grant";
   }>;
   isSuperAdmin: boolean;
+  pendingExternalInvites: Array<{
+    id: string;
+    email: string;
+    name: string | null;
+    createdAt: string;
+    catererId: string;
+    catererName: string;
+  }>;
   caterers: Array<{
     id: string;
     name: string;
@@ -93,6 +101,15 @@ export type VendorCalendarDirectory = {
       role: string;
     }>;
   }>;
+};
+
+export type VendorCalendarExternalInvite = {
+  id: string;
+  email: string;
+  name: string | null;
+  createdAt: string;
+  catererId: string;
+  catererName: string;
 };
 
 export type CalendarShareGrant = {

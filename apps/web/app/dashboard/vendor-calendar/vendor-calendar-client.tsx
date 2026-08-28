@@ -22,6 +22,7 @@ import {
   useGoogleCalendarSync,
   useVendorCalendarDirectory,
   useVendorCalendarEntries,
+  useVendorCalendarExternalInvites,
   useVendorCalendarGrants,
   useVendorCalendarMutations
 } from "@/hooks/use-vendor-calendar";
@@ -32,6 +33,7 @@ import { ApiError } from "@/lib/api-error";
 import { SHOW_AS_OPTIONS, type VendorCalendarEntry } from "@/lib/vendor-calendar-types";
 
 import { EntryFormDialog } from "./entry-form-dialog";
+import { InviteExternalButton, InviteExternalPanel } from "./invite-external-panel";
 import { ShareGrantsPanel } from "./share-grants-panel";
 import type { VendorCalendarDatesChange } from "./vendor-calendar-widget";
 
@@ -84,6 +86,9 @@ export default function VendorCalendarClient() {
     allDay: boolean;
   } | null>(null);
   const [grantsOpen, setGrantsOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+
+  const externalInvitesApi = useVendorCalendarExternalInvites(Boolean(isSuperAdmin));
 
   const isOwnCalendar = ownerUserId === selfUserId;
   const sharedScope = directory?.shared.find((s) => s.userId === ownerUserId)?.scope;
@@ -126,7 +131,7 @@ export default function VendorCalendarClient() {
           if (opts.some((o) => o.userId === u.userId)) continue;
           opts.push({
             userId: u.userId,
-            label: `${c.name} · ${u.name ?? u.email}`
+            label: `${c.name} · ${u.name ?? u.email}${u.role === "calendar_only" ? " (external)" : ""}`
           });
         }
       }
@@ -256,10 +261,13 @@ export default function VendorCalendarClient() {
             </>
           ) : null}
           {isSuperAdmin ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => setGrantsOpen(true)}>
-              <Shield className="mr-1.5 h-4 w-4" aria-hidden />
-              Share access
-            </Button>
+            <>
+              <InviteExternalButton onClick={() => setInviteOpen(true)} />
+              <Button type="button" variant="outline" size="sm" onClick={() => setGrantsOpen(true)}>
+                <Shield className="mr-1.5 h-4 w-4" aria-hidden />
+                Share access
+              </Button>
+            </>
           ) : null}
           {canEdit ? (
             <Button
@@ -452,16 +460,29 @@ export default function VendorCalendarClient() {
       />
 
       {isSuperAdmin ? (
-        <ShareGrantsPanel
-          open={grantsOpen}
-          onOpenChange={setGrantsOpen}
-          directory={directory}
-          grants={grantsApi.list.data?.items ?? []}
-          isLoading={grantsApi.list.isLoading}
-          onGrant={(body) => grantsApi.createGrant.mutate(body)}
-          onRevoke={(id) => grantsApi.revokeGrant.mutate(id)}
-          isGranting={grantsApi.createGrant.isPending}
-        />
+        <>
+          <ShareGrantsPanel
+            open={grantsOpen}
+            onOpenChange={setGrantsOpen}
+            directory={directory}
+            grants={grantsApi.list.data?.items ?? []}
+            isLoading={grantsApi.list.isLoading}
+            onGrant={(body) => grantsApi.createGrant.mutate(body)}
+            onRevoke={(id) => grantsApi.revokeGrant.mutate(id)}
+            isGranting={grantsApi.createGrant.isPending}
+          />
+          <InviteExternalPanel
+            open={inviteOpen}
+            onOpenChange={setInviteOpen}
+            directory={directory}
+            invites={externalInvitesApi.list.data?.items ?? directory?.pendingExternalInvites ?? []}
+            isLoading={externalInvitesApi.list.isLoading}
+            isInviting={externalInvitesApi.invite.isPending}
+            isRevoking={externalInvitesApi.revoke.isPending}
+            onInvite={(body) => externalInvitesApi.invite.mutate(body)}
+            onRevoke={(id) => externalInvitesApi.revoke.mutate(id)}
+          />
+        </>
       ) : null}
     </div>
   );
