@@ -35,3 +35,15 @@ export const twoFactor = (authClient as unknown as { twoFactor: TwoFactorApi }).
 export type AuthSessionUser = NonNullable<ReturnType<typeof useSession>["data"]>["user"] & {
   twoFactorEnabled?: boolean;
 };
+
+type MagicLinkInput = {
+  email: string;
+  callbackURL?: string;
+  errorCallbackURL?: string;
+  metadata?: Record<string, string>;
+};
+
+/** Passwordless sign-in link (Better Auth magic link plugin). */
+export async function sendLoginMagicLink(input: MagicLinkInput) {
+  return (authClient as unknown as { signIn: { magicLink: (i: MagicLinkInput) => Promise<{ error?: { message?: string } }> } }).signIn.magicLink(input);
+}

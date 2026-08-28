@@ -26,6 +26,7 @@ import { allowedWebOrigins, isAllowedWebOrigin } from "./lib/origins";
 import { logger } from "./lib/logger";
 import { getResend } from "./lib/mail";
 import { authWriteLimiter, generalLimiter, isLoadTestMode } from "./lib/rate-limit";
+import { accountRouter } from "./routes/account";
 import { bookingsRouter } from "./routes/bookings";
 import { calendarRouter } from "./routes/calendar";
 import { catererRouter } from "./routes/caterer";
@@ -187,11 +188,13 @@ function createApp() {
   app.use("/api/auth/sign-in", authWriteLimiter);
   app.use("/api/auth/sign-up", authWriteLimiter);
   app.use("/api/auth/sign-in/magic-link", authWriteLimiter);
+  app.use("/api/account/set-password", authWriteLimiter);
   app.use("/api/auth/forgot-password", authWriteLimiter);
   app.use("/api/auth/reset-password", authWriteLimiter);
   app.use("/api/auth", toNodeHandler(auth));
 
   app.use("/api", generalLimiter);
+  app.use("/api/account", accountRouter);
   app.use("/api/caterer", catererRouter);
   app.use("/api/clover", cloverOAuthRouter);
   app.use("/api/caterers", caterersRouter);

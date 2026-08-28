@@ -660,6 +660,14 @@ export const api = {
     }
   },
 
+  account: {
+    setPassword: (body: { password: string; confirmPassword: string }) =>
+      apiFetch<{ ok: boolean; hasPassword: boolean }>("/api/account/set-password", {
+        method: "POST",
+        body: JSON.stringify(body)
+      })
+  },
+
   team: {
     me: () =>
       apiFetch<{
@@ -669,6 +677,7 @@ export const api = {
         isOwner: boolean;
         isSuperAdmin: boolean;
         isCalendarOnly: boolean;
+        hasPassword: boolean;
       }>("/api/team/me"),
     list: () =>
       apiFetch<{

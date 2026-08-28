@@ -22,6 +22,7 @@ import {
 import { authenticateInviteEmail, emailHasAccount, magicLinkExpiresMinutes, sendInviteMagicLink } from "../lib/invite-complete";
 import { clearCatererCacheForUser, getAuthSession, getSession } from "../lib/session";
 import { resolveIsSuperAdmin } from "../lib/super-admin";
+import { userHasPassword } from "../lib/user-has-password";
 import { z } from "zod";
 
 const router = Router();
@@ -147,14 +148,16 @@ async function finalizeInviteAccept(
 
 router.get("/me", async (req: Request, res: Response) => {
   try {
-    const { role, caterer, isOwner, isSuperAdmin } = await getSession(req);
+    const { role, caterer, isOwner, isSuperAdmin, user } = await getSession(req);
+    const hasPassword = await userHasPassword(user.id);
     return res.json({
       role,
       catererName: isCalendarOnlyRole(role) ? "Vendor calendar" : caterer.name,
       isTeamMember: !isOwner,
       isOwner,
       isSuperAdmin,
-      isCalendarOnly: isCalendarOnlyRole(role)
+      isCalendarOnly: isCalendarOnlyRole(role),
+      hasPassword
     });
   } catch (e) {
     return handleRouteError(res, e, "Team me");
