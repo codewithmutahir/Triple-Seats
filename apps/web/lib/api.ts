@@ -722,6 +722,8 @@ export const api = {
   },
 
   invite: {
+    myPending: () =>
+      apiFetch<{ pending: { token: string; role: string } | null }>("/api/invite/my-pending"),
     get: (token: string) =>
       apiFetch<{
         email: string;

@@ -9,6 +9,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
 import { getExternalVendorCaterer } from "../lib/external-vendor-caterer";
+import { sendInviteMagicLink } from "../lib/invite-complete";
 import {
   emailHasExistingFullDashboardAccess,
   revokeCalendarOnlyAccessIfOrphaned
@@ -29,8 +30,7 @@ import {
 import { buildIcalCalendar, entryColorHex, generateIcalToken } from "../lib/vendor-calendar-ical";
 import {
   dispatchDueVendorCalendarReminders,
-  sendVendorCalendarAttendeeInviteEmail,
-  sendVendorCalendarExternalInviteEmail
+  sendVendorCalendarAttendeeInviteEmail
 } from "../lib/vendor-calendar-mail";
 import { queueGoogleDelete, queueGooglePush } from "../lib/google-calendar-sync";
 import { vendorCalendarGoogleRouter } from "./vendor-calendar-google";
@@ -1190,12 +1190,10 @@ router.post("/external-invites", async (req: Request, res: Response) => {
           }
         });
 
-    const acceptUrl = `${webOrigin()}/invite/${inviteToken}`;
-    const mail = await sendVendorCalendarExternalInviteEmail({
-      to: email,
-      inviteeName: member.name,
-      acceptUrl,
-      expiresAt: inviteExpiresAt(member.createdAt)
+    const magic = await sendInviteMagicLink(req, {
+      email: member.email,
+      name: member.name,
+      inviteToken
     });
 
     const existingAccountHasFullAccess = await emailHasExistingFullDashboardAccess(email);
@@ -1209,7 +1207,7 @@ router.post("/external-invites", async (req: Request, res: Response) => {
         createdAt: member.createdAt.toISOString(),
         expiresAt: inviteExpiresAt(member.createdAt).toISOString()
       },
-      emailSent: mail.sent,
+      emailSent: magic.sent,
       existingAccountHasFullAccess
     });
   } catch (e) {

@@ -27,18 +27,27 @@ export async function deliverMagicLinkEmail(opts: {
 
   const minutes = magicLinkExpiresMinutes();
   const isVendorInvite = opts.metadata?.kind === "vendor_invite";
+  const inviteToken = opts.metadata?.inviteToken?.trim();
+  const webOrigin =
+    process.env.WEB_ORIGIN?.trim() || process.env.BETTER_AUTH_URL?.trim() || "http://localhost:3000";
+  const fallbackInviteUrl = inviteToken ? `${webOrigin}/invite/${inviteToken}` : null;
+
   const subject = isVendorInvite
-    ? "Your Tripeseats vendor calendar sign-in link"
+    ? "Open your Tripeseats vendor calendar"
     : "Your Tripeseats sign-in link";
 
   const intro = isVendorInvite
-    ? "<p>Click below to sign in and open your vendor calendar. No password needed.</p>"
+    ? "<p>You've been invited to manage your vendor calendar on Tripeseats. Click below to sign in — no password needed.</p>"
     : "<p>Click below to sign in to Tripeseats. No password needed.</p>";
+
+  const fallbackLine = fallbackInviteUrl
+    ? `<p style="color:#64748b;font-size:13px">If this link expires, open <a href="${escapeHtml(fallbackInviteUrl)}">your invitation page</a> to get a new one. Your invitation stays valid for 7 days.</p>`
+    : "";
 
   await resend.emails.send({
     from: resendFromEmail(),
     to: opts.email,
     subject,
-    html: `<p>Hi,</p>${intro}<p><a href="${escapeHtml(opts.url)}">Continue to Tripeseats</a></p><p>This link expires in ${minutes} minute${minutes === 1 ? "" : "s"}. If you did not request it, you can ignore this email.</p><p>— Tripeseats</p>`
+    html: `<p>Hi,</p>${intro}<p><a href="${escapeHtml(opts.url)}">${isVendorInvite ? "Open vendor calendar" : "Continue to Tripeseats"}</a></p><p>This sign-in link expires in ${minutes} minute${minutes === 1 ? "" : "s"}.</p>${fallbackLine}<p>— Tripeseats</p>`
   });
 }

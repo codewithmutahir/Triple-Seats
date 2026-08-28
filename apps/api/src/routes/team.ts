@@ -443,6 +443,39 @@ router.delete("/:memberId", async (req: Request, res: Response) => {
   }
 });
 
+inviteRouter.get("/my-pending", async (req: Request, res: Response) => {
+  try {
+    const { user } = await getAuthSession(req);
+    const email = user.email?.trim().toLowerCase();
+    if (!email) {
+      return res.json({ pending: null });
+    }
+
+    const pending = await prisma.teamMember.findFirst({
+      where: { email, inviteStatus: "pending" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, inviteToken: true, role: true, createdAt: true, inviteStatus: true }
+    });
+
+    if (!pending?.inviteToken) {
+      return res.json({ pending: null });
+    }
+
+    if (await expirePendingInviteIfNeeded(pending)) {
+      return res.json({ pending: null });
+    }
+
+    return res.json({
+      pending: {
+        token: pending.inviteToken,
+        role: pending.role
+      }
+    });
+  } catch {
+    return res.json({ pending: null });
+  }
+});
+
 inviteRouter.get("/:token", async (req: Request, res: Response) => {
   try {
     const token = paramId(req, "token");

@@ -389,6 +389,14 @@ export function DashboardShell({
   }, []);
 
   useEffect(() => {
+    void api.invite.myPending().then((data) => {
+      if (data.pending?.token) {
+        router.replace(`/invite/${data.pending.token}`);
+      }
+    });
+  }, [router]);
+
+  useEffect(() => {
     if (user && process.env.NODE_ENV === "production") {
       posthog.identify(user.id, {
         email: user.email,
