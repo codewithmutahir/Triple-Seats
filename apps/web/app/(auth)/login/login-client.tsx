@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatZodFieldErrors, loginSchema } from "@tripeseats/auth";
-import { signIn, twoFactor } from "@/lib/auth-client";
+import { sendLoginMagicLink, signIn, twoFactor } from "@/lib/auth-client";
 import { parseAuthError } from "@/lib/user-facing-error";
 import { Check, UtensilsCrossed } from "lucide-react";
 
@@ -28,6 +28,8 @@ export function LoginClient() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [magicLinkSending, setMagicLinkSending] = useState(false);
   const [registerHref, setRegisterHref] = useState("/register");
   const [redirectPath, setRedirectPath] = useState("/dashboard");
 
@@ -38,6 +40,9 @@ export function LoginClient() {
     }
     if (params.get("reason") === "session_expired") {
       setToast("Your session expired. Please sign in again.");
+    }
+    if (params.get("magicError") === "1") {
+      setToast("That sign-in link expired. Request a new one below or use your password.");
     }
     const emailParam = params.get("email");
     if (emailParam) {
@@ -57,6 +62,35 @@ export function LoginClient() {
   function finishSignIn() {
     router.refresh();
     router.push(redirectPath);
+  }
+
+  async function onMagicLinkSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setFieldErrors({});
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setFieldErrors({ email: "Email is required." });
+      return;
+    }
+    setMagicLinkSending(true);
+    try {
+      const result = await sendLoginMagicLink({
+        email: trimmed,
+        callbackURL: redirectPath,
+        errorCallbackURL: `/login?magicError=1&email=${encodeURIComponent(trimmed)}&redirect=${encodeURIComponent(redirectPath)}`,
+        metadata: { kind: "login" }
+      });
+      if (result.error) {
+        setError(parseAuthError(result.error.message, "signIn"));
+        return;
+      }
+      setMagicLinkSent(true);
+    } catch {
+      setError("Could not send sign-in link. Try again.");
+    } finally {
+      setMagicLinkSending(false);
+    }
   }
 
   async function onCredentialsSubmit(e: React.FormEvent) {
@@ -251,6 +285,35 @@ export function LoginClient() {
                   {submitting ? "Signing in…" : "Sign in"}
                 </Button>
               </form>
+
+              <div className="relative my-8">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-slate-200" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-white px-2 text-muted-foreground">Or</span>
+                </div>
+              </div>
+
+              {magicLinkSent ? (
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  Check your email for a one-click sign-in link. It expires in about 15 minutes.
+                </p>
+              ) : (
+                <form onSubmit={(e) => void onMagicLinkSubmit(e)}>
+                  <Button
+                    type="submit"
+                    variant="outline"
+                    className="w-full"
+                    disabled={magicLinkSending}
+                  >
+                    {magicLinkSending ? "Sending link…" : "Email me a sign-in link"}
+                  </Button>
+                  <p className="mt-2 text-center text-xs text-muted-foreground">
+                    No password needed — we&apos;ll email you a secure link.
+                  </p>
+                </form>
+              )}
 
               <p className="mt-8 text-center text-sm text-muted-foreground">
                 Don&apos;t have an account?{" "}

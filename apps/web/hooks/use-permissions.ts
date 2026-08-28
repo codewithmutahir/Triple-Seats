@@ -16,6 +16,7 @@ export function usePermissions() {
   const isReadOnly = isReadOnlyRole(role);
   const isSuperAdmin = data?.isSuperAdmin ?? false;
   const isCalendarOnly = data?.isCalendarOnly ?? isCalendarOnlyRole(role);
+  const hasPassword = data?.hasPassword ?? true;
 
   return {
     role,
@@ -24,6 +25,7 @@ export function usePermissions() {
     isOwner,
     isSuperAdmin,
     isCalendarOnly,
+    hasPassword,
     isReadOnly,
     can: (permission: Permission) => hasPermission(role, permission),
     canWrite: (permission: Permission) => hasPermission(role, permission),

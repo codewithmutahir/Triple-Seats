@@ -34,6 +34,7 @@ import { SHOW_AS_OPTIONS, type VendorCalendarEntry } from "@/lib/vendor-calendar
 
 import { EntryFormDialog } from "./entry-form-dialog";
 import { InviteExternalButton, InviteExternalPanel } from "./invite-external-panel";
+import { SetPasswordBanner } from "./set-password-banner";
 import { ShareGrantsPanel } from "./share-grants-panel";
 import type { VendorCalendarDatesChange } from "./vendor-calendar-widget";
 
@@ -46,7 +47,7 @@ export default function VendorCalendarClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session } = useSession();
-  const { can, isSuperAdmin } = usePermissions();
+  const { can, isSuperAdmin, isCalendarOnly, hasPassword } = usePermissions();
   const canWrite = can("vendor_calendar:write");
 
   const { data: directory, isLoading: dirLoading } = useVendorCalendarDirectory();
@@ -225,6 +226,7 @@ export default function VendorCalendarClient() {
 
   return (
     <div className="space-y-6">
+      <SetPasswordBanner open={Boolean(isCalendarOnly && isOwnCalendar && !hasPassword)} />
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="mb-1 inline-flex items-center gap-2 rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-800">

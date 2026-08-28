@@ -38,7 +38,9 @@ export async function deliverMagicLinkEmail(opts: {
 
   const intro = isVendorInvite
     ? "<p>You've been invited to manage your vendor calendar on Tripeseats. Click below to sign in — no password needed.</p>"
-    : "<p>Click below to sign in to Tripeseats. No password needed.</p>";
+    : opts.metadata?.kind === "login"
+      ? "<p>Click below to sign in to Tripeseats. No password needed.</p>"
+      : "<p>Click below to sign in to Tripeseats. No password needed.</p>";
 
   const fallbackLine = fallbackInviteUrl
     ? `<p style="color:#64748b;font-size:13px">If this link expires, open <a href="${escapeHtml(fallbackInviteUrl)}">your invitation page</a> to get a new one. Your invitation stays valid for 7 days.</p>`

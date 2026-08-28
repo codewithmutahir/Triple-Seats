@@ -17,7 +17,7 @@ function passwordFromBody(body: unknown): string | null {
   return null;
 }
 
-async function enforcePasswordPolicy(password: string): Promise<void> {
+export async function enforcePasswordPolicy(password: string): Promise<void> {
   const parsed = passwordSchema.safeParse(password);
   if (!parsed.success) {
     throw new APIError("BAD_REQUEST", {
