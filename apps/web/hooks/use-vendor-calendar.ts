@@ -301,14 +301,11 @@ export function useVendorCalendarExternalInvites(enabled: boolean) {
     onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.externalInvites() });
       void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.directory() });
-      const base = result.emailSent
-        ? "Invitation sent — they'll get vendor calendar access only"
-        : "Invite created — email could not be sent (check Resend settings)";
-      if (result.existingAccountHasFullAccess) {
-        toast.success(`${base}. Note: this email already has a full dashboard account — accepting will limit their sidebar to vendor calendar only.`);
-      } else {
-        toast.success(base);
-      }
+      toast.success(
+        result.emailSent
+          ? "Sign-in link sent — vendor opens their calendar with one click"
+          : "Invite saved — email could not be sent (check Resend settings)"
+      );
     },
     onError: (err: unknown) =>
       toast.error(err instanceof Error ? err.message : "Could not send invitation")

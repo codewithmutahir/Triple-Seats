@@ -5,7 +5,7 @@ import { checkMiddlewareSession } from "@tripeseats/auth";
 
 import { getAppOrigin, getTenantSlugFromHost } from "@/lib/tenant-host";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/invite"] as const;
+const PROTECTED_PREFIXES = ["/dashboard"] as const;
 
 function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(
