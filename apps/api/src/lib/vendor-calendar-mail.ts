@@ -109,14 +109,12 @@ export async function sendVendorCalendarAttendeeInviteEmail(opts: {
 export async function sendVendorCalendarExternalInviteEmail(opts: {
   to: string;
   inviteeName?: string | null;
-  catererName: string;
   acceptUrl: string;
 }) {
   const resend = getResend();
   if (!resend) return { sent: false as const, reason: "email_not_configured" as const };
 
   const greet = escapeHtml(opts.inviteeName?.trim() || "there");
-  const caterer = escapeHtml(opts.catererName);
   const url = escapeHtml(opts.acceptUrl);
 
   await sendWithRetry(async () => {
@@ -124,7 +122,7 @@ export async function sendVendorCalendarExternalInviteEmail(opts: {
       from: resendFromEmail(),
       to: opts.to,
       subject: `You're invited to manage your vendor calendar on Tripeseats`,
-      html: `<p>Hi ${greet},</p><p>You've been invited to manage your personal vendor calendar for <strong>${caterer}</strong> on Tripeseats.</p><p>You'll be able to mark busy and free days, add notes, and manage your schedule — nothing else in the workspace.</p><p><a href="${url}">Accept invitation</a></p><p>This link expires in 7 days.</p><p>— Tripeseats</p>`
+      html: `<p>Hi ${greet},</p><p>You've been invited to manage your personal vendor calendar on Tripeseats.</p><p>You'll be able to mark busy and free days, add notes, and manage your schedule — nothing else in the workspace.</p><p><a href="${url}">Accept invitation</a></p><p>This link expires in 7 days.</p><p>— Tripeseats</p>`
     });
     if (error) throw new Error(error.message);
   });

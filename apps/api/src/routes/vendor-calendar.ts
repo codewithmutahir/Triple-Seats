@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
+import { getExternalVendorCaterer } from "../lib/external-vendor-caterer";
 import { getAuthorizedSession } from "../lib/authorized-session";
 import { handleRouteError } from "../lib/route-errors";
 import { getSession } from "../lib/session";
@@ -35,8 +36,7 @@ function webOrigin(): string {
 
 const externalInviteBodySchema = z.object({
   email: z.string().email(),
-  name: z.string().trim().max(120).optional(),
-  catererId: z.string().min(1)
+  name: z.string().trim().max(120).optional()
 });
 
 const MAX_RANGE_MS = 93 * 24 * 60 * 60 * 1000;
@@ -952,9 +952,7 @@ router.get("/directory", async (req: Request, res: Response) => {
         id: m.id,
         email: m.email,
         name: m.name,
-        createdAt: m.createdAt.toISOString(),
-        catererId: m.caterer.id,
-        catererName: m.caterer.name
+        createdAt: m.createdAt.toISOString()
       })),
       caterers: caterers.map((c) => ({
         id: c.id,
@@ -1139,13 +1137,7 @@ router.post("/external-invites", async (req: Request, res: Response) => {
     }
 
     const email = parsed.data.email.trim().toLowerCase();
-    const caterer = await prisma.caterer.findUnique({
-      where: { id: parsed.data.catererId },
-      select: { id: true, name: true }
-    });
-    if (!caterer) {
-      return res.status(404).json({ error: "Caterer not found" });
-    }
+    const caterer = await getExternalVendorCaterer();
 
     const existing = await prisma.teamMember.findUnique({
       where: { catererId_email: { catererId: caterer.id, email } }
@@ -1188,7 +1180,6 @@ router.post("/external-invites", async (req: Request, res: Response) => {
     const mail = await sendVendorCalendarExternalInviteEmail({
       to: email,
       inviteeName: member.name,
-      catererName: caterer.name,
       acceptUrl
     });
 
@@ -1197,8 +1188,6 @@ router.post("/external-invites", async (req: Request, res: Response) => {
         id: member.id,
         email: member.email,
         name: member.name,
-        catererId: caterer.id,
-        catererName: caterer.name,
         inviteStatus: member.inviteStatus,
         createdAt: member.createdAt.toISOString()
       },
@@ -1233,9 +1222,7 @@ router.get("/external-invites", async (req: Request, res: Response) => {
         id: m.id,
         email: m.email,
         name: m.name,
-        createdAt: m.createdAt.toISOString(),
-        catererId: m.caterer.id,
-        catererName: m.caterer.name
+        createdAt: m.createdAt.toISOString()
       }))
     });
   } catch (e) {

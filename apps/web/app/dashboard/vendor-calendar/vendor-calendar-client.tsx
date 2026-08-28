@@ -131,7 +131,10 @@ export default function VendorCalendarClient() {
           if (opts.some((o) => o.userId === u.userId)) continue;
           opts.push({
             userId: u.userId,
-            label: `${c.name} · ${u.name ?? u.email}${u.role === "calendar_only" ? " (external)" : ""}`
+            label:
+              u.role === "calendar_only"
+                ? `${u.name ?? u.email} (external vendor)`
+                : `${c.name} · ${u.name ?? u.email}`
           });
         }
       }

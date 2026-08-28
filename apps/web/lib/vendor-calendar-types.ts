@@ -87,8 +87,6 @@ export type VendorCalendarDirectory = {
     email: string;
     name: string | null;
     createdAt: string;
-    catererId: string;
-    catererName: string;
   }>;
   caterers: Array<{
     id: string;
@@ -108,8 +106,6 @@ export type VendorCalendarExternalInvite = {
   email: string;
   name: string | null;
   createdAt: string;
-  catererId: string;
-  catererName: string;
 };
 
 export type CalendarShareGrant = {

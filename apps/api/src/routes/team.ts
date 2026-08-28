@@ -76,7 +76,7 @@ router.get("/me", async (req: Request, res: Response) => {
     const { role, caterer, isOwner, isSuperAdmin } = await getSession(req);
     return res.json({
       role,
-      catererName: caterer.name,
+      catererName: isCalendarOnlyRole(role) ? "Vendor calendar" : caterer.name,
       isTeamMember: !isOwner,
       isOwner,
       isSuperAdmin,
