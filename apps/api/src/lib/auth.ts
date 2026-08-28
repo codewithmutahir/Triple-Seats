@@ -112,5 +112,19 @@ export const auth = betterAuth({
   ],
   hooks: {
     before: passwordSecurityBeforeHook
+  },
+  // Better Auth 1.7+ deletes credential passwords on magic-link sign-in when
+  // emailVerified is false. We do not require a separate verification step.
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => ({
+          data: {
+            ...user,
+            emailVerified: true
+          }
+        })
+      }
+    }
   }
 });

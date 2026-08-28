@@ -32,6 +32,7 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
     willLimitToCalendarOnly?: boolean;
     existingAccountHasFullAccess?: boolean;
     accountExists?: boolean;
+    hasPassword?: boolean;
     magicLinkExpiresMinutes?: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,12 +80,16 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
           willLimitToCalendarOnly: data.willLimitToCalendarOnly,
           existingAccountHasFullAccess: data.existingAccountHasFullAccess,
           accountExists: data.accountExists,
+          hasPassword: data.hasPassword,
           magicLinkExpiresMinutes: data.magicLinkExpiresMinutes
         });
         setUseSetupForm(!data.accountExists);
-        if (typeof window !== "undefined") {
-          setShowPasswordForm(new URLSearchParams(window.location.search).get("password") === "1");
-        }
+        const preferPassword = Boolean(data.accountExists && data.hasPassword);
+        setShowPasswordForm(
+          preferPassword ||
+            (typeof window !== "undefined" &&
+              new URLSearchParams(window.location.search).get("password") === "1")
+        );
       } catch (e) {
         const message = e instanceof Error ? e.message : "Invitation not found";
         setError(
@@ -132,6 +137,7 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
   useEffect(() => {
     if (loading || sessionLoading || !invite) return;
     if (emailMatches) return;
+    if (invite.accountExists && invite.hasPassword) return;
     if (autoMagicSent.current || magicLinkSent || magicLinkSending) return;
     autoMagicSent.current = true;
     void sendMagicLink();
@@ -228,7 +234,10 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
   const showWrongAccount = session?.user && !emailMatches;
   const showOpening = emailMatches && !requiresManualAccept && (accepting || autoAcceptStarted.current);
   const showManualAccept = emailMatches && requiresManualAccept && !showOpening;
-  const showMagicLinkWait = !emailMatches && !showWrongAccount && !showOpening;
+  const showExistingPasswordSignIn =
+    Boolean(invite.accountExists && invite.hasPassword) && !emailMatches && !showWrongAccount && !showOpening;
+  const showMagicLinkWait =
+    !emailMatches && !showWrongAccount && !showOpening && !showExistingPasswordSignIn;
 
   const title = isVendorInvite ? "Open your vendor calendar" : `Join ${invite.catererName}`;
 
@@ -309,6 +318,64 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
               >
                 {accepting ? "Opening calendar…" : "Continue to vendor calendar"}
               </Button>
+            </div>
+          ) : showExistingPasswordSignIn ? (
+            <div className="space-y-4 border-t border-slate-100 pt-4">
+              <p className="text-center text-sm text-muted-foreground">
+                Sign in with your existing password for <strong>{invite.email}</strong>.
+              </p>
+              <form className="space-y-4" onSubmit={(e) => void handleComplete(e)}>
+                <div className="space-y-2">
+                  <Label htmlFor="invite-password-existing">Password</Label>
+                  <Input
+                    id="invite-password-existing"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                {requiresManualAccept ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <Checkbox
+                      id="invite-ack-existing"
+                      checked={acknowledgeLimitedAccess}
+                      onCheckedChange={(v) => setAcknowledgeLimitedAccess(v === true)}
+                    />
+                    <Label htmlFor="invite-ack-existing" className="text-sm font-normal leading-snug">
+                      I understand my dashboard will show vendor calendar only.
+                    </Label>
+                  </div>
+                ) : null}
+                {formError ? (
+                  <p className="text-sm text-destructive" role="alert">
+                    {formError}
+                  </p>
+                ) : null}
+                <Button
+                  type="submit"
+                  className="w-full bg-[#1B2A4A] hover:bg-[#152238]"
+                  disabled={submitting || (requiresManualAccept && !acknowledgeLimitedAccess)}
+                >
+                  {submitting ? "Signing in…" : "Continue with password"}
+                </Button>
+              </form>
+              {magicLinkSent ? (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
+                  Check your email for a sign-in link to <strong>{invite.email}</strong>.
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={magicLinkSending}
+                  onClick={() => void sendMagicLink()}
+                >
+                  {magicLinkSending ? "Sending link…" : "Email me a sign-in link instead"}
+                </Button>
+              )}
             </div>
           ) : showMagicLinkWait ? (
             <div className="space-y-4 border-t border-slate-100 pt-4">
