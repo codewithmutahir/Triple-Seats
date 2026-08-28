@@ -4,6 +4,7 @@ import {
   type CalendarShowAs,
   type Prisma
 } from "@tripeseats/database";
+import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
@@ -18,12 +19,25 @@ import {
 import { buildIcalCalendar, entryColorHex, generateIcalToken } from "../lib/vendor-calendar-ical";
 import {
   dispatchDueVendorCalendarReminders,
-  sendVendorCalendarAttendeeInviteEmail
+  sendVendorCalendarAttendeeInviteEmail,
+  sendVendorCalendarExternalInviteEmail
 } from "../lib/vendor-calendar-mail";
 import { queueGoogleDelete, queueGooglePush } from "../lib/google-calendar-sync";
 import { vendorCalendarGoogleRouter } from "./vendor-calendar-google";
 
 const router = Router();
+
+const EXTERNAL_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function webOrigin(): string {
+  return process.env.WEB_ORIGIN?.trim() || process.env.BETTER_AUTH_URL?.trim() || "http://localhost:3000";
+}
+
+const externalInviteBodySchema = z.object({
+  email: z.string().email(),
+  name: z.string().trim().max(120).optional(),
+  catererId: z.string().min(1)
+});
 
 const MAX_RANGE_MS = 93 * 24 * 60 * 60 * 1000;
 
@@ -878,7 +892,7 @@ router.get("/directory", async (req: Request, res: Response) => {
     };
 
     if (!isSuperAdmin) {
-      return res.json({ self, shared, caterers: [], isSuperAdmin: false });
+      return res.json({ self, shared, caterers: [], pendingExternalInvites: [], isSuperAdmin: false });
     }
 
     const caterers = await prisma.caterer.findMany({
@@ -899,15 +913,34 @@ router.get("/directory", async (req: Request, res: Response) => {
         userId: true,
         user: { select: { id: true, name: true, email: true } },
         teamMembers: {
-          where: { inviteStatus: "accepted", userId: { not: null } },
+          where: {
+            OR: [
+              { inviteStatus: "accepted", userId: { not: null } },
+              { inviteStatus: "pending", role: "calendar_only" }
+            ]
+          },
           select: {
             userId: true,
             role: true,
             email: true,
-            name: true
+            name: true,
+            inviteStatus: true
           },
           take: 50
         }
+      }
+    });
+
+    const pendingExternalInvites = await prisma.teamMember.findMany({
+      where: { role: "calendar_only", inviteStatus: "pending" },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        caterer: { select: { id: true, name: true } }
       }
     });
 
@@ -915,6 +948,14 @@ router.get("/directory", async (req: Request, res: Response) => {
       self,
       shared,
       isSuperAdmin: true,
+      pendingExternalInvites: pendingExternalInvites.map((m) => ({
+        id: m.id,
+        email: m.email,
+        name: m.name,
+        createdAt: m.createdAt.toISOString(),
+        catererId: m.caterer.id,
+        catererName: m.caterer.name
+      })),
       caterers: caterers.map((c) => ({
         id: c.id,
         name: c.name,
@@ -1083,6 +1124,143 @@ router.delete("/grants/:id", async (req: Request, res: Response) => {
     return res.status(204).send();
   } catch (e) {
     return handleRouteError(res, e, "Calendar grant delete");
+  }
+});
+
+/** Super admin: invite external vendor calendar-only user by email */
+router.post("/external-invites", async (req: Request, res: Response) => {
+  try {
+    const { user, isSuperAdmin } = await getSession(req);
+    requireSuperAdmin(isSuperAdmin);
+
+    const parsed = externalInviteBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid input" });
+    }
+
+    const email = parsed.data.email.trim().toLowerCase();
+    const caterer = await prisma.caterer.findUnique({
+      where: { id: parsed.data.catererId },
+      select: { id: true, name: true }
+    });
+    if (!caterer) {
+      return res.status(404).json({ error: "Caterer not found" });
+    }
+
+    const existing = await prisma.teamMember.findUnique({
+      where: { catererId_email: { catererId: caterer.id, email } }
+    });
+
+    if (existing?.inviteStatus === "accepted" && existing.role === "calendar_only") {
+      return res.status(409).json({ error: "This email already has vendor calendar access." });
+    }
+    if (existing?.inviteStatus === "accepted" && existing.role !== "calendar_only") {
+      return res.status(409).json({ error: "This email is already a team member with full dashboard access." });
+    }
+
+    const inviteToken = crypto.randomBytes(32).toString("hex");
+    const member = existing
+      ? await prisma.teamMember.update({
+          where: { id: existing.id },
+          data: {
+            role: "calendar_only",
+            inviteToken,
+            inviteStatus: "pending",
+            invitedBy: user.id,
+            name: parsed.data.name?.trim() || existing.name,
+            userId: null,
+            joinedAt: null
+          }
+        })
+      : await prisma.teamMember.create({
+          data: {
+            catererId: caterer.id,
+            email,
+            name: parsed.data.name?.trim() || null,
+            role: "calendar_only",
+            inviteToken,
+            inviteStatus: "pending",
+            invitedBy: user.id
+          }
+        });
+
+    const acceptUrl = `${webOrigin()}/invite/${inviteToken}`;
+    const mail = await sendVendorCalendarExternalInviteEmail({
+      to: email,
+      inviteeName: member.name,
+      catererName: caterer.name,
+      acceptUrl
+    });
+
+    return res.status(201).json({
+      invite: {
+        id: member.id,
+        email: member.email,
+        name: member.name,
+        catererId: caterer.id,
+        catererName: caterer.name,
+        inviteStatus: member.inviteStatus,
+        createdAt: member.createdAt.toISOString()
+      },
+      emailSent: mail.sent
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "External calendar invite");
+  }
+});
+
+/** Super admin: list pending external calendar invites */
+router.get("/external-invites", async (req: Request, res: Response) => {
+  try {
+    const { isSuperAdmin } = await getSession(req);
+    requireSuperAdmin(isSuperAdmin);
+
+    const items = await prisma.teamMember.findMany({
+      where: { role: "calendar_only", inviteStatus: "pending" },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        caterer: { select: { id: true, name: true } }
+      }
+    });
+
+    return res.json({
+      items: items.map((m) => ({
+        id: m.id,
+        email: m.email,
+        name: m.name,
+        createdAt: m.createdAt.toISOString(),
+        catererId: m.caterer.id,
+        catererName: m.caterer.name
+      }))
+    });
+  } catch (e) {
+    return handleRouteError(res, e, "External calendar invites list");
+  }
+});
+
+/** Super admin: revoke pending external calendar invite */
+router.delete("/external-invites/:id", async (req: Request, res: Response) => {
+  try {
+    const { isSuperAdmin } = await getSession(req);
+    requireSuperAdmin(isSuperAdmin);
+    const id = paramId(req);
+
+    const existing = await prisma.teamMember.findFirst({
+      where: { id, role: "calendar_only", inviteStatus: "pending" }
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    await prisma.teamMember.delete({ where: { id } });
+    return res.status(204).send();
+  } catch (e) {
+    return handleRouteError(res, e, "External calendar invite revoke");
   }
 });
 

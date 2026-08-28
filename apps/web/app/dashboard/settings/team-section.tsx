@@ -59,7 +59,8 @@ const ROLE_BADGE: Record<TeamRole, string> = {
   manager: "bg-blue-100 text-blue-900",
   sales: "bg-emerald-100 text-emerald-900",
   ops: "bg-orange-100 text-orange-900",
-  viewer: "bg-muted text-muted-foreground"
+  viewer: "bg-muted text-muted-foreground",
+  calendar_only: "bg-teal-100 text-teal-900"
 };
 
 type TeamListCache = { members: TeamMemberRow[] };

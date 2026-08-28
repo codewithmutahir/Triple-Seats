@@ -216,7 +216,9 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
       });
       if (pendingInvite) {
         throw new SessionError(
-          "You have a pending team invitation. Open your invite link and accept it before using the dashboard.",
+          pendingInvite.role === "calendar_only"
+            ? "You have a pending vendor calendar invitation. Open your invite link and accept it before signing in."
+            : "You have a pending team invitation. Open your invite link and accept it before using the dashboard.",
           403
         );
       }

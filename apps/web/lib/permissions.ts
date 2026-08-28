@@ -1,4 +1,4 @@
-export type TeamRole = "owner" | "admin" | "manager" | "sales" | "ops" | "viewer";
+export type TeamRole = "owner" | "admin" | "manager" | "sales" | "ops" | "viewer" | "calendar_only";
 
 export const ROLE_PERMISSIONS = {
   owner: [
@@ -93,7 +93,8 @@ export const ROLE_PERMISSIONS = {
     "tasks:read",
     "vendor_calendar:read",
     "vendor_calendar:write"
-  ]
+  ],
+  calendar_only: ["vendor_calendar:read", "vendor_calendar:write"]
 } as const;
 
 export type Permission = (typeof ROLE_PERMISSIONS)["owner"][number];
@@ -105,6 +106,11 @@ export function hasPermission(role: TeamRole, permission: Permission): boolean {
 /** Viewer has read-only access across the workspace (Option C). */
 export function isReadOnlyRole(role: TeamRole): boolean {
   return role === "viewer";
+}
+
+/** External vendor — only vendor calendar in the dashboard. */
+export function isCalendarOnlyRole(role: TeamRole): boolean {
+  return role === "calendar_only";
 }
 
 const WRITE_PERMISSION_SUFFIX = ":write" as const;

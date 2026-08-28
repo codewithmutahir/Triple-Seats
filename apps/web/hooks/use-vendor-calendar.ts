@@ -284,3 +284,56 @@ export function useGoogleCalendarSync(enabled: boolean) {
 
   return { status, disconnect, sync, connect };
 }
+
+export function useVendorCalendarExternalInvites(enabled: boolean) {
+  const qc = useQueryClient();
+
+  const list = useQuery({
+    queryKey: queryKeys.vendorCalendar.externalInvites(),
+    queryFn: () => api.vendorCalendar.externalInvites(),
+    staleTime: 60_000,
+    enabled
+  });
+
+  const invite = useMutation({
+    mutationFn: (body: { email: string; name?: string; catererId: string }) =>
+      api.vendorCalendar.inviteExternal(body),
+    onSuccess: (result) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.externalInvites() });
+      void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.directory() });
+      toast.success(
+        result.emailSent
+          ? "Invitation sent — they'll get vendor calendar access only"
+          : "Invite created — email could not be sent (check Resend settings)"
+      );
+    },
+    onError: (err: unknown) =>
+      toast.error(err instanceof Error ? err.message : "Could not send invitation")
+  });
+
+  const revoke = useMutation({
+    mutationFn: (id: string) => api.vendorCalendar.revokeExternalInvite(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: queryKeys.vendorCalendar.externalInvites() });
+      const snapshot = qc.getQueryData(queryKeys.vendorCalendar.externalInvites());
+      qc.setQueryData(
+        queryKeys.vendorCalendar.externalInvites(),
+        (old: { items: { id: string }[] } | undefined) => {
+          if (!old) return old;
+          return { items: old.items.filter((i) => i.id !== id) };
+        }
+      );
+      return { snapshot };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.vendorCalendar.directory() });
+      toast.success("Invitation revoked");
+    },
+    onError: (_e, _id, ctx) => {
+      if (ctx?.snapshot) qc.setQueryData(queryKeys.vendorCalendar.externalInvites(), ctx.snapshot);
+      toast.error("Could not revoke invitation");
+    }
+  });
+
+  return { list, invite, revoke };
+}

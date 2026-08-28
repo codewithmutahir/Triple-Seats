@@ -79,14 +79,24 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
         <CardHeader className="text-center">
           <p className="font-heading text-2xl font-semibold text-[#1B2A4A]">Tripeseats</p>
           <CardTitle className="mt-4 text-xl font-normal">
-            You&apos;ve been invited to join {invite.catererName}
+            {invite.role === "calendar_only"
+              ? `You've been invited to manage your vendor calendar`
+              : `You've been invited to join ${invite.catererName}`}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6 text-center">
           <div>
             <p className="text-sm text-muted-foreground">Role</p>
-            <Badge className="mt-1 capitalize">{invite.role}</Badge>
+            <Badge className="mt-1 capitalize">
+              {invite.role === "calendar_only" ? "Vendor Calendar" : invite.role}
+            </Badge>
           </div>
+          {invite.role === "calendar_only" ? (
+            <p className="text-sm text-muted-foreground">
+              For {invite.catererName}. You&apos;ll only have access to your vendor calendar — not
+              leads, bookings, or settings.
+            </p>
+          ) : null}
           <p className="text-sm text-muted-foreground">Invitation for {invite.email}</p>
 
           {sessionLoading ? (
