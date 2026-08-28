@@ -500,6 +500,16 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
         ? await emailHasExistingFullDashboardAccess(member.email)
         : false;
     const accountExists = await emailHasAccount(member.email);
+    let hasPassword = false;
+    if (accountExists) {
+      const existingUser = await prisma.user.findFirst({
+        where: { email: { equals: member.email, mode: "insensitive" } },
+        select: { id: true }
+      });
+      if (existingUser) {
+        hasPassword = await userHasPassword(existingUser.id);
+      }
+    }
 
     return res.json({
       email: member.email,
@@ -510,6 +520,7 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
       willLimitToCalendarOnly: member.role === "calendar_only",
       existingAccountHasFullAccess,
       accountExists,
+      hasPassword,
       magicLinkExpiresMinutes: magicLinkExpiresMinutes()
     });
   } catch (e) {

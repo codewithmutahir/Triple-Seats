@@ -743,6 +743,7 @@ export const api = {
         willLimitToCalendarOnly?: boolean;
         existingAccountHasFullAccess?: boolean;
         accountExists?: boolean;
+        hasPassword?: boolean;
         magicLinkExpiresMinutes?: number;
       }>(`/api/invite/${encodeURIComponent(token)}`),
     complete: (
