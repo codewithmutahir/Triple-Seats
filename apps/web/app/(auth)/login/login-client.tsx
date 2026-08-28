@@ -8,20 +8,28 @@ import { SiteFooter } from "@/components/site-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { signIn } from "@/lib/auth-client";
+import { formatZodFieldErrors, loginSchema } from "@tripeseats/auth";
+import { signIn, twoFactor } from "@/lib/auth-client";
 import { parseAuthError } from "@/lib/user-facing-error";
 import { Check, UtensilsCrossed } from "lucide-react";
 
 const TRUST_ITEMS = ["Secure sign-in", "Built for caterers", "Your data stays private"] as const;
 
+type LoginStep = "credentials" | "totp" | "backup";
+
 export function LoginClient() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [backupCode, setBackupCode] = useState("");
+  const [step, setStep] = useState<LoginStep>("credentials");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [registerHref, setRegisterHref] = useState("/register");
+  const [redirectPath, setRedirectPath] = useState("/dashboard");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -36,6 +44,9 @@ export function LoginClient() {
       setEmail(emailParam);
     }
     const redirect = params.get("redirect");
+    const safeRedirect =
+      redirect && redirect.startsWith("/") && !redirect.startsWith("//") ? redirect : "/dashboard";
+    setRedirectPath(safeRedirect);
     const regQs = new URLSearchParams();
     if (redirect) regQs.set("redirect", redirect);
     if (emailParam) regQs.set("email", emailParam);
@@ -43,24 +54,90 @@ export function LoginClient() {
     if (regQ) setRegisterHref(`/register?${regQ}`);
   }, []);
 
-  async function onSubmit(e: React.FormEvent) {
+  function finishSignIn() {
+    router.refresh();
+    router.push(redirectPath);
+  }
+
+  async function onCredentialsSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setFieldErrors({});
+
+    const parsed = loginSchema.safeParse({ email, password });
+    if (!parsed.success) {
+      setFieldErrors(formatZodFieldErrors(parsed.error));
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const result = await signIn.email({ email: email.trim(), password });
+      const result = await signIn.email({
+        email: parsed.data.email,
+        password: parsed.data.password
+      });
+
       if (result.error) {
         setError(parseAuthError(result.error.message, "signIn"));
         return;
       }
-      router.refresh();
-      const params = new URLSearchParams(window.location.search);
-      const redirect = params.get("redirect");
-      const safeRedirect =
-        redirect && redirect.startsWith("/") && !redirect.startsWith("//") ? redirect : "/dashboard";
-      router.push(safeRedirect);
+
+      if (result.data && "twoFactorRedirect" in result.data && result.data.twoFactorRedirect) {
+        setStep("totp");
+        return;
+      }
+
+      finishSignIn();
     } catch {
       setError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onTotpSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const code = totpCode.trim();
+    if (!/^\d{6}$/.test(code)) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const result = await twoFactor.verifyTotp({ code, trustDevice: true });
+      if (result.error) {
+        setError(parseAuthError(result.error.message, "signIn"));
+        return;
+      }
+      finishSignIn();
+    } catch {
+      setError("Verification failed. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onBackupSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const code = backupCode.trim();
+    if (!code) {
+      setError("Enter a backup code.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const result = await twoFactor.verifyBackupCode({ code, trustDevice: true });
+      if (result.error) {
+        setError(parseAuthError(result.error.message, "signIn"));
+        return;
+      }
+      finishSignIn();
+    } catch {
+      setError("Backup code verification failed. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -116,62 +193,178 @@ export function LoginClient() {
 
       <section className="flex w-full flex-col bg-white lg:col-span-3">
         <div className="mx-auto flex w-full max-w-lg flex-1 flex-col justify-center px-6 py-10 sm:px-10 sm:py-14">
-          <h2 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A] sm:text-4xl">
-            Welcome back
-          </h2>
-          <p className="mt-2 text-sm text-muted-foreground">Enter your caterer account credentials.</p>
+          {step === "credentials" ? (
+            <>
+              <h2 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A] sm:text-4xl">
+                Welcome back
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">Enter your caterer account credentials.</p>
 
-          {toast ? (
-            <p
-              className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
-              role="status"
-            >
-              {toast}
-            </p>
+              {toast ? (
+                <p
+                  className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+                  role="status"
+                >
+                  {toast}
+                </p>
+              ) : null}
+
+              <form className="mt-8 space-y-5" onSubmit={onCredentialsSubmit}>
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    aria-invalid={!!fieldErrors.email}
+                  />
+                  {fieldErrors.email ? (
+                    <p className="text-sm text-destructive" role="alert">
+                      {fieldErrors.email}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    aria-invalid={!!fieldErrors.password}
+                  />
+                  {fieldErrors.password ? (
+                    <p className="text-sm text-destructive" role="alert">
+                      {fieldErrors.password}
+                    </p>
+                  ) : null}
+                </div>
+                {error ? (
+                  <p className="text-sm text-destructive" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? "Signing in…" : "Sign in"}
+                </Button>
+              </form>
+
+              <p className="mt-8 text-center text-sm text-muted-foreground">
+                Don&apos;t have an account?{" "}
+                <Link
+                  href={registerHref}
+                  className="font-medium text-[#1B2A4A] underline-offset-4 hover:underline"
+                >
+                  Create one
+                </Link>
+              </p>
+            </>
           ) : null}
 
-          <form className="mt-8 space-y-5" onSubmit={onSubmit}>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            {error ? (
-              <p className="text-sm text-destructive" role="alert">
-                {error}
+          {step === "totp" ? (
+            <>
+              <h2 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A] sm:text-4xl">
+                Two-factor authentication
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Enter the 6-digit code from your authenticator app (Google Authenticator, Authy, etc.).
               </p>
-            ) : null}
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
 
-          <p className="mt-8 text-center text-sm text-muted-foreground">
-            Don&apos;t have an account?{" "}
-            <Link
-              href={registerHref}
-              className="font-medium text-[#1B2A4A] underline-offset-4 hover:underline"
-            >
-              Create one
-            </Link>
-          </p>
+              <form className="mt-8 space-y-5" onSubmit={onTotpSubmit}>
+                <div className="space-y-2">
+                  <Label htmlFor="totp">Authentication code</Label>
+                  <Input
+                    id="totp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="\d{6}"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  />
+                </div>
+                {error ? (
+                  <p className="text-sm text-destructive" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? "Verifying…" : "Verify and sign in"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => {
+                    setStep("backup");
+                    setError(null);
+                    setTotpCode("");
+                  }}
+                >
+                  Use a backup code instead
+                </Button>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="w-full"
+                  onClick={() => {
+                    setStep("credentials");
+                    setError(null);
+                    setTotpCode("");
+                  }}
+                >
+                  Back to sign in
+                </Button>
+              </form>
+            </>
+          ) : null}
+
+          {step === "backup" ? (
+            <>
+              <h2 className="font-heading text-3xl font-semibold tracking-tight text-[#1B2A4A] sm:text-4xl">
+                Backup code
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Enter one of the backup codes you saved when you enabled two-factor authentication.
+              </p>
+
+              <form className="mt-8 space-y-5" onSubmit={onBackupSubmit}>
+                <div className="space-y-2">
+                  <Label htmlFor="backup">Backup code</Label>
+                  <Input
+                    id="backup"
+                    autoComplete="off"
+                    value={backupCode}
+                    onChange={(e) => setBackupCode(e.target.value)}
+                  />
+                </div>
+                {error ? (
+                  <p className="text-sm text-destructive" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? "Verifying…" : "Verify backup code"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => {
+                    setStep("totp");
+                    setError(null);
+                    setBackupCode("");
+                  }}
+                >
+                  Use authenticator app instead
+                </Button>
+              </form>
+            </>
+          ) : null}
         </div>
       </section>
     </div>

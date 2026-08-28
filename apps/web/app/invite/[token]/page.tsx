@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { Loader2, Mail } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -8,11 +8,11 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { signIn, signOut, signUp, useSession } from "@/lib/auth-client";
-import { parseAuthError } from "@/lib/user-facing-error";
+import { signOut, useSession } from "@/lib/auth-client";
 
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() ?? "";
@@ -30,19 +30,24 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
     expiresAt: string;
     willLimitToCalendarOnly?: boolean;
     existingAccountHasFullAccess?: boolean;
+    accountExists?: boolean;
+    magicLinkExpiresMinutes?: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [authMode, setAuthMode] = useState<"signin" | "register">("signin");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authSubmitting, setAuthSubmitting] = useState(false);
-  const [forceAuthForm, setForceAuthForm] = useState(false);
+  const [acknowledgeLimitedAccess, setAcknowledgeLimitedAccess] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [useSetupForm, setUseSetupForm] = useState<boolean | null>(null);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [magicLinkSending, setMagicLinkSending] = useState(false);
 
   const signedInEmail = session?.user?.email ?? null;
   const emailMatches = useMemo(() => {
@@ -57,6 +62,8 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
     invite?.willLimitToCalendarOnly && invite?.existingAccountHasFullAccess
   );
 
+  const isSetupFlow = useSetupForm ?? !invite?.accountExists;
+
   useEffect(() => {
     void (async () => {
       try {
@@ -67,8 +74,11 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
           catererName: data.catererName,
           expiresAt: data.expiresAt,
           willLimitToCalendarOnly: data.willLimitToCalendarOnly,
-          existingAccountHasFullAccess: data.existingAccountHasFullAccess
+          existingAccountHasFullAccess: data.existingAccountHasFullAccess,
+          accountExists: data.accountExists,
+          magicLinkExpiresMinutes: data.magicLinkExpiresMinutes
         });
+        setUseSetupForm(!data.accountExists);
       } catch (e) {
         const message = e instanceof Error ? e.message : "Invitation not found";
         setError(
@@ -79,6 +89,12 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
       }
     })();
   }, [params.token]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("magicError") !== "1") return;
+    toast.error("That sign-in link expired or was already used. Request a new one below.");
+  }, []);
 
   const acceptInvite = useCallback(async () => {
     setAccepting(true);
@@ -95,7 +111,7 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
   }, [params.token, redirectTarget, router]);
 
   useEffect(() => {
-    if (loading || sessionLoading || !invite || !emailMatches || forceAuthForm) return;
+    if (loading || sessionLoading || !invite || !emailMatches) return;
     if (requiresManualAccept) return;
     if (autoAcceptStarted.current || accepting) return;
     autoAcceptStarted.current = true;
@@ -105,7 +121,6 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
     sessionLoading,
     invite,
     emailMatches,
-    forceAuthForm,
     accepting,
     acceptInvite,
     requiresManualAccept
@@ -118,9 +133,8 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
       await signOut();
       await refetch();
       autoAcceptStarted.current = false;
-      setForceAuthForm(true);
-      setAuthMode("signin");
       setPassword("");
+      setUseSetupForm(!invite.accountExists);
     } catch {
       toast.error("Could not sign out. Please try again.");
     } finally {
@@ -128,68 +142,51 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
     }
   }
 
-  async function handleSignIn(e: React.FormEvent) {
+  async function handleComplete(e: React.FormEvent) {
     e.preventDefault();
     if (!invite) return;
-    setAuthError(null);
-    setAuthSubmitting(true);
-    try {
-      const result = await signIn.email({
-        email: invite.email.trim(),
-        password
-      });
-      if (result.error) {
-        setAuthError(parseAuthError(result.error.message, "signIn"));
-        return;
-      }
-      await refetch();
-      if (invite.existingAccountHasFullAccess && invite.role === "calendar_only") {
-        setForceAuthForm(false);
-        return;
-      }
-      autoAcceptStarted.current = true;
-      await acceptInvite();
-    } catch {
-      setAuthError("Something went wrong. Please try again.");
-    } finally {
-      setAuthSubmitting(false);
-    }
-  }
+    setFormError(null);
 
-  async function handleRegister(e: React.FormEvent) {
-    e.preventDefault();
-    if (!invite) return;
-    setAuthError(null);
-    if (password !== confirmPassword) {
-      setAuthError("Passwords do not match.");
+    if (isSetupFlow && password !== confirmPassword) {
+      setFormError("Passwords do not match.");
       return;
     }
     if (password.length < 8) {
-      setAuthError("Password must be at least 8 characters.");
+      setFormError("Password must be at least 8 characters.");
       return;
     }
-    setAuthSubmitting(true);
+    if (requiresManualAccept && !acknowledgeLimitedAccess) {
+      setFormError("Please confirm you understand your dashboard access will change.");
+      return;
+    }
+
+    setSubmitting(true);
     try {
-      const result = await signUp.email({
-        email: invite.email.trim(),
+      const res = await api.invite.complete(params.token, {
         password,
-        name: name.trim() || invite.email.split("@")[0] || "Vendor"
+        name: isSetupFlow ? name.trim() || undefined : undefined,
+        acknowledgeLimitedAccess: requiresManualAccept ? true : undefined
       });
-      if (result.error) {
-        setAuthError(parseAuthError(result.error.message, "signUp"));
-        return;
-      }
-      await refetch();
-      if (invite.existingAccountHasFullAccess && invite.role === "calendar_only") {
-        setForceAuthForm(false);
-        return;
-      }
-      autoAcceptStarted.current = true;
-      await acceptInvite();
-    } catch {
-      setAuthError("Something went wrong. Please try again.");
+      router.push(res.redirect ?? redirectTarget);
+      router.refresh();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
     } finally {
-      setAuthSubmitting(false);
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSendMagicLink() {
+    setFormError(null);
+    setMagicLinkSending(true);
+    try {
+      await api.invite.sendMagicLink(params.token);
+      setMagicLinkSent(true);
+      toast.success(`Sign-in link sent to ${invite?.email ?? "your email"}`);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not send sign-in link.");
+    } finally {
+      setMagicLinkSending(false);
     }
   }
 
@@ -213,48 +210,56 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
     );
   }
 
-  const showAuthForm = !session?.user || forceAuthForm;
-  const showWrongAccount = session?.user && !emailMatches && !forceAuthForm;
+  const showWrongAccount = session?.user && !emailMatches;
   const showOpening = emailMatches && !requiresManualAccept && (accepting || autoAcceptStarted.current);
   const showManualAccept = emailMatches && requiresManualAccept && !showOpening;
+  const showSetupForm = !session?.user && !showWrongAccount && !showOpening;
+
+  const title =
+    invite.role === "calendar_only"
+      ? isSetupFlow
+        ? "Set up your vendor calendar"
+        : "Welcome back"
+      : `Join ${invite.catererName}`;
+
+  const subtitle =
+    invite.role === "calendar_only"
+      ? magicLinkSent
+        ? `We emailed a one-click sign-in link to ${invite.email}.`
+        : "Fastest: email yourself a sign-in link — no password needed."
+      : magicLinkSent
+        ? `We emailed a sign-in link to ${invite.email}.`
+        : "Email yourself a sign-in link, or use a password below.";
+
+  const magicMinutes = invite.magicLinkExpiresMinutes ?? 15;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <p className="font-heading text-2xl font-semibold text-[#1B2A4A]">Tripeseats</p>
-          <CardTitle className="mt-4 text-xl font-normal">
-            {invite.role === "calendar_only"
-              ? `You've been invited to manage your vendor calendar`
-              : `You've been invited to join ${invite.catererName}`}
-          </CardTitle>
+          <CardTitle className="mt-4 text-xl font-normal">{title}</CardTitle>
+          <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="text-center">
-            <p className="text-sm text-muted-foreground">Role</p>
-            <Badge className="mt-1 capitalize">
-              {invite.role === "calendar_only" ? "Vendor Calendar" : invite.role}
-            </Badge>
-          </div>
-          {invite.role === "calendar_only" ? (
-            <p className="text-center text-sm text-muted-foreground">
-              You&apos;ll only have access to your vendor calendar — not leads, bookings, or
-              settings.
-            </p>
+          {invite.role !== "calendar_only" ? (
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground">Role</p>
+              <Badge className="mt-1 capitalize">{invite.role}</Badge>
+            </div>
           ) : null}
           {invite.existingAccountHasFullAccess && invite.role === "calendar_only" ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
               <p className="font-medium">This email already has a Tripeseats account.</p>
               <p className="mt-1">
-                Accepting will switch your dashboard to <strong>vendor calendar only</strong>.
-                Leads, bookings, quotes, and other sidebar items will be hidden until access is
-                restored by an admin.
+                Continuing will switch your dashboard to <strong>vendor calendar only</strong>.
+                Other sidebar items stay hidden until an admin restores access.
               </p>
             </div>
           ) : null}
-          <p className="text-center text-sm text-muted-foreground">Invitation for {invite.email}</p>
+          <p className="text-center text-sm text-muted-foreground">{invite.email}</p>
           <p className="text-center text-xs text-muted-foreground">
-            Expires{" "}
+            Link expires{" "}
             {new Date(invite.expiresAt).toLocaleString(undefined, {
               dateStyle: "medium",
               timeStyle: "short"
@@ -284,7 +289,7 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
                 disabled={switchingAccount}
                 onClick={() => void switchToInvitedAccount()}
               >
-                {switchingAccount ? "Switching account…" : `Continue as ${invite.email}`}
+                {switchingAccount ? "Switching…" : `Continue as ${invite.email}`}
               </Button>
             </div>
           ) : showManualAccept ? (
@@ -292,127 +297,178 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
               <p className="text-center text-sm text-muted-foreground">
                 Signed in as <strong>{signedInEmail}</strong>
               </p>
+              <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <Checkbox
+                  id="invite-ack"
+                  checked={acknowledgeLimitedAccess}
+                  onCheckedChange={(v) => setAcknowledgeLimitedAccess(v === true)}
+                />
+                <Label htmlFor="invite-ack" className="text-sm font-normal leading-snug">
+                  I understand my dashboard will show vendor calendar only.
+                </Label>
+              </div>
               <Button
                 type="button"
                 className="w-full bg-[#1B2A4A] hover:bg-[#152238]"
-                disabled={accepting}
+                disabled={accepting || !acknowledgeLimitedAccess}
                 onClick={() => void acceptInvite()}
               >
-                {accepting ? "Switching access…" : "Accept & switch to vendor calendar only"}
+                {accepting ? "Switching access…" : "Continue to vendor calendar"}
               </Button>
             </div>
-          ) : showAuthForm ? (
+          ) : showSetupForm ? (
             <div className="space-y-4 border-t border-slate-100 pt-4">
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant={authMode === "signin" ? "default" : "outline"}
-                  className={authMode === "signin" ? "flex-1 bg-[#1B2A4A] hover:bg-[#152238]" : "flex-1"}
-                  onClick={() => {
-                    setAuthMode("signin");
-                    setAuthError(null);
-                  }}
-                >
-                  Sign in
-                </Button>
-                <Button
-                  type="button"
-                  variant={authMode === "register" ? "default" : "outline"}
-                  className={
-                    authMode === "register" ? "flex-1 bg-[#1B2A4A] hover:bg-[#152238]" : "flex-1"
-                  }
-                  onClick={() => {
-                    setAuthMode("register");
-                    setAuthError(null);
-                  }}
-                >
-                  Create account
-                </Button>
-              </div>
+              {magicLinkSent ? (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-4 text-center text-sm text-emerald-950">
+                  <Mail className="mx-auto mb-2 h-5 w-5" />
+                  <p className="font-medium">Check your email</p>
+                  <p className="mt-1">
+                    Click the link we sent to <strong>{invite.email}</strong>. It expires in{" "}
+                    {magicMinutes} minutes.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    className="w-full bg-[#1B2A4A] hover:bg-[#152238]"
+                    disabled={magicLinkSending}
+                    onClick={() => void handleSendMagicLink()}
+                  >
+                    {magicLinkSending ? "Sending…" : "Email me a sign-in link"}
+                  </Button>
+                  {formError && !showPasswordForm ? (
+                    <p className="text-sm text-destructive" role="alert">
+                      {formError}
+                    </p>
+                  ) : null}
+                </>
+              )}
 
-              {authMode === "signin" ? (
-                <form className="space-y-3 text-left" onSubmit={(e) => void handleSignIn(e)}>
+              {!showPasswordForm ? (
+                <button
+                  type="button"
+                  className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+                  onClick={() => {
+                    setShowPasswordForm(true);
+                    setFormError(null);
+                  }}
+                >
+                  Use a password instead
+                </button>
+              ) : (
+                <form className="space-y-4 border-t border-slate-100 pt-4" onSubmit={(e) => void handleComplete(e)}>
+                  {isSetupFlow ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-name">Full name</Label>
+                      <Input
+                        id="invite-name"
+                        type="text"
+                        autoComplete="name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Your name"
+                      />
+                    </div>
+                  ) : null}
                   <div className="space-y-2">
                     <Label htmlFor="invite-email">Email</Label>
                     <Input id="invite-email" type="email" value={invite.email} readOnly disabled />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="invite-password">Password</Label>
+                    <Label htmlFor="invite-password">{isSetupFlow ? "Choose a password" : "Password"}</Label>
                     <Input
                       id="invite-password"
                       type="password"
-                      autoComplete="current-password"
+                      autoComplete={isSetupFlow ? "new-password" : "current-password"}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required
                     />
                   </div>
-                  {authError ? (
+                  {isSetupFlow ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-confirm">Confirm password</Label>
+                      <Input
+                        id="invite-confirm"
+                        type="password"
+                        autoComplete="new-password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        required
+                      />
+                    </div>
+                  ) : null}
+                  {requiresManualAccept ? (
+                    <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <Checkbox
+                        id="invite-ack-setup"
+                        checked={acknowledgeLimitedAccess}
+                        onCheckedChange={(v) => setAcknowledgeLimitedAccess(v === true)}
+                      />
+                      <Label htmlFor="invite-ack-setup" className="text-sm font-normal leading-snug">
+                        I understand my dashboard will show vendor calendar only.
+                      </Label>
+                    </div>
+                  ) : null}
+                  {formError ? (
                     <p className="text-sm text-destructive" role="alert">
-                      {authError}
+                      {formError}
                     </p>
                   ) : null}
                   <Button
                     type="submit"
                     className="w-full bg-[#1B2A4A] hover:bg-[#152238]"
-                    disabled={authSubmitting}
+                    disabled={submitting || (requiresManualAccept && !acknowledgeLimitedAccess)}
                   >
-                    {authSubmitting ? "Signing in…" : "Sign in & open calendar"}
+                    {submitting
+                      ? "Setting up…"
+                      : invite.role === "calendar_only"
+                        ? "Get started with password"
+                        : isSetupFlow
+                          ? "Create account & join"
+                          : "Sign in & join"}
                   </Button>
-                </form>
-              ) : (
-                <form className="space-y-3 text-left" onSubmit={(e) => void handleRegister(e)}>
-                  <div className="space-y-2">
-                    <Label htmlFor="invite-reg-name">Full name</Label>
-                    <Input
-                      id="invite-reg-name"
-                      type="text"
-                      autoComplete="name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Your name"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="invite-reg-email">Email</Label>
-                    <Input id="invite-reg-email" type="email" value={invite.email} readOnly disabled />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="invite-reg-password">Password</Label>
-                    <Input
-                      id="invite-reg-password"
-                      type="password"
-                      autoComplete="new-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="invite-reg-confirm">Confirm password</Label>
-                    <Input
-                      id="invite-reg-confirm"
-                      type="password"
-                      autoComplete="new-password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      required
-                    />
-                  </div>
-                  {authError ? (
-                    <p className="text-sm text-destructive" role="alert">
-                      {authError}
-                    </p>
+                  {invite.accountExists ? (
+                    <button
+                      type="button"
+                      className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+                      onClick={() => {
+                        setUseSetupForm((v) => !(v ?? !invite.accountExists));
+                        setFormError(null);
+                        setPassword("");
+                        setConfirmPassword("");
+                      }}
+                    >
+                      {isSetupFlow
+                        ? "Already have an account? Sign in instead"
+                        : "Need a new account? Set up instead"}
+                    </button>
                   ) : null}
-                  <Button
-                    type="submit"
-                    className="w-full bg-[#1B2A4A] hover:bg-[#152238]"
-                    disabled={authSubmitting}
+                  <button
+                    type="button"
+                    className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+                    onClick={() => {
+                      setShowPasswordForm(false);
+                      setFormError(null);
+                    }}
                   >
-                    {authSubmitting ? "Creating account…" : "Create account & open calendar"}
-                  </Button>
+                    Back to email link
+                  </button>
                 </form>
               )}
+
+              {magicLinkSent ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={magicLinkSending}
+                  onClick={() => void handleSendMagicLink()}
+                >
+                  {magicLinkSending ? "Sending…" : "Resend sign-in link"}
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </CardContent>

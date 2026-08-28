@@ -8,11 +8,20 @@ import { SiteFooter } from "@/components/site-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  formatZodFieldErrors,
+  isPasswordBreached,
+  PASSWORD_BREACH_MESSAGE,
+  registerSchema
+} from "@tripeseats/auth";
 import { signUp } from "@/lib/auth-client";
 import { parseAuthError } from "@/lib/user-facing-error";
 import { Check, UtensilsCrossed } from "lucide-react";
 
 const TRUST_ITEMS = ["Secure sign-up", "Built for caterers", "Your data stays private"] as const;
+
+const PASSWORD_HINT =
+  "At least 8 characters with uppercase, lowercase, and a number. Avoid passwords seen in data breaches.";
 
 export function RegisterClient() {
   const router = useRouter();
@@ -20,8 +29,10 @@ export function RegisterClient() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [checkingBreach, setCheckingBreach] = useState(false);
   const [loginHref, setLoginHref] = useState("/login");
 
   useEffect(() => {
@@ -39,20 +50,31 @@ export function RegisterClient() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+    setFieldErrors({});
+
+    const parsed = registerSchema.safeParse({ name, email, password, confirmPassword });
+    if (!parsed.success) {
+      setFieldErrors(formatZodFieldErrors(parsed.error));
       return;
     }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
+
+    setCheckingBreach(true);
+    try {
+      const breached = await isPasswordBreached(parsed.data.password);
+      if (breached) {
+        setFieldErrors({ password: PASSWORD_BREACH_MESSAGE });
+        return;
+      }
+    } finally {
+      setCheckingBreach(false);
     }
+
     setSubmitting(true);
     try {
       const result = await signUp.email({
-        email: email.trim(),
-        password,
-        name: name.trim()
+        email: parsed.data.email,
+        password: parsed.data.password,
+        name: parsed.data.name
       });
       if (result.error) {
         setError(parseAuthError(result.error.message, "signUp"));
@@ -66,6 +88,8 @@ export function RegisterClient() {
       setSubmitting(false);
     }
   }
+
+  const busy = submitting || checkingBreach;
 
   return (
     <div className="grid min-h-screen w-full font-sans lg:grid-cols-5">
@@ -131,8 +155,13 @@ export function RegisterClient() {
                 autoComplete="name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                required
+                aria-invalid={!!fieldErrors.name}
               />
+              {fieldErrors.name ? (
+                <p className="text-sm text-destructive" role="alert">
+                  {fieldErrors.name}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
@@ -142,8 +171,13 @@ export function RegisterClient() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                required
+                aria-invalid={!!fieldErrors.email}
               />
+              {fieldErrors.email ? (
+                <p className="text-sm text-destructive" role="alert">
+                  {fieldErrors.email}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
@@ -153,8 +187,17 @@ export function RegisterClient() {
                 autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                required
+                aria-invalid={!!fieldErrors.password}
+                aria-describedby="password-hint"
               />
+              <p id="password-hint" className="text-xs text-muted-foreground">
+                {PASSWORD_HINT}
+              </p>
+              {fieldErrors.password ? (
+                <p className="text-sm text-destructive" role="alert">
+                  {fieldErrors.password}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirmPassword">Confirm password</Label>
@@ -164,16 +207,25 @@ export function RegisterClient() {
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                required
+                aria-invalid={!!fieldErrors.confirmPassword}
               />
+              {fieldErrors.confirmPassword ? (
+                <p className="text-sm text-destructive" role="alert">
+                  {fieldErrors.confirmPassword}
+                </p>
+              ) : null}
             </div>
             {error ? (
               <p className="text-sm text-destructive" role="alert">
                 {error}
               </p>
             ) : null}
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? "Creating account…" : "Create account"}
+            <Button type="submit" className="w-full" disabled={busy}>
+              {checkingBreach
+                ? "Checking password security…"
+                : submitting
+                  ? "Creating account…"
+                  : "Create account"}
             </Button>
           </form>
 

@@ -731,7 +731,22 @@ export const api = {
         expiresAt: string;
         willLimitToCalendarOnly?: boolean;
         existingAccountHasFullAccess?: boolean;
+        accountExists?: boolean;
+        magicLinkExpiresMinutes?: number;
       }>(`/api/invite/${encodeURIComponent(token)}`),
+    complete: (
+      token: string,
+      body: { password: string; name?: string; acknowledgeLimitedAccess?: boolean }
+    ) =>
+      apiFetch<{ member: { id: string }; redirect: string }>(
+        `/api/invite/${encodeURIComponent(token)}/complete`,
+        { method: "POST", body: JSON.stringify(body) }
+      ),
+    sendMagicLink: (token: string) =>
+      apiFetch<{ ok: boolean; email: string }>(
+        `/api/invite/${encodeURIComponent(token)}/magic-link`,
+        { method: "POST", body: JSON.stringify({}) }
+      ),
     accept: (token: string) =>
       apiFetch<{ member: { id: string }; redirect: string }>(
         `/api/invite/${encodeURIComponent(token)}/accept`,

@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Building2, CreditCard, Loader2, Package, Users, UtensilsCrossed } from "lucide-react";
+import { Building2, CreditCard, Loader2, Package, Shield, Users, UtensilsCrossed } from "lucide-react";
 import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,10 +13,11 @@ import { CloverPaymentsSection } from "./clover-payments-section";
 import { PackagesSection } from "./packages-section";
 import { MenuItemsSection } from "./menu-items-section";
 import { TeamSection } from "./team-section";
+import { SecuritySection } from "./security-section";
 
 export type CatererProfile = import("@/lib/settings-types").SettingsProfile;
 
-const VALID_TABS = ["profile", "packages", "menu", "team", "payments"] as const;
+const VALID_TABS = ["profile", "packages", "menu", "team", "payments", "security"] as const;
 type SettingsTab = (typeof VALID_TABS)[number];
 
 const OAUTH_TOAST: Record<string, { type: "success" | "error"; message: string }> = {
@@ -102,7 +103,7 @@ function SettingsPageInner() {
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabSwitch} className="space-y-6">
-        <TabsList className="grid w-full max-w-3xl grid-cols-5">
+        <TabsList className="grid w-full max-w-4xl grid-cols-3 sm:grid-cols-6">
           <TabsTrigger value="profile" className="gap-2">
             <Building2 className="h-4 w-4" />
             <span className="hidden sm:inline">Profile</span>
@@ -122,6 +123,10 @@ function SettingsPageInner() {
           <TabsTrigger value="team" className="gap-2">
             <Users className="h-4 w-4" />
             <span className="hidden sm:inline">Staff</span>
+          </TabsTrigger>
+          <TabsTrigger value="security" className="gap-2">
+            <Shield className="h-4 w-4" />
+            <span className="hidden sm:inline">Security</span>
           </TabsTrigger>
         </TabsList>
 
@@ -194,6 +199,20 @@ function SettingsPageInner() {
             </CardHeader>
             <CardContent>
               <TeamSection />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="security" forceMount className="data-[state=inactive]:hidden">
+          <Card>
+            <CardHeader>
+              <CardTitle>Account security</CardTitle>
+              <CardDescription>
+                Protect your login with two-factor authentication and strong password policies
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SecuritySection />
             </CardContent>
           </Card>
         </TabsContent>

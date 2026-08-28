@@ -1,6 +1,7 @@
 import { dash } from "@better-auth/infra";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
+import { magicLink, twoFactor } from "better-auth/plugins";
 
 import { AUTH_COOKIE_CACHE_MAX_AGE_SECONDS } from "@tripeseats/auth";
 import { prisma } from "@tripeseats/database";
@@ -8,6 +9,8 @@ import { prisma } from "@tripeseats/database";
 import { isLocalHostname } from "./is-local-hostname";
 import { allowedWebOrigins } from "./origins";
 import { escapeHtml, getResend, resendFromEmail } from "./mail";
+import { deliverMagicLinkEmail, magicLinkExpiresSeconds } from "./magic-link-mail";
+import { passwordSecurityBeforeHook } from "./password-auth-hook";
 
 const resend = getResend();
 
@@ -56,6 +59,7 @@ const authEmail =
     : {};
 
 export const auth = betterAuth({
+  appName: "Tripeseats",
   baseURL: process.env.BETTER_AUTH_URL,
   database: prismaAdapter(prisma, {
     provider: "postgresql"
@@ -87,6 +91,26 @@ export const auth = betterAuth({
   plugins: [
     dash({
       apiKey: process.env.BETTER_AUTH_API_KEY
+    }),
+    magicLink({
+      expiresIn: magicLinkExpiresSeconds(),
+      disableSignUp: false,
+      sendMagicLink: async ({ email, url, metadata }) => {
+        if (!getResend()) {
+          throw new Error("Email is not configured on the server.");
+        }
+        await deliverMagicLinkEmail({
+          email,
+          url,
+          metadata: metadata as { kind?: string; inviteToken?: string } | undefined
+        });
+      }
+    }),
+    twoFactor({
+      issuer: "Tripeseats"
     })
-  ]
+  ],
+  hooks: {
+    before: passwordSecurityBeforeHook
+  }
 });
