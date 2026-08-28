@@ -502,6 +502,7 @@ export const api = {
           inviteStatus: string;
         };
         emailSent: boolean;
+        existingAccountHasFullAccess?: boolean;
       }>("/api/vendor-calendar/external-invites", {
         method: "POST",
         body: JSON.stringify(body)
@@ -722,9 +723,15 @@ export const api = {
 
   invite: {
     get: (token: string) =>
-      apiFetch<{ email: string; role: string; catererName: string; token: string }>(
-        `/api/invite/${encodeURIComponent(token)}`
-      ),
+      apiFetch<{
+        email: string;
+        role: string;
+        catererName: string;
+        token: string;
+        expiresAt: string;
+        willLimitToCalendarOnly?: boolean;
+        existingAccountHasFullAccess?: boolean;
+      }>(`/api/invite/${encodeURIComponent(token)}`),
     accept: (token: string) =>
       apiFetch<{ member: { id: string }; redirect: string }>(
         `/api/invite/${encodeURIComponent(token)}/accept`,

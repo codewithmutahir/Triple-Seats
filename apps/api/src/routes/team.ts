@@ -7,13 +7,23 @@ import { AUDIT_ACTIONS, serializeAuditLog, writeAuditLog } from "../lib/audit-lo
 import { getAuthorizedSession } from "../lib/authorized-session";
 import { escapeHtml, getResend, resendFromEmail } from "../lib/mail";
 import { canAssignRole, isCalendarOnlyRole } from "../lib/permissions";
+import {
+  expirePendingInviteIfNeeded,
+  inviteExpiresAt,
+  inviteTtlDays,
+  freshInviteSentAt
+} from "../lib/invite-ttl";
 import { handleRouteError } from "../lib/route-errors";
+import {
+  applyCalendarOnlyAccess,
+  emailHasExistingFullDashboardAccess,
+  revokeCalendarOnlyAccessIfOrphaned
+} from "../lib/calendar-only-session";
 import { clearCatererCacheForUser, getSession } from "../lib/session";
 
 const router = Router();
 const inviteRouter = Router();
 
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ASSIGNABLE_ROLES: TeamRole[] = ["admin", "manager", "sales", "ops", "viewer"];
 
 const profileSchema = {
@@ -182,7 +192,8 @@ router.post("/invite", async (req: Request, res: Response) => {
             inviteStatus: "pending",
             invitedBy: user.id,
             joinedAt: null,
-            userId: null
+            userId: null,
+            createdAt: freshInviteSentAt()
           }
         })
       : await prisma.teamMember.create({
@@ -203,7 +214,7 @@ router.post("/invite", async (req: Request, res: Response) => {
         from: resendFromEmail(),
         to: email,
         subject: "You've been invited to join CaterPro",
-        html: `<p>You've been invited to join <strong>${escapeHtml(caterer.name)}</strong> on CaterPro as <strong>${escapeHtml(targetRole)}</strong>.</p><p><a href="${escapeHtml(acceptUrl)}">Accept invitation</a></p><p>This link expires in 7 days.</p>`
+        html: `<p>You've been invited to join <strong>${escapeHtml(caterer.name)}</strong> on CaterPro as <strong>${escapeHtml(targetRole)}</strong>.</p><p><a href="${escapeHtml(acceptUrl)}">Accept invitation</a></p><p>This link expires in ${inviteTtlDays()} days.</p>`
       });
     }
 
@@ -380,20 +391,23 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Invitation not found." });
     }
 
-    const expired = Date.now() - member.createdAt.getTime() > INVITE_TTL_MS;
-    if (expired) {
-      await prisma.teamMember.update({
-        where: { id: member.id },
-        data: { inviteStatus: "expired", inviteToken: null }
-      });
+    if (await expirePendingInviteIfNeeded(member)) {
       return res.status(410).json({ error: "Invitation expired." });
     }
+
+    const existingAccountHasFullAccess =
+      member.role === "calendar_only"
+        ? await emailHasExistingFullDashboardAccess(member.email)
+        : false;
 
     return res.json({
       email: member.email,
       role: member.role,
       catererName: member.caterer.name,
-      token
+      token,
+      expiresAt: inviteExpiresAt(member.createdAt).toISOString(),
+      willLimitToCalendarOnly: member.role === "calendar_only",
+      existingAccountHasFullAccess
     });
   } catch (e) {
     return handleRouteError(res, e, "Invite preview");
@@ -403,7 +417,7 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
 inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
   try {
     const token = paramId(req, "token");
-    const { user } = await getSession(req);
+    const { user, isSuperAdmin } = await getSession(req);
 
     const invite = await prisma.teamMember.findUnique({
       where: { inviteToken: token },
@@ -414,12 +428,7 @@ inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Invitation not found." });
     }
 
-    const expired = Date.now() - invite.createdAt.getTime() > INVITE_TTL_MS;
-    if (expired) {
-      await prisma.teamMember.update({
-        where: { id: invite.id },
-        data: { inviteStatus: "expired", inviteToken: null }
-      });
+    if (await expirePendingInviteIfNeeded(invite)) {
       return res.status(410).json({ error: "Invitation expired." });
     }
 
@@ -438,7 +447,11 @@ inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
       }
     });
 
-    clearCatererCacheForUser(user.id);
+    if (invite.role === "calendar_only" && !isSuperAdmin) {
+      await applyCalendarOnlyAccess(user.id);
+    } else {
+      clearCatererCacheForUser(user.id);
+    }
 
     await writeAuditLog({
       catererId: invite.caterer.id,

@@ -8,11 +8,17 @@ import { seedMenuItemsForCaterer } from "./seed-menu-items";
 import { seedPackagesForCaterer } from "./seed-packages";
 import { ensureCatererSlug, uniqueSlugForName } from "./slug";
 import { resolveIsSuperAdmin } from "./super-admin";
+import { tryResolveCalendarOnlySession } from "./calendar-only-session";
+import {
+  CATERER_CACHE_TTL_MS,
+  clearCatererCacheForUser,
+  getCatererCacheEntry,
+  setCatererCacheEntry
+} from "./session-cache";
 
 type Caterer = Prisma.CatererGetPayload<Record<string, never>>;
 
-const catererCache = new Map<string, { caterer: Caterer; ts: number }>();
-const CATERER_TTL = 30_000;
+const CATERER_TTL = CATERER_CACHE_TTL_MS;
 
 type SessionData = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
@@ -79,9 +85,7 @@ export function extractSessionToken(req: Request): string | null {
 
 type AuthUser = { id: string; email: string | null; name: string | null };
 
-export function clearCatererCacheForUser(userId: string) {
-  catererCache.delete(userId);
-}
+export { clearCatererCacheForUser } from "./session-cache";
 
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() ?? "";
@@ -142,14 +146,16 @@ async function linkIntakeCatererForUser(user: AuthUser): Promise<Caterer | null>
  * 5. Otherwise → create a new caterer (onboarding)
  */
 export async function ensureCatererForAuthUser(user: AuthUser) {
-  const cached = catererCache.get(user.id);
+  const cached = getCatererCacheEntry(user.id) as
+    | { caterer: Caterer; ts: number }
+    | undefined;
   if (cached && Date.now() - cached.ts < CATERER_TTL && cached.caterer.slug?.trim()) {
     return cached.caterer;
   }
 
   const intakeCaterer = await linkIntakeCatererForUser(user);
   if (intakeCaterer) {
-    catererCache.set(user.id, { caterer: intakeCaterer, ts: Date.now() });
+    setCatererCacheEntry(user.id, intakeCaterer);
     return intakeCaterer;
   }
 
@@ -272,12 +278,12 @@ export async function ensureCatererForAuthUser(user: AuthUser) {
   }
 
   if (caterer.slug?.trim()) {
-    catererCache.set(user.id, { caterer, ts: Date.now() });
+    setCatererCacheEntry(user.id, caterer);
     return caterer;
   }
 
   const withSlug = await ensureCatererSlug(caterer);
-  catererCache.set(user.id, { caterer: withSlug, ts: Date.now() });
+  setCatererCacheEntry(user.id, withSlug);
   return withSlug;
 }
 
@@ -322,6 +328,29 @@ export async function getSession(req: Request) {
   const data = await resolveAuthSession(req);
   perf.step("auth.api.getSession");
 
+  const isSuperAdmin = await resolveIsSuperAdmin(data.user.id, data.user.email ?? null);
+  perf.step("super-admin");
+
+  const calendarOnly = await tryResolveCalendarOnlySession(data.user.id, isSuperAdmin);
+  if (calendarOnly) {
+    if (process.env.NODE_ENV === "production" && process.env.SENTRY_DSN) {
+      Sentry.setUser({
+        id: data.user.id,
+        email: data.user.email ?? undefined
+      });
+      Sentry.setTag("catererId", calendarOnly.caterer.id);
+    }
+    perf.end();
+    return {
+      session: data.session,
+      user: data.user,
+      caterer: calendarOnly.caterer,
+      role: calendarOnly.role,
+      isOwner: calendarOnly.isOwner,
+      isSuperAdmin
+    };
+  }
+
   const caterer = await ensureCatererForAuthUser({
     id: data.user.id,
     email: data.user.email ?? null,
@@ -351,8 +380,6 @@ export async function getSession(req: Request) {
   const isCatererOwner = caterer.userId === data.user.id;
   const role: TeamRole = isCatererOwner ? "owner" : (teamMembership?.role ?? "owner");
   const isOwner = isCatererOwner;
-  const isSuperAdmin = await resolveIsSuperAdmin(data.user.id, data.user.email ?? null);
-  perf.step("super-admin");
 
   perf.end();
 

@@ -9,7 +9,16 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
 import { getExternalVendorCaterer } from "../lib/external-vendor-caterer";
+import {
+  emailHasExistingFullDashboardAccess,
+  revokeCalendarOnlyAccessIfOrphaned
+} from "../lib/calendar-only-session";
 import { getAuthorizedSession } from "../lib/authorized-session";
+import {
+  expirePendingInviteIfNeeded,
+  freshInviteSentAt,
+  inviteExpiresAt
+} from "../lib/invite-ttl";
 import { handleRouteError } from "../lib/route-errors";
 import { getSession } from "../lib/session";
 import { timer } from "../lib/perf";
@@ -27,8 +36,6 @@ import { queueGoogleDelete, queueGooglePush } from "../lib/google-calendar-sync"
 import { vendorCalendarGoogleRouter } from "./vendor-calendar-google";
 
 const router = Router();
-
-const EXTERNAL_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function webOrigin(): string {
   return process.env.WEB_ORIGIN?.trim() || process.env.BETTER_AUTH_URL?.trim() || "http://localhost:3000";
@@ -931,7 +938,7 @@ router.get("/directory", async (req: Request, res: Response) => {
       }
     });
 
-    const pendingExternalInvites = await prisma.teamMember.findMany({
+    const pendingRows = await prisma.teamMember.findMany({
       where: { role: "calendar_only", inviteStatus: "pending" },
       orderBy: { createdAt: "desc" },
       take: 100,
@@ -939,10 +946,15 @@ router.get("/directory", async (req: Request, res: Response) => {
         id: true,
         email: true,
         name: true,
-        createdAt: true,
-        caterer: { select: { id: true, name: true } }
+        createdAt: true
       }
     });
+
+    const pendingExternalInvites: typeof pendingRows = [];
+    for (const row of pendingRows) {
+      if (await expirePendingInviteIfNeeded(row)) continue;
+      pendingExternalInvites.push(row);
+    }
 
     return res.json({
       self,
@@ -952,7 +964,8 @@ router.get("/directory", async (req: Request, res: Response) => {
         id: m.id,
         email: m.email,
         name: m.name,
-        createdAt: m.createdAt.toISOString()
+        createdAt: m.createdAt.toISOString(),
+        expiresAt: inviteExpiresAt(m.createdAt).toISOString()
       })),
       caterers: caterers.map((c) => ({
         id: c.id,
@@ -1161,7 +1174,8 @@ router.post("/external-invites", async (req: Request, res: Response) => {
             invitedBy: user.id,
             name: parsed.data.name?.trim() || existing.name,
             userId: null,
-            joinedAt: null
+            joinedAt: null,
+            createdAt: freshInviteSentAt()
           }
         })
       : await prisma.teamMember.create({
@@ -1180,8 +1194,11 @@ router.post("/external-invites", async (req: Request, res: Response) => {
     const mail = await sendVendorCalendarExternalInviteEmail({
       to: email,
       inviteeName: member.name,
-      acceptUrl
+      acceptUrl,
+      expiresAt: inviteExpiresAt(member.createdAt)
     });
+
+    const existingAccountHasFullAccess = await emailHasExistingFullDashboardAccess(email);
 
     return res.status(201).json({
       invite: {
@@ -1189,9 +1206,11 @@ router.post("/external-invites", async (req: Request, res: Response) => {
         email: member.email,
         name: member.name,
         inviteStatus: member.inviteStatus,
-        createdAt: member.createdAt.toISOString()
+        createdAt: member.createdAt.toISOString(),
+        expiresAt: inviteExpiresAt(member.createdAt).toISOString()
       },
-      emailSent: mail.sent
+      emailSent: mail.sent,
+      existingAccountHasFullAccess
     });
   } catch (e) {
     return handleRouteError(res, e, "External calendar invite");
@@ -1212,17 +1231,23 @@ router.get("/external-invites", async (req: Request, res: Response) => {
         id: true,
         email: true,
         name: true,
-        createdAt: true,
-        caterer: { select: { id: true, name: true } }
+        createdAt: true
       }
     });
 
+    const active: typeof items = [];
+    for (const item of items) {
+      if (await expirePendingInviteIfNeeded(item)) continue;
+      active.push(item);
+    }
+
     return res.json({
-      items: items.map((m) => ({
+      items: active.map((m) => ({
         id: m.id,
         email: m.email,
         name: m.name,
-        createdAt: m.createdAt.toISOString()
+        createdAt: m.createdAt.toISOString(),
+        expiresAt: inviteExpiresAt(m.createdAt).toISOString()
       }))
     });
   } catch (e) {
@@ -1230,7 +1255,7 @@ router.get("/external-invites", async (req: Request, res: Response) => {
   }
 });
 
-/** Super admin: revoke pending external calendar invite */
+/** Super admin: revoke pending or accepted external calendar access */
 router.delete("/external-invites/:id", async (req: Request, res: Response) => {
   try {
     const { isSuperAdmin } = await getSession(req);
@@ -1238,13 +1263,19 @@ router.delete("/external-invites/:id", async (req: Request, res: Response) => {
     const id = paramId(req);
 
     const existing = await prisma.teamMember.findFirst({
-      where: { id, role: "calendar_only", inviteStatus: "pending" }
+      where: { id, role: "calendar_only" }
     });
     if (!existing) {
       return res.status(404).json({ error: "Not found" });
     }
 
+    const userId = existing.userId;
     await prisma.teamMember.delete({ where: { id } });
+
+    if (userId) {
+      await revokeCalendarOnlyAccessIfOrphaned(userId);
+    }
+
     return res.status(204).send();
   } catch (e) {
     return handleRouteError(res, e, "External calendar invite revoke");

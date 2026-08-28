@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { SiteFooter } from "@/components/site-footer";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,19 @@ export function RegisterClient() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [loginHref, setLoginHref] = useState("/login");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const emailParam = params.get("email");
+    if (emailParam) setEmail(emailParam);
+    const redirect = params.get("redirect");
+    const qs = new URLSearchParams();
+    qs.set("registered", "1");
+    if (redirect) qs.set("redirect", redirect);
+    if (emailParam) qs.set("email", emailParam);
+    setLoginHref(`/login?${qs.toString()}`);
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,7 +58,7 @@ export function RegisterClient() {
         setError(parseAuthError(result.error.message, "signUp"));
         return;
       }
-      router.push("/login?registered=1");
+      router.push(loginHref);
       router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
@@ -166,7 +179,7 @@ export function RegisterClient() {
 
           <p className="mt-8 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
-            <Link href="/login" className="font-medium text-[#1B2A4A] underline-offset-4 hover:underline">
+            <Link href={loginHref} className="font-medium text-[#1B2A4A] underline-offset-4 hover:underline">
               Sign in
             </Link>
           </p>
