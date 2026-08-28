@@ -21,6 +21,7 @@ export function LoginClient() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [registerHref, setRegisterHref] = useState("/register");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -30,6 +31,16 @@ export function LoginClient() {
     if (params.get("reason") === "session_expired") {
       setToast("Your session expired. Please sign in again.");
     }
+    const emailParam = params.get("email");
+    if (emailParam) {
+      setEmail(emailParam);
+    }
+    const redirect = params.get("redirect");
+    const regQs = new URLSearchParams();
+    if (redirect) regQs.set("redirect", redirect);
+    if (emailParam) regQs.set("email", emailParam);
+    const regQ = regQs.toString();
+    if (regQ) setRegisterHref(`/register?${regQ}`);
   }, []);
 
   async function onSubmit(e: React.FormEvent) {
@@ -43,7 +54,11 @@ export function LoginClient() {
         return;
       }
       router.refresh();
-      router.push("/dashboard");
+      const params = new URLSearchParams(window.location.search);
+      const redirect = params.get("redirect");
+      const safeRedirect =
+        redirect && redirect.startsWith("/") && !redirect.startsWith("//") ? redirect : "/dashboard";
+      router.push(safeRedirect);
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -150,7 +165,10 @@ export function LoginClient() {
 
           <p className="mt-8 text-center text-sm text-muted-foreground">
             Don&apos;t have an account?{" "}
-            <Link href="/register" className="font-medium text-[#1B2A4A] underline-offset-4 hover:underline">
+            <Link
+              href={registerHref}
+              className="font-medium text-[#1B2A4A] underline-offset-4 hover:underline"
+            >
               Create one
             </Link>
           </p>

@@ -241,6 +241,8 @@ model User {
   image         String?
   /// Platform-level flag — can view all vendor calendars and manage share grants.
   isSuperAdmin  Boolean   @default(false)
+  /// When true, dashboard is limited to vendor calendar only (external vendor invite accepted).
+  vendorCalendarOnly Boolean @default(false)
   /// Secret token for read-only iCal/webcal subscription feed.
   vendorCalendarIcalToken String? @unique
   /// Google Calendar OAuth (encrypted refresh token).

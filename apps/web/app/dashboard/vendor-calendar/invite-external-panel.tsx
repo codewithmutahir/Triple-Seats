@@ -57,6 +57,10 @@ export function InviteExternalPanel({
     setName("");
   }
 
+  function formatExpiry(iso: string) {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
@@ -64,8 +68,9 @@ export function InviteExternalPanel({
           <DialogTitle className="font-heading text-[#1B2A4A]">Invite external vendor</DialogTitle>
           <DialogDescription>
             Send an email invitation for vendor calendar access only. They are not added to any
-            caterer business — just their own calendar. Use Share access if they should view
-            someone else&apos;s calendar after they join.
+            caterer business — just their own calendar. Invitations expire after 7 days (configurable
+            on the server). Use Share access if they should view someone else&apos;s calendar after
+            they join.
           </DialogDescription>
         </DialogHeader>
 
@@ -118,7 +123,9 @@ export function InviteExternalPanel({
                       {inv.name ? `${inv.name} · ` : ""}
                       {inv.email}
                     </p>
-                    <p className="text-xs text-muted-foreground">External vendor · awaiting accept</p>
+                    <p className="text-xs text-muted-foreground">
+                      External vendor · expires {formatExpiry(inv.expiresAt)}
+                    </p>
                   </div>
                   <Button
                     type="button"
