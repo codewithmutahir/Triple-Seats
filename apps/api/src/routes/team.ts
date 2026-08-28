@@ -19,7 +19,10 @@ import {
   emailHasExistingFullDashboardAccess,
   revokeCalendarOnlyAccessIfOrphaned
 } from "../lib/calendar-only-session";
-import { clearCatererCacheForUser, getSession } from "../lib/session";
+import { authenticateInviteEmail, emailHasAccount, magicLinkExpiresMinutes, sendInviteMagicLink } from "../lib/invite-complete";
+import { clearCatererCacheForUser, getAuthSession, getSession } from "../lib/session";
+import { resolveIsSuperAdmin } from "../lib/super-admin";
+import { z } from "zod";
 
 const router = Router();
 const inviteRouter = Router();
@@ -79,6 +82,67 @@ function serializeMember(member: {
 
 function webOrigin(): string {
   return process.env.WEB_ORIGIN?.trim() || process.env.BETTER_AUTH_URL?.trim() || "http://localhost:3000";
+}
+
+const inviteCompleteBodySchema = z.object({
+  password: z.string().min(8).max(128),
+  name: z.string().trim().max(120).optional(),
+  acknowledgeLimitedAccess: z.boolean().optional()
+});
+
+async function loadPendingInvite(token: string) {
+  const invite = await prisma.teamMember.findUnique({
+    where: { inviteToken: token },
+    include: { caterer: { select: { id: true, name: true } } }
+  });
+  if (!invite || invite.inviteStatus !== "pending") return null;
+  if (await expirePendingInviteIfNeeded(invite)) return "expired" as const;
+  return invite;
+}
+
+async function finalizeInviteAccept(
+  invite: {
+    id: string;
+    email: string;
+    role: TeamRole;
+    name: string | null;
+    caterer: { id: string; name: string };
+  },
+  user: { id: string; email: string; name?: string | null },
+  isSuperAdmin: boolean
+) {
+  const updated = await prisma.teamMember.update({
+    where: { id: invite.id },
+    data: {
+      userId: user.id,
+      inviteStatus: "accepted",
+      inviteToken: null,
+      joinedAt: new Date(),
+      name: user.name ?? invite.name
+    }
+  });
+
+  if (invite.role === "calendar_only" && !isSuperAdmin) {
+    await applyCalendarOnlyAccess(user.id);
+  } else {
+    clearCatererCacheForUser(user.id);
+  }
+
+  await writeAuditLog({
+    catererId: invite.caterer.id,
+    actorId: user.id,
+    actorEmail: user.email,
+    action: AUDIT_ACTIONS.TEAM_INVITE_ACCEPT,
+    entityType: "team_member",
+    entityId: invite.id,
+    summary: `${user.email} accepted invitation as ${invite.role}`,
+    metadata: { email: invite.email, role: invite.role }
+  });
+
+  return {
+    member: serializeMember(updated),
+    redirect: invite.role === "calendar_only" ? "/dashboard/vendor-calendar" : "/dashboard"
+  };
 }
 
 router.get("/me", async (req: Request, res: Response) => {
@@ -399,6 +463,7 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
       member.role === "calendar_only"
         ? await emailHasExistingFullDashboardAccess(member.email)
         : false;
+    const accountExists = await emailHasAccount(member.email);
 
     return res.json({
       email: member.email,
@@ -407,67 +472,112 @@ inviteRouter.get("/:token", async (req: Request, res: Response) => {
       token,
       expiresAt: inviteExpiresAt(member.createdAt).toISOString(),
       willLimitToCalendarOnly: member.role === "calendar_only",
-      existingAccountHasFullAccess
+      existingAccountHasFullAccess,
+      accountExists,
+      magicLinkExpiresMinutes: magicLinkExpiresMinutes()
     });
   } catch (e) {
     return handleRouteError(res, e, "Invite preview");
   }
 });
 
-inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
+inviteRouter.post("/:token/magic-link", async (req: Request, res: Response) => {
   try {
     const token = paramId(req, "token");
-    const { user, isSuperAdmin } = await getSession(req);
-
-    const invite = await prisma.teamMember.findUnique({
-      where: { inviteToken: token },
-      include: { caterer: { select: { id: true, name: true } } }
-    });
-
-    if (!invite || invite.inviteStatus !== "pending") {
+    const invite = await loadPendingInvite(token);
+    if (invite === "expired") {
+      return res.status(410).json({ error: "Invitation expired." });
+    }
+    if (!invite) {
       return res.status(404).json({ error: "Invitation not found." });
     }
 
-    if (await expirePendingInviteIfNeeded(invite)) {
+    const result = await sendInviteMagicLink(req, {
+      email: invite.email,
+      name: invite.name,
+      inviteToken: token
+    });
+    if (!result.sent) {
+      return res.status(503).json({ error: result.error ?? "Could not send sign-in link." });
+    }
+
+    return res.json({ ok: true, email: invite.email });
+  } catch (e) {
+    return handleRouteError(res, e, "Invite magic link");
+  }
+});
+
+inviteRouter.post("/:token/complete", async (req: Request, res: Response) => {
+  try {
+    const token = paramId(req, "token");
+    const parsed = inviteCompleteBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid input" });
+    }
+
+    const invite = await loadPendingInvite(token);
+    if (invite === "expired") {
       return res.status(410).json({ error: "Invitation expired." });
+    }
+    if (!invite) {
+      return res.status(404).json({ error: "Invitation not found." });
+    }
+
+    const accountExists = await emailHasAccount(invite.email);
+    const existingAccountHasFullAccess =
+      invite.role === "calendar_only"
+        ? await emailHasExistingFullDashboardAccess(invite.email)
+        : false;
+
+    if (existingAccountHasFullAccess && !parsed.data.acknowledgeLimitedAccess) {
+      return res.status(400).json({
+        error:
+          "Confirm that you understand your dashboard will be limited to vendor calendar only."
+      });
+    }
+
+    const authResult = await authenticateInviteEmail(req, res, {
+      email: invite.email,
+      password: parsed.data.password,
+      name: parsed.data.name,
+      accountExists
+    });
+    if ("error" in authResult) {
+      return res.status(authResult.status).json({ error: authResult.error });
+    }
+
+    if (authResult.user.email.toLowerCase() !== invite.email.toLowerCase()) {
+      return res.status(403).json({ error: "Sign in with the invited email to continue." });
+    }
+
+    const isSuperAdmin = await resolveIsSuperAdmin(authResult.user.id, authResult.user.email);
+    const result = await finalizeInviteAccept(invite, authResult.user, isSuperAdmin);
+    return res.json(result);
+  } catch (e) {
+    return handleRouteError(res, e, "Invite complete");
+  }
+});
+
+inviteRouter.post("/:token/accept", async (req: Request, res: Response) => {
+  try {
+    const token = paramId(req, "token");
+    const { user } = await getAuthSession(req);
+    const isSuperAdmin = await resolveIsSuperAdmin(user.id, user.email ?? null);
+
+    const invite = await loadPendingInvite(token);
+    if (invite === "expired") {
+      return res.status(410).json({ error: "Invitation expired." });
+    }
+    if (!invite) {
+      return res.status(404).json({ error: "Invitation not found." });
     }
 
     if (user.email?.toLowerCase() !== invite.email.toLowerCase()) {
       return res.status(403).json({ error: "Sign in with the invited email to accept." });
     }
 
-    const updated = await prisma.teamMember.update({
-      where: { id: invite.id },
-      data: {
-        userId: user.id,
-        inviteStatus: "accepted",
-        inviteToken: null,
-        joinedAt: new Date(),
-        name: user.name ?? invite.name
-      }
-    });
-
-    if (invite.role === "calendar_only" && !isSuperAdmin) {
-      await applyCalendarOnlyAccess(user.id);
-    } else {
-      clearCatererCacheForUser(user.id);
-    }
-
-    await writeAuditLog({
-      catererId: invite.caterer.id,
-      actorId: user.id,
-      actorEmail: user.email,
-      action: AUDIT_ACTIONS.TEAM_INVITE_ACCEPT,
-      entityType: "team_member",
-      entityId: invite.id,
-      summary: `${user.email} accepted invitation as ${invite.role}`,
-      metadata: { email: invite.email, role: invite.role }
-    });
-
-    return res.json({
-      member: serializeMember(updated),
-      redirect: invite.role === "calendar_only" ? "/dashboard/vendor-calendar" : "/dashboard"
-    });
+    const result = await finalizeInviteAccept(invite, user, isSuperAdmin);
+    return res.json(result);
   } catch (e) {
     return handleRouteError(res, e, "Invite accept");
   }

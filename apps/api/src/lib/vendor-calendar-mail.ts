@@ -126,7 +126,7 @@ export async function sendVendorCalendarExternalInviteEmail(opts: {
       from: resendFromEmail(),
       to: opts.to,
       subject: `You're invited to manage your vendor calendar on Tripeseats`,
-      html: `<p>Hi ${greet},</p><p>You've been invited to manage your personal vendor calendar on Tripeseats.</p><p>You'll be able to mark busy and free days, add notes, and manage your schedule — nothing else in the workspace.</p><p><a href="${url}">Accept invitation</a></p><p><strong>This link expires on ${expiry}.</strong> After that, ask your administrator to send a new invitation.</p><p>— Tripeseats</p>`
+      html: `<p>Hi ${greet},</p><p>You've been invited to manage your personal vendor calendar on Tripeseats.</p><p>Open the link below, then click <strong>Email me a sign-in link</strong> — we'll sign you in with one click (no password required).</p><p><a href="${url}">Open your invitation</a></p><p><strong>This invitation expires on ${expiry}.</strong> After that, ask your administrator to send a new one.</p><p>— Tripeseats</p>`
     });
     if (error) throw new Error(error.message);
   });

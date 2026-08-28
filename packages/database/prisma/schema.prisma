@@ -252,10 +252,13 @@ model User {
   googleCalendarId              String?   @default("primary")
   googleCalendarEmail           String?
   googleCalendarConnectedAt     DateTime?
+  /// Better Auth two-factor plugin — TOTP enabled after verification.
+  twoFactorEnabled Boolean @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
+  twoFactor     TwoFactor?
   caterer       Caterer?
   vendorCalendarEntries VendorCalendarEntry[] @relation("VendorCalendarOwner")
   calendarGrantsReceived CalendarShareGrant[] @relation("CalendarGrantGrantee")
@@ -356,6 +359,19 @@ model CalendarShareGrant {
   @@index([granteeUserId])
   @@index([targetUserId])
   @@map("calendar_share_grants")
+}
+
+model TwoFactor {
+  id                      String    @id @default(cuid())
+  userId                  String    @unique
+  secret                  String
+  backupCodes             String
+  verified                Boolean   @default(false)
+  failedVerificationCount Int       @default(0)
+  lockedUntil             DateTime?
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("twoFactor")
 }
 
 model Session {

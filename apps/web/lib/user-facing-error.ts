@@ -73,7 +73,11 @@ const SAFE_AUTH_PATTERNS = [
   /user (already exists|not found)/i,
   /email (already|is) (in use|taken|registered)/i,
   /password/i,
-  /too many/i
+  /too many/i,
+  /data breach/i,
+  /backup code/i,
+  /two.?factor|2fa|totp|authenticator/i,
+  /locked/i
 ];
 
 function isSafeAuthMessage(message: string): boolean {

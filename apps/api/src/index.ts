@@ -186,6 +186,7 @@ function createApp() {
 
   app.use("/api/auth/sign-in", authWriteLimiter);
   app.use("/api/auth/sign-up", authWriteLimiter);
+  app.use("/api/auth/sign-in/magic-link", authWriteLimiter);
   app.use("/api/auth/forgot-password", authWriteLimiter);
   app.use("/api/auth/reset-password", authWriteLimiter);
   app.use("/api/auth", toNodeHandler(auth));

@@ -318,6 +318,12 @@ async function resolveAuthSession(req: Request): Promise<SessionData> {
   return data;
 }
 
+/** Better Auth session only — no caterer provisioning (use for invite accept before onboarding). */
+export async function getAuthSession(req: Request) {
+  const data = await resolveAuthSession(req);
+  return { session: data.session, user: data.user };
+}
+
 /**
  * Validates Better Auth session and resolves (or creates) the caterer for this user.
  * Session is revalidated with Better Auth on every request; caterer lookup is cached by user id.
