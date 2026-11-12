@@ -1,7 +1,7 @@
 "use client";
 
 import { format } from "date-fns";
-import { CalendarIcon, Download, Inbox, Share2 } from "lucide-react";
+import { CalendarIcon, Code2, Copy, Download, Inbox, Share2 } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +10,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -67,6 +76,54 @@ function resolveBookUrl(profile: CatererProfile | null): string | null {
   return tenantUrls(profile.slug).bookUrl ?? profile.bookUrl;
 }
 
+function resolveEmbedUrl(profile: CatererProfile | null): string | null {
+  if (!profile?.slug) return null;
+  const urls = tenantUrls(profile.slug);
+  // Embed URL uses the base origin + /embed/[slug]
+  if (urls.bookUrl) {
+    const url = new URL(urls.bookUrl);
+    return `${url.origin}/embed/${profile.slug}`;
+  }
+  return null;
+}
+
+function generateIframeCode(embedUrl: string, height = 700): string {
+  return `<iframe
+  src="${embedUrl}"
+  width="100%"
+  height="${height}"
+  frameborder="0"
+  style="border: none; max-width: 600px;"
+  title="Request a Quote"
+></iframe>`;
+}
+
+function generateScriptCode(embedUrl: string): string {
+  return `<div id="tripeseats-form"></div>
+<script>
+(function() {
+  var container = document.getElementById('tripeseats-form');
+  var iframe = document.createElement('iframe');
+  iframe.src = '${embedUrl}';
+  iframe.width = '100%';
+  iframe.height = '700';
+  iframe.frameBorder = '0';
+  iframe.style.border = 'none';
+  iframe.style.maxWidth = '600px';
+  iframe.title = 'Request a Quote';
+  container.appendChild(iframe);
+  
+  // Listen for form submission
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'tripeseats:lead_submitted') {
+      console.log('Lead submitted!');
+      // Add your tracking/callback code here
+    }
+  });
+})();
+</script>`;
+}
+
 export default function LeadsPage() {
   const perfRef = useRef<ReturnType<typeof browserTimer> | null>(null);
   const perfEndedRef = useRef(false);
@@ -96,7 +153,11 @@ export default function LeadsPage() {
   const intakeWarning = leadsData?.intakeMismatchWarning ?? null;
   const error = queryError?.message ?? null;
   const bookUrl = useMemo(() => resolveBookUrl(profile ?? null), [profile]);
+  const embedUrl = useMemo(() => resolveEmbedUrl(profile ?? null), [profile]);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [iframeCopied, setIframeCopied] = useState(false);
+  const [scriptCopied, setScriptCopied] = useState(false);
+  const [embedDialogOpen, setEmbedDialogOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
@@ -193,6 +254,28 @@ export default function LeadsPage() {
     }
   }
 
+  async function copyIframeCode() {
+    if (!embedUrl) return;
+    try {
+      await navigator.clipboard.writeText(generateIframeCode(embedUrl));
+      setIframeCopied(true);
+      setTimeout(() => setIframeCopied(false), 2000);
+    } catch {
+      setIframeCopied(false);
+    }
+  }
+
+  async function copyScriptCode() {
+    if (!embedUrl) return;
+    try {
+      await navigator.clipboard.writeText(generateScriptCode(embedUrl));
+      setScriptCopied(true);
+      setTimeout(() => setScriptCopied(false), 2000);
+    } catch {
+      setScriptCopied(false);
+    }
+  }
+
   const empty = !loading && data.total === 0;
 
   return (
@@ -277,16 +360,94 @@ export default function LeadsPage() {
                 </Popover>
               </div>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="shrink-0 bg-white"
-              onClick={exportCsv}
-              disabled={!data.items.length}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Export CSV
-            </Button>
+            <div className="flex gap-2">
+              <Dialog open={embedDialogOpen} onOpenChange={setEmbedDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="shrink-0 bg-white"
+                    disabled={!embedUrl}
+                  >
+                    <Code2 className="mr-2 h-4 w-4" />
+                    Embed Form
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Embed Lead Form</DialogTitle>
+                    <DialogDescription>
+                      Add your lead intake form to any website. Copy the code below and paste it into your site.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <Tabs defaultValue="iframe" className="mt-4">
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="iframe">Simple (iframe)</TabsTrigger>
+                      <TabsTrigger value="script">Advanced (Script)</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="iframe" className="space-y-4">
+                      <div className="rounded-lg bg-slate-950 p-4">
+                        <pre className="overflow-x-auto text-sm text-slate-300">
+                          <code>{embedUrl ? generateIframeCode(embedUrl) : ""}</code>
+                        </pre>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => void copyIframeCode()}
+                        className="w-full"
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        {iframeCopied ? "Copied!" : "Copy iframe code"}
+                      </Button>
+                      <p className="text-sm text-muted-foreground">
+                        Paste this code into your website&apos;s HTML where you want the form to appear.
+                      </p>
+                    </TabsContent>
+                    <TabsContent value="script" className="space-y-4">
+                      <div className="rounded-lg bg-slate-950 p-4">
+                        <pre className="overflow-x-auto text-sm text-slate-300">
+                          <code>{embedUrl ? generateScriptCode(embedUrl) : ""}</code>
+                        </pre>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => void copyScriptCode()}
+                        className="w-full"
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        {scriptCopied ? "Copied!" : "Copy script code"}
+                      </Button>
+                      <p className="text-sm text-muted-foreground">
+                        This version includes a callback listener for tracking form submissions.
+                      </p>
+                    </TabsContent>
+                  </Tabs>
+                  {embedUrl ? (
+                    <div className="mt-4 rounded-lg border bg-slate-50 p-3">
+                      <p className="text-xs font-medium text-muted-foreground">Preview URL</p>
+                      <a
+                        href={embedUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline break-all"
+                      >
+                        {embedUrl}
+                      </a>
+                    </div>
+                  ) : null}
+                </DialogContent>
+              </Dialog>
+              <Button
+                type="button"
+                variant="outline"
+                className="shrink-0 bg-white"
+                onClick={exportCsv}
+                disabled={!data.items.length}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Export CSV
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -310,10 +471,21 @@ export default function LeadsPage() {
                 <p className="mt-3 max-w-md text-sm text-amber-800">{intakeWarning}</p>
               ) : null}
             </div>
-            <Button type="button" onClick={() => void copyLeadFormLink()} disabled={!bookUrl}>
-              <Share2 className="mr-2 h-4 w-4" />
-              {linkCopied ? "Copied!" : "Share your lead form link"}
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button type="button" onClick={() => void copyLeadFormLink()} disabled={!bookUrl}>
+                <Share2 className="mr-2 h-4 w-4" />
+                {linkCopied ? "Copied!" : "Share your lead form link"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEmbedDialogOpen(true)}
+                disabled={!embedUrl}
+              >
+                <Code2 className="mr-2 h-4 w-4" />
+                Get embed code
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (

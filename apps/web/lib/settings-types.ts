@@ -6,6 +6,7 @@ export type SettingsProfile = {
   timezone: string | null;
   currencyCode: string;
   websiteUrl: string | null;
+  slug: string | null;
 };
 
 export type SettingsPackageTier = {

@@ -48,8 +48,19 @@ function profileToForm(profile: CatererProfile) {
     phone: profile.phone ?? "",
     timezone: profile.timezone ?? "UTC",
     currencyCode: profile.currencyCode,
-    websiteUrl: profile.websiteUrl ?? ""
+    websiteUrl: profile.websiteUrl ?? "",
+    slug: profile.slug ?? ""
   };
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 function formToPayload(form: ReturnType<typeof profileToForm>): ProfileUpdatePayload {
@@ -59,7 +70,8 @@ function formToPayload(form: ReturnType<typeof profileToForm>): ProfileUpdatePay
     phone: form.phone.trim() || null,
     timezone: form.timezone,
     currencyCode: form.currencyCode,
-    websiteUrl: form.websiteUrl.trim() || null
+    websiteUrl: form.websiteUrl.trim() || null,
+    slug: slugify(form.slug) || null
   };
 }
 
@@ -77,7 +89,8 @@ export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
     currentPayload.phone !== savedPayload.phone ||
     currentPayload.timezone !== savedPayload.timezone ||
     currentPayload.currencyCode !== savedPayload.currencyCode ||
-    currentPayload.websiteUrl !== savedPayload.websiteUrl;
+    currentPayload.websiteUrl !== savedPayload.websiteUrl ||
+    currentPayload.slug !== savedPayload.slug;
 
   useEffect(() => {
     setForm(profileToForm(profile));
@@ -151,6 +164,25 @@ export function BusinessProfileSection({ profile, onDirtyChange }: Props) {
             onChange={(e) => updateField("websiteUrl", e.target.value)}
             placeholder="https://example.com"
           />
+        </div>
+
+        <div className="space-y-2 sm:col-span-2">
+          <Label htmlFor="business-slug">Booking URL Slug</Label>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground whitespace-nowrap">/book/</span>
+            <Input
+              id="business-slug"
+              value={form.slug}
+              readOnly={!canWrite}
+              disabled={!canWrite}
+              onChange={(e) => updateField("slug", e.target.value)}
+              placeholder="your-business-name"
+              className="flex-1"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This is your public booking link: /book/{slugify(form.slug) || "your-slug"}
+          </p>
         </div>
 
         <div className="space-y-2">
