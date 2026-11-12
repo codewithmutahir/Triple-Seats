@@ -28,6 +28,7 @@ export type ProfileUpdatePayload = {
   timezone: string;
   currencyCode: string;
   websiteUrl: string | null;
+  slug: string | null;
 };
 
 export type PackageWriteBody = {

@@ -19,6 +19,19 @@ const nextConfig = {
   compress: true,
   poweredByHeader: false,
 
+  // Allow embed routes to be loaded in iframes from any origin
+  async headers() {
+    return [
+      {
+        source: "/embed/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "ALLOWALL" },
+          { key: "Content-Security-Policy", value: "frame-ancestors *" }
+        ]
+      }
+    ];
+  },
+
   // Faster dev builds — run `pnpm typecheck` and `pnpm lint` separately
   ...(!isProd && {
     typescript: { ignoreBuildErrors: true },

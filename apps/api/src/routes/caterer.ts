@@ -77,6 +77,7 @@ router.patch("/", async (req: Request, res: Response) => {
       timezone?: string | null;
       currencyCode?: string;
       websiteUrl?: string | null;
+      slug?: string | null;
     };
 
     const updateData: {
@@ -86,6 +87,7 @@ router.patch("/", async (req: Request, res: Response) => {
       timezone?: string | null;
       currencyCode?: string;
       websiteUrl?: string | null;
+      slug?: string | null;
     } = {};
 
     if (body.name !== undefined) {
@@ -127,6 +129,34 @@ router.patch("/", async (req: Request, res: Response) => {
 
     if (body.websiteUrl !== undefined) {
       updateData.websiteUrl = body.websiteUrl?.trim() || null;
+    }
+
+    if (body.slug !== undefined) {
+      const rawSlug = body.slug?.trim().toLowerCase() || null;
+      if (rawSlug) {
+        // Validate slug format: only lowercase letters, numbers, and hyphens
+        const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+        if (!slugRegex.test(rawSlug)) {
+          return res.status(400).json({ 
+            error: "Slug can only contain lowercase letters, numbers, and hyphens" 
+          });
+        }
+        if (rawSlug.length < 2 || rawSlug.length > 50) {
+          return res.status(400).json({ 
+            error: "Slug must be between 2 and 50 characters" 
+          });
+        }
+        // Check uniqueness
+        const existingSlug = await prisma.caterer.findFirst({
+          where: { slug: rawSlug, id: { not: caterer.id } },
+        });
+        if (existingSlug) {
+          return res.status(409).json({ error: "This booking URL is already in use" });
+        }
+        updateData.slug = rawSlug;
+      } else {
+        updateData.slug = null;
+      }
     }
 
     if (Object.keys(updateData).length === 0) {
