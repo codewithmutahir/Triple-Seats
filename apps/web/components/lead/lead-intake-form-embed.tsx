@@ -362,13 +362,19 @@ export function LeadIntakeFormEmbed({
                       }
                       className="flex flex-col gap-2 sm:flex-row sm:gap-4"
                     >
-                      <label className="flex cursor-pointer items-center gap-2 text-sm">
-                        <RadioGroupItem value="b2c" />
-                        <span>{CUSTOMER_TYPE_LABELS.b2c}</span>
+                      <label className="flex cursor-pointer items-start gap-2 text-sm">
+                        <RadioGroupItem value="b2c" className="mt-0.5" />
+                        <span>
+                          <span className="font-medium">{CUSTOMER_TYPE_LABELS.b2c}</span>
+                          <span className="block text-muted-foreground">B2C</span>
+                        </span>
                       </label>
-                      <label className="flex cursor-pointer items-center gap-2 text-sm">
-                        <RadioGroupItem value="b2b" />
-                        <span>{CUSTOMER_TYPE_LABELS.b2b}</span>
+                      <label className="flex cursor-pointer items-start gap-2 text-sm">
+                        <RadioGroupItem value="b2b" className="mt-0.5" />
+                        <span>
+                          <span className="font-medium">{CUSTOMER_TYPE_LABELS.b2b}</span>
+                          <span className="block text-muted-foreground">B2B</span>
+                        </span>
                       </label>
                     </RadioGroup>
                   </div>

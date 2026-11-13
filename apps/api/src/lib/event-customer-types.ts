@@ -14,15 +14,15 @@ export const ORDER_MODE_VALUES = ["delivery", "pickup"] as const;
 export type OrderModeValue = (typeof ORDER_MODE_VALUES)[number];
 
 export const EVENT_TYPE_LABELS: Record<EventTypeValue, string> = {
-  delivery: "Delivery",
-  pickup: "Pickup",
-  order_by_tray: "Order by Tray",
-  full_service: "Full Service"
+  delivery: "Catering By tray Delivery",
+  pickup: "Catering By tray Pickup",
+  order_by_tray: "Catering per Head",
+  full_service: "Full Service Catering (Food + Setup)"
 };
 
 export const SERVICE_TYPE_LABELS: Record<ServiceTypeValue, string> = {
-  full_service: "Full Service",
-  order_by_tray: "Order by Tray"
+  full_service: "Full Service Catering (Food + Setup)",
+  order_by_tray: "Catering per Head"
 };
 
 export const ORDER_MODE_LABELS: Record<OrderModeValue, string> = {
@@ -35,8 +35,8 @@ export const CUSTOMER_TYPE_VALUES = ["b2b", "b2c"] as const;
 export type CustomerTypeValue = (typeof CUSTOMER_TYPE_VALUES)[number];
 
 export const CUSTOMER_TYPE_LABELS: Record<CustomerTypeValue, string> = {
-  b2b: "B2B",
-  b2c: "B2C"
+  b2b: "Banquet Halls",
+  b2c: "Individual customer"
 };
 
 export function isEventType(value: string): value is EventTypeValue {
