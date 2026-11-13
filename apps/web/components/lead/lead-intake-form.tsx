@@ -386,7 +386,7 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
                           <span>
                             <span className="font-medium">{CUSTOMER_TYPE_LABELS.b2c}</span>
                             <span className="block text-muted-foreground">
-                              Individual / Personal event
+                              B2C — personal / private event
                             </span>
                           </span>
                         </label>
@@ -395,7 +395,7 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
                           <span>
                             <span className="font-medium">{CUSTOMER_TYPE_LABELS.b2b}</span>
                             <span className="block text-muted-foreground">
-                              Business / Corporate client
+                              B2B — venue / banquet hall
                             </span>
                           </span>
                         </label>
