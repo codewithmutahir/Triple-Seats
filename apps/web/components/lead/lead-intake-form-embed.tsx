@@ -295,10 +295,10 @@ export function LeadIntakeFormEmbed({
                 className="font-heading text-xl font-semibold sm:text-2xl"
                 style={{ color: accentColor }}
               >
-                Request a consultation
+                {catererName}
               </h2>
               <p className="mt-1 text-sm text-gray-600">
-                Tell {catererName} about your event.
+                Request a consultation — tell us about your event.
               </p>
             </header>
 

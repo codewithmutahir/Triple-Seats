@@ -319,10 +319,10 @@ export function LeadIntakeForm({ catererSlug, catererName }: LeadIntakeFormProps
             <>
               <header className="mb-8">
                 <h2 className="font-heading text-2xl font-semibold text-[#1B2A4A] sm:text-3xl">
-                  Request a consultation
+                  {catererName}
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Tell {catererName} about your event — it only takes a minute.
+                  Request a consultation — tell us about your event. It only takes a minute.
                 </p>
               </header>
 

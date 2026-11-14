@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { LeadIntakeForm } from "@/components/lead/lead-intake-form";
@@ -20,6 +21,24 @@ async function fetchCaterer(slug: string) {
 type PageProps = {
   params: { slug: string };
 };
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const slug = params.slug?.trim().toLowerCase();
+  if (!slug || !isPublicBookSlug(slug)) {
+    return { title: "Request a Quote" };
+  }
+  const caterer = await fetchCaterer(slug);
+  const name = caterer?.name ?? "Catering";
+  return {
+    title: name,
+    description: `Request a catering quote from ${name}.`,
+    openGraph: {
+      title: name,
+      description: `Request a catering quote from ${name}.`,
+      type: "website"
+    }
+  };
+}
 
 export default async function TenantBookPage({ params }: PageProps) {
   const slug = params.slug?.trim().toLowerCase();
