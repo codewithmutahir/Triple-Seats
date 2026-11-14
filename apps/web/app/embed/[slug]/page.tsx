@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 
@@ -35,6 +36,20 @@ type PageProps = {
   searchParams: { accent?: string };
 };
 
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const slug = params.slug?.trim().toLowerCase();
+  if (!slug || !isPublicBookSlug(slug)) {
+    return { title: "Request a Quote", robots: { index: false, follow: false } };
+  }
+  const caterer = await fetchCaterer(slug);
+  const name = caterer?.name ?? "Catering";
+  return {
+    title: name,
+    description: `Request a catering quote from ${name}.`,
+    robots: { index: false, follow: false }
+  };
+}
+
 export default async function EmbedPage({ params, searchParams }: PageProps) {
   const slug = params.slug?.trim().toLowerCase();
   if (!slug || !isPublicBookSlug(slug)) notFound();
@@ -60,7 +75,3 @@ export default async function EmbedPage({ params, searchParams }: PageProps) {
   );
 }
 
-export const metadata = {
-  title: "Request a Quote",
-  robots: { index: false, follow: false }
-};
