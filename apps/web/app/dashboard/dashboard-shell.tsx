@@ -417,12 +417,16 @@ export function DashboardShell({
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-[#1B2A4A] text-white md:flex">
         <div className="border-b border-white/10 px-5 py-6">
           <Link href={isCalendarOnly ? "/dashboard/vendor-calendar" : "/dashboard"} className="block">
-            <p className="font-heading text-2xl font-semibold tracking-tight text-white">Tripeseats</p>
+            <p className="font-heading text-2xl font-semibold tracking-tight text-white">
+              {catererName?.trim() || "Tripeseats"}
+            </p>
             {isOwner ? (
-              <p className="text-xs text-white/60">Caterer workspace</p>
+              <p className="text-xs text-white/60">Powered by Tripeseats</p>
             ) : isCalendarOnly ? (
               <p className="text-xs text-white/60">Vendor calendar</p>
-            ) : null}
+            ) : (
+              <p className="text-xs text-white/60">Powered by Tripeseats</p>
+            )}
           </Link>
 
           {!isOwner && catererName ? (
