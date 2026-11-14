@@ -9,7 +9,10 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import { DashboardShell } from "./dashboard-shell";
 
 export const metadata: Metadata = {
-  title: "Dashboard",
+  title: {
+    default: "Dashboard",
+    template: "%s"
+  },
   description: "Manage leads, bookings, and events."
 };
 
