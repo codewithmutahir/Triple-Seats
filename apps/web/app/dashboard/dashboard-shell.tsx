@@ -16,7 +16,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useEffect, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import { queryKeys } from "@/lib/query-keys";
 import type { ServerAuthUser } from "@/lib/server-auth-session";
 import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
+import type { SettingsProfile } from "@/lib/settings-types";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, permission: null },
@@ -364,7 +365,18 @@ export function DashboardShell({
   const pathname = usePathname();
   const router = useRouter();
   const { data: session, refetch } = useSession();
-  const { role, catererName, isOwner, isReadOnly, isCalendarOnly } = usePermissions();
+  const { role, catererName: sessionCatererName, isOwner, isReadOnly, isCalendarOnly } =
+    usePermissions();
+  const { data: profile } = useQuery({
+    queryKey: queryKeys.settings.profile(),
+    queryFn: api.settings.profile,
+    staleTime: 5 * 60 * 1000,
+    enabled: !isCalendarOnly
+  });
+  const catererName =
+    sessionCatererName?.trim() ||
+    (profile as SettingsProfile | undefined)?.name?.trim() ||
+    null;
 
   const pageTitle = TITLE_MAP[pathname] ?? "Dashboard";
   const user = session?.user ?? initialUser;
@@ -418,14 +430,12 @@ export function DashboardShell({
         <div className="border-b border-white/10 px-5 py-6">
           <Link href={isCalendarOnly ? "/dashboard/vendor-calendar" : "/dashboard"} className="block">
             <p className="font-heading text-2xl font-semibold tracking-tight text-white">
-              {catererName?.trim() || "Tripeseats"}
+              {catererName?.trim() || "Your business"}
             </p>
-            {isOwner ? (
-              <p className="text-xs text-white/60">Powered by Tripeseats</p>
-            ) : isCalendarOnly ? (
+            {isCalendarOnly ? (
               <p className="text-xs text-white/60">Vendor calendar</p>
             ) : (
-              <p className="text-xs text-white/60">Powered by Tripeseats</p>
+              <p className="text-xs text-white/60">Catering &amp; events</p>
             )}
           </Link>
 
