@@ -1,195 +1,152 @@
-# Tripeseats Monorepo
+# Tripleseats
 
-Turborepo workspace with:
+**A multi-tenant operations platform for caterers.** From the first inquiry to the final payment, Tripleseats gives each catering business one place to manage leads, quotes, bookings, events, tasks and calendars, with every tenant's data kept separate.
 
-- `apps/web`: Next.js 14 + Tailwind + shadcn/ui
-- `apps/api`: Express API server
-- `packages/database`: Prisma + PostgreSQL (you can use Supabase Postgres connection URL)
+Currently live with a catering client.
 
-## Lead Intake + Email
+<!-- Add 2-3 screenshots here: dashboard, quote builder, vendor calendar
+![Dashboard](docs/screenshots/dashboard.png)
+-->
 
-- Public lead form is available at `apps/web` home page.
-- Web app posts to `/api/leads` (rewritten to Express API in dev).
-- API stores guest, lead, and event rows **directly on the caterer** identified by `LEAD_INTAKE_CATERER_ID`, then sends a confirmation email via Resend when configured.
-- Configure in `apps/api/.env`:
-  - `RESEND_API_KEY`
-  - `RESEND_FROM_EMAIL`
-  - `LEAD_INTAKE_CATERER_ID` — **required**. Set this to the **real caterer account id** from the `caterers` table (not a separate intake placeholder). Example: `SELECT id FROM caterers WHERE email = 'your@email.com';`
+## Features
 
-## Quick start
+**Lead to booking**
+- Public booking page for every caterer at `/book/[slug]`, plus an embeddable inquiry form
+- Each inquiry creates a guest, a lead and an event in a single transaction and sends a confirmation email
+- Event pipeline with statuses, discussions, tasks and a full event history
 
-1. Install deps:
-   - `pnpm install`
-2. Configure env files:
-   - copy `.env.example` to `.env`
-   - copy `apps/web/.env.example` to `apps/web/.env.local`
-   - copy `apps/api/.env.example` to `apps/api/.env`
-   - set `DATABASE_URL` to your Supabase Postgres connection string (or any PostgreSQL URL)
-3. Generate Prisma client:
-   - `pnpm db:generate`
-4. Run all apps:
-   - `pnpm dev`
+**Quotes**
+- Quote builder with packages, price tiers and line items
+- Pricing by head, tray, flat rate, piece or tier, with tax, deposit and balance calculated automatically
+- PDF export for quotes, kitchen sheets and labor sheets, and quote emailing with send-status tracking
+- Batched edits with client request IDs, so retries never add duplicate items
 
-## Multi-tenant subdomains
+**Payments**
+- Clover Hosted Checkout links with idempotency keys
+- Signed Clover webhooks update payment status
+- Manual recording for cash, card, bank transfer and other payments
 
-Each caterer gets a **subdomain booking page** (not a path like `/c/slug`):
+**Calendars**
+- Event calendar and a separate vendor availability calendar
+- Recurring entries (daily, weekly, monthly, yearly), sharing, attendee invitations and reminders
+- iCal/webcal feeds and Google Calendar sync
 
-- Apex (marketing + auth): `https://caterpro.com`
-- Caterer booking: `https://royaltaj.caterpro.com/book`
-- Caterer dashboard: `https://royaltaj.caterpro.com/dashboard`
+**Team and security**
+- Seven roles: `owner`, `admin`, `manager`, `sales`, `ops`, `viewer`, `calendar_only`
+- Email/password, magic link and TOTP two-factor authentication (Better Auth)
+- Team invitations and audit logs
+- Reports for revenue, conversions, event timelines and recent activity
 
-### Local dev
+## Tech stack
 
-1. Set in `apps/web/.env.local`:
-   - `NEXT_PUBLIC_ROOT_DOMAIN=localhost`
-2. Set in `apps/api/.env`:
-   - `PUBLIC_ROOT_DOMAIN=localhost`
-3. Apply DB column (once, if dashboard errors on `caterers.slug`):
-   - `pnpm db:patch-slug`
-4. Open `http://royaltaj.localhost:3000/book` (replace `royaltaj` with your caterer slug from the database).
+| Layer | Technology |
+|---|---|
+| Language | TypeScript |
+| Web | Next.js 14 (App Router), React 18, Tailwind CSS, shadcn/ui, TanStack Query, Zustand, FullCalendar, Recharts |
+| API | Node.js 20, Express 4, Zod |
+| Database | PostgreSQL (Supabase), Prisma 5 |
+| Auth | Better Auth |
+| Email | Resend |
+| Payments | Clover |
+| Monitoring | Sentry, PostHog |
+| Tooling | pnpm 9, Turborepo, Vitest, k6 |
+| Hosting | Vercel (web), Hostinger (API) |
 
-Browsers resolve `*.localhost` automatically — no hosts file needed.
+## Architecture
 
-### Production (Hostinger MCP)
-
-Use the **Hostinger** extension in Cursor (Websites + Domains tools enabled). After OAuth sign-in, ask the agent to deploy — no manual hPanel uploads or DNS copy-paste.
-
-**1. Prepare archives locally**
-
-```powershell
-pnpm hostinger:archive          # API → tripeseats-api-hostinger.zip (~150 KB)
-pnpm hostinger:archive:web      # Web → tripeseats-web-hostinger.zip (optional, separate site)
-pnpm db:migrate:deploy          # apply migrations to production Postgres (Supabase)
+```
+apps/
+  web/         Next.js frontend (dashboard + public booking pages)
+  api/         Express API (routes, auth, quotes, payments, calendar sync)
+packages/
+  database/    Prisma schema, migrations, client
+  auth/        Shared auth configuration
 ```
 
-**2. Deploy API via MCP** (agent runs these Hostinger tools)
+### Multi-tenancy
 
-| Tool | Purpose |
-|------|---------|
-| `hosting_listWebsitesV1` | Pick the target domain / username |
-| `hosting_createNodeJSBuildFromArchiveV1` | Upload `tripeseats-api-hostinger.zip`, auto-detect build |
-| `hosting_listNodeJSBuildsV1` | Poll build status until complete |
+- Every caterer is a `Caterer` row, and business tables carry a `catererId`.
+- On each request the API validates the session, resolves the user's tenant and role, and scopes every Prisma query with that tenant's ID.
+- Permissions are checked per role before a route runs.
+- Public booking links resolve a slug to a tenant. Legacy subdomain URLs redirect to the slug-based path.
+- Row Level Security is enabled on the core tables to block direct access through the Supabase Data API. Tenant filtering itself is enforced in the application layer.
 
-Recommended build overrides if auto-detect misses the monorepo layout:
+### Data model
 
-- **Package manager:** `pnpm`
-- **Build script:** `pnpm hostinger:build`
-- **Start / entry:** `pnpm start` → `node apps/api/dist/index.js`
-- **Node version:** `20`
+28 Prisma models covering tenants, team members, guests, leads, events, quotes, packages, payments, tasks, messages, vendor calendar entries and audit logs.
 
-Set env vars in hPanel (or via MCP if available): `DATABASE_URL`, `DIRECT_URL`, `PUBLIC_ROOT_DOMAIN`, `WEB_ORIGIN`, `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`.
+## Getting started
 
-**3. Deploy web (Next.js) via MCP**
+**Prerequisites:** Node.js 20+, pnpm 9+, a PostgreSQL database (a Supabase project works well).
 
-Same flow with `tripeseats-web-hostinger.zip` on your apex domain. Set `INTERNAL_API_URL` to the API URL from step 2 and `NEXT_PUBLIC_ROOT_DOMAIN` to your root domain.
+```bash
+# 1. Install dependencies
+pnpm install
 
-**4. DNS (Domains MCP — not manual)**
+# 2. Create environment files
+cp .env.example .env
+cp apps/web/.env.example apps/web/.env.local
+cp apps/api/.env.example apps/api/.env
 
-| Tool | Purpose |
-|------|---------|
-| `domains_listDomainsV1` | List domains on the account |
-| DNS tools under **Domains** | Add wildcard `*` → web host IP / CNAME as Hostinger instructs |
+# 3. Generate the Prisma client and apply migrations
+pnpm db:generate
+pnpm db:migrate
 
-**5. Smoke tests** — see [Pre-deployment checklist](#pre-deployment-checklist) below.
+# 4. Start the web and API servers
+pnpm dev
+```
 
-### Web 403 after deploy (no custom start command in hPanel)
+The web app runs at `http://localhost:3000`. Open `/book/<your-slug>` to see a caterer's public booking page.
 
-Hostinger Next.js runs `npm start` from `package.json` automatically — you cannot override the start command in the UI. If the site returns **403** after a successful build, the usual cause is a **missing `.next` folder** in the uploaded zip (Windows `Compress-Archive` skips hidden folders unless the archive script uses `Get-ChildItem -Force`). Without `.next`, `next start` exits immediately and Hostinger serves 403.
+## Environment variables
 
-**Option A — redeploy the fixed archive (~128 MB, recommended):**
+**API (`apps/api/.env`)**
 
-1. Locally run `pnpm hostinger:archive:web` → creates `tripeseats-web-hostinger-v2.zip` (verify it contains `.next/` — hundreds of entries)
-2. hPanel → web domain → **Deployments → Deploy** (upload archive in browser)
-3. Confirm env vars: `INTERNAL_API_URL`, `NEXT_PUBLIC_ROOT_DOMAIN`, `NODE_ENV=production`
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Pooled PostgreSQL connection string |
+| `DIRECT_URL` | Direct connection string used for migrations |
+| `WEB_ORIGIN` | Public URL of the web app |
+| `PUBLIC_ROOT_DOMAIN` | Root domain, must match the web app |
+| `BETTER_AUTH_URL` | Base URL used by Better Auth |
+| `BETTER_AUTH_SECRET` | Random secret, 32+ characters, unique per environment |
+| `RESEND_API_KEY` | Resend API key |
+| `RESEND_FROM_EMAIL` | Sender address on a verified domain |
+| `LEAD_INTAKE_CATERER_ID` | Optional. Tenant ID for the apex marketing form |
 
-**Option B — edit start script only (not enough if `.next` is missing):**
+**Web (`apps/web/.env.local`)**
 
-1. hPanel → **File Manager** → `domains/<your-web-domain>/public_html/.builds/last-source/`
-2. Open `package.json` and set `"start": "next start"` under `scripts` (`last-source` is the running app; `source` is only the next build staging folder)
-3. **Websites → your web domain → Deployments → Restart**
+| Variable | Purpose |
+|---|---|
+| `INTERNAL_API_URL` | Base URL of the Express API, no trailing slash |
+| `NEXT_PUBLIC_ROOT_DOMAIN` | Root domain, without `https://` |
 
-If `.next` is missing from `last-source`, you must redeploy (Option A).
+Clover and Google Calendar credentials are configured per the comments in `apps/api/.env.example`.
 
-**API site** should use the latest `tripeseats-api-hostinger-v2.zip` (includes root `app.js`). Do **not** set `API_PORT` — Hostinger injects `PORT`.
+## Scripts
 
-### Production — Web on Vercel (recommended)
+| Command | Description |
+|---|---|
+| `pnpm dev` | Run all apps in development |
+| `pnpm build` | Build all apps and packages |
+| `pnpm test` | Run the Vitest suite |
+| `pnpm db:generate` | Generate the Prisma client |
+| `pnpm db:migrate` | Create and apply migrations in development |
+| `pnpm db:migrate:deploy` | Apply migrations in production |
 
-Hostinger is fine for the Express API; **deploy Next.js to Vercel** instead of fighting Node.js zip deploys.
+## Testing
 
-1. [vercel.com](https://vercel.com) → **Add project** → import this repo
-2. **Root Directory:** `apps/web`
-3. **Production branch:** `dev` (or `main` after merge)
-4. **Environment variables** (Vercel project settings):
+- **Unit and integration:** Vitest, covering quote totals, quote operations and route behavior.
+- **Load testing:** k6 scripts in `tests/load/k6/` for smoke, quote journey and ramp-up scenarios.
 
-| Variable | Example |
-|----------|---------|
-| `INTERNAL_API_URL` | `https://lightcyan-kingfisher-777374.hostingersite.com` |
-| `NEXT_PUBLIC_ROOT_DOMAIN` | `your-project.vercel.app` (or your custom domain, no `https://`) |
+## Deployment
 
-**Do not set `NODE_ENV` on Vercel** — it makes `pnpm install` skip devDependencies and breaks the build (missing `tailwindcss`). Vercel sets production mode automatically.
+- **Web:** Vercel with the root directory set to `apps/web`. Do not set `NODE_ENV` on Vercel, as it skips dev dependencies and breaks the build.
+- **API:** Node.js 20 on Hostinger, started with `node apps/api/dist/index.js`.
+- **Database:** Supabase PostgreSQL, migrations applied with `pnpm db:migrate:deploy`.
 
-5. After the first deploy, update **API env on Hostinger** to match the Vercel URL:
+Step-by-step instructions, environment checklists and troubleshooting are in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
-| API variable | Value |
-|--------------|--------|
-| `WEB_ORIGIN` | `https://your-project.vercel.app` |
-| `BETTER_AUTH_URL` | `https://your-project.vercel.app` |
-| `PUBLIC_ROOT_DOMAIN` | `your-project.vercel.app` |
+## Author
 
-Restart the API app in hPanel. Public booking links use **`/book/[slug]`** on your app domain (e.g. `https://tripleseat.hussaincatering.com/book/royaltaj`) — no wildcard DNS required.
-
-
-## Useful scripts
-
-- `pnpm dev`: Run all dev servers through Turbo
-- `pnpm build`: Build all packages/apps
-- `pnpm db:migrate`: Run Prisma migrate in `packages/database`
-
-## Pre-deployment checklist
-
-Complete this before pointing production traffic at the app.
-
-### Environment — Web (Hostinger Node.js or separate host)
-
-- `INTERNAL_API_URL` — production Express API URL (no trailing slash)
-- `NEXT_PUBLIC_ROOT_DOMAIN` — e.g. `yourdomain.com`
-
-### Environment — API (Hostinger Node.js via MCP)
-
-Deploy with `hosting_createNodeJSBuildFromArchiveV1` using `tripeseats-api-hostinger.zip` (run `pnpm hostinger:archive` first).
-
-- `DATABASE_URL` — transaction pooler URL (`?pgbouncer=true`)
-- `DIRECT_URL` — session/direct URL for migrations
-- `PUBLIC_ROOT_DOMAIN` — must match `NEXT_PUBLIC_ROOT_DOMAIN` on web
-- `WEB_ORIGIN` — `https://caterpro.com`
-- `BETTER_AUTH_URL` — `https://caterpro.com`
-- `BETTER_AUTH_SECRET` — 32+ character random secret, unique per environment
-- `BETTER_AUTH_API_KEY` — from Better Auth dashboard
-- `RESEND_API_KEY` and `RESEND_FROM_EMAIL` — verified sending domain (not `onboarding@resend.dev`)
-- `LEAD_INTAKE_CATERER_ID` — only if the apex marketing form submits leads without a caterer slug
-
-### Infrastructure (Hostinger MCP)
-
-- `hosting_listWebsitesV1` — confirm API and web sites exist (create with `hosting_createWebsiteV1` if needed)
-- Domains MCP — apex + `tripleseat` CNAME to Vercel (wildcard not required for `/book/[slug]` links)
-- `pnpm db:migrate:deploy` against production Postgres (Supabase)
-
-### Smoke tests before go-live
-
-- Register a new account → dashboard loads with no developer instructions visible
-- Dashboard booking link shows the real subdomain URL with Copy and Open working
-- Submit a test inquiry at `{slug}.caterpro.com/book` → appears in Leads
-- Sign in and out on both apex and tenant subdomain (cross-subdomain cookies)
-- Generate a quote PDF and send a quote email
-- API `GET /health` returns `{ ok: true, database: "ok" }`
-- With the API temporarily unreachable, dashboard shows a friendly error (not raw gateway text)
-
-### Final grep gate (manual or CI)
-
-Search the codebase for user-visible strings that should never ship:
-
-- `LEAD_INTAKE`
-- `PUBLIC_ROOT`
-- `apps/api/.env`
-- `` Set ` `` (env-var setup instructions in UI copy)
-
+Built by [Mutahir Hussain](https://github.com/codewithmutahir) at Elitesolution USA.
